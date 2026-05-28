@@ -98,6 +98,11 @@ export function ResidentBulkInputTable({
   const [handTarget, setHandTarget] = React.useState({ id: '', name: '' });
   const stoolSelectOptions = React.useMemo(() => getHourlyStoolSelectOptions(), []);
   const tableScrollRef = React.useRef(/** @type {HTMLDivElement | null} */ (null));
+  const scrollTableX = React.useCallback((delta) => {
+    const el = tableScrollRef.current;
+    if (!el) return;
+    el.scrollLeft += delta;
+  }, []);
   const keepTableScrollPosition = React.useCallback((fn) => {
     const el = tableScrollRef.current;
     const prevTop = el?.scrollTop ?? 0;
@@ -118,6 +123,22 @@ export function ResidentBulkInputTable({
           バイタル・体重（月1回）・巡視・排尿・排便・食事（朝昼夜）・エンシュア・経管メニュー・間食など・水分・内服を一覧から
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => scrollTableX(-420)}
+            className="rounded-lg border border-slate-400 bg-white px-2.5 py-1.5 text-sm font-black text-slate-700 hover:bg-slate-50"
+            title="一覧を左へスクロール"
+          >
+            ← 左へ
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollTableX(420)}
+            className="rounded-lg border border-slate-400 bg-white px-2.5 py-1.5 text-sm font-black text-slate-700 hover:bg-slate-50"
+            title="一覧を右へスクロール"
+          >
+            右へ →
+          </button>
           <button
             type="button"
             onClick={() => setBulkPatrolForAllVisible(true)}
@@ -145,6 +166,7 @@ export function ResidentBulkInputTable({
         下の表では<strong>主食・副食の割</strong>だけ行ごとに入力します（食事区分は上で統一）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。
         <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>は割合を選ぶと食事メモに残ります。
         <strong className="text-slate-700"> 経管メニュー</strong>は経管実施ログ（算定・記録用の件数にも含まれます）。<strong>間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。
+        <span className="ml-1 text-slate-700">横移動は上の「← 左へ / 右へ →」か、Shift+ホイールでも可能です。</span>
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-amber-50 px-3 py-2.5 shadow-sm">
         <span className="text-sm font-black text-orange-950 sm:text-base">今回の食事区分（全員共通）</span>
@@ -182,7 +204,20 @@ export function ResidentBulkInputTable({
           日付は<strong>日本時間の暦日</strong>で集計します。巡視マスは<strong>チェック</strong>で入力（未保存は水色・保存済みは濃い緑・空は白の点線枠）。空の尿・便マスを選んでから<strong>保存</strong>すると、その時刻で記録されます（既に記録がある時刻は変更できません）。
         </p>
       </div>
-      <div ref={tableScrollRef} className="max-h-[min(70vh,720px)] overflow-auto rounded-xl border border-slate-200 shadow-inner">
+      <div
+        ref={tableScrollRef}
+        onWheel={(e) => {
+          if (!e.shiftKey) return;
+          const el = tableScrollRef.current;
+          if (!el) return;
+          // Shift+ホイールを横スクロールとして扱う（入力中でも横移動しやすくする）
+          const dx = Number(e.deltaY || e.deltaX || 0);
+          if (!Number.isFinite(dx) || dx === 0) return;
+          el.scrollLeft += dx;
+          e.preventDefault();
+        }}
+        className="max-h-[min(70vh,720px)] overflow-auto rounded-xl border border-slate-200 shadow-inner"
+      >
         <table className="w-full min-w-[3000px] border-collapse text-left text-sm sm:text-base">
           <thead className="sticky top-0 z-10 bg-slate-100 text-sm font-black uppercase text-slate-700 sm:text-sm">
             <tr>
