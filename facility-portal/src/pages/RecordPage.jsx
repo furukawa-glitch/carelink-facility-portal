@@ -200,6 +200,22 @@ function findResidentForVitalsCsvName(residents, csvNameCell) {
   return null;
 }
 
+function findResidentForVitalsCsvKana(residents, csvKanaCell) {
+  const target = normalizeVitalsImportPersonName(csvKanaCell);
+  if (!target) return null;
+  const targetCompact = target.replace(/\s/g, '');
+  const targetKey = normalizeNameKeyForMatch(csvKanaCell);
+  for (const res of residents) {
+    const k = String(res.kana ?? res.nameKana ?? res.namePhonetic ?? '').trim();
+    if (!k) continue;
+    const kn = normalizeVitalsImportPersonName(k);
+    if (kn && (kn === target || kn.replace(/\s/g, '') === targetCompact)) return res;
+    const kk = normalizeNameKeyForMatch(k);
+    if (kk && targetKey.length >= 2 && kk === targetKey) return res;
+  }
+  return null;
+}
+
 /**
  * カイポケ・帳票出力の列名揺れに合わせて「氏名」列の 0 始まり index（無いとき -1）
  * @param {string[]} headerCells
@@ -2188,6 +2204,7 @@ export function RecordPage({
         const headers = (rows[headerRow] || []).map((x) => stripCsvBom(String(x ?? '')).trim());
         const idx = {
           name: nameColIdx,
+          kana: headers.findIndex((h) => /利用者カナ|フリガナ|ふりがな|カナ/u.test(String(h ?? ''))),
           temp: headers.findIndex((h) => {
             const hn = String(h);
             if (/血圧|目標/i.test(hn)) return false;
@@ -2209,16 +2226,20 @@ export function RecordPage({
           return a != null ? stripCsvBom(String(a)) : '';
         };
         let applied = 0;
-        const resolveResidentForCsvRow = (nameCell) => {
+        const resolveResidentForCsvRow = (nameCell, kanaCell) => {
           const inCurrent = findResidentForVitalsCsvName(filteredResidents, nameCell);
           if (inCurrent) return inCurrent;
+          const byKanaCurrent = findResidentForVitalsCsvKana(filteredResidents, kanaCell);
+          if (byKanaCurrent) return byKanaCurrent;
           // 他施設タブの利用者名もCSVに含まれるため、全名簿にもフォールバック
-          return findResidentForVitalsCsvName(allResidents, nameCell);
+          const inAll = findResidentForVitalsCsvName(allResidents, nameCell);
+          if (inAll) return inAll;
+          return findResidentForVitalsCsvKana(allResidents, kanaCell);
         };
         for (let r = headerRow + 1; r < rows.length; r++) {
           const row = rows[r] ?? [];
           if (!row.length) continue;
-          const hit = resolveResidentForCsvRow(getCell(row, idx.name));
+          const hit = resolveResidentForCsvRow(getCell(row, idx.name), getCell(row, idx.kana));
           if (!hit) continue;
           /** ヘッダに無い列は送らない（空で既存値を消さない） */
           const patch = {};
