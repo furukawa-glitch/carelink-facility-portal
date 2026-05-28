@@ -151,7 +151,6 @@ export function parseVoiceToWaterMl(text) {
 /** 24時間表・各時の排尿セル */
 export const HOURLY_URINE_OPTIONS = Object.freeze([
   { value: '', label: '—' },
-  { value: 'plain', label: '記録' },
   { value: '少量', label: '少量' },
   { value: '中量', label: '中量' },
   { value: '多量', label: '多量' },
@@ -169,7 +168,6 @@ export function getHourlyStoolSelectOptions() {
   /** @type {{ value: string; label: string }[]} */
   const out = [
     { value: '', label: '—' },
-    { value: 'plain', label: '記録' },
   ];
   for (const v of STOOL_VOLUME_OPTIONS) {
     if (!v) continue;
