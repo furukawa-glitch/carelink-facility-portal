@@ -184,45 +184,75 @@ export function NearMissAwarenessPanel({
   const hasSheet = Boolean(sheetsApiKey?.trim() && getLedgerSpreadsheetId().trim());
   const hrSync = getSyncedRosterPayload();
   const pendingHighCount = pending.filter((n) => n.importance === 'high').length;
-  const ultraCompact = !panelOpen && pendingHighCount === 0;
-
   const shell = compact
     ? 'shrink-0 rounded-xl border border-amber-500/70 bg-gradient-to-br from-amber-50/95 via-white to-orange-50/80 px-2 py-2 shadow-sm sm:px-3 sm:py-2.5'
     : 'shrink-0 rounded-2xl border-2 border-amber-500/80 bg-gradient-to-br from-amber-50 via-white to-orange-50/90 px-3 py-3 shadow-md sm:px-4 sm:py-4';
+  const closedShell = compact
+    ? 'shrink-0 rounded-lg border border-amber-300/70 bg-white/95 px-2 py-1.5 shadow-sm'
+    : 'shrink-0 rounded-xl border border-amber-300/70 bg-white/95 px-3 py-2 shadow-sm';
+
+  if (!panelOpen) {
+    return (
+      <section className={closedShell}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex min-w-0 items-center gap-1.5">
+            <ShieldAlert className={`${compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} shrink-0 text-amber-700`} aria-hidden />
+            <p className={`truncate font-bold text-slate-700 ${compact ? 'text-[10px]' : 'text-xs'}`}>
+              最新の重要周知（ヒヤリハット）
+            </p>
+            <span
+              className={`inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 font-black text-amber-900 ${compact ? 'text-[10px]' : 'text-xs'}`}
+            >
+              未確認 {pending.length}件
+              {pendingHighCount > 0 ? ` / 重要 ${pendingHighCount}` : ''}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPanelOpen(true)}
+              className={`inline-flex items-center gap-1 rounded-lg border-2 border-amber-700 bg-white font-black text-amber-900 hover:bg-amber-50 ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-[11px]'}`}
+            >
+              <ChevronDown className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+              周知を開く
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className={shell}>
-      <div className={`flex flex-wrap items-start justify-between gap-2 ${ultraCompact ? 'mb-1' : compact ? 'mb-1.5' : 'mb-2'}`}>
+      <div className={`flex flex-wrap items-start justify-between gap-2 ${compact ? 'mb-1.5' : 'mb-2'}`}>
         <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
           <ShieldAlert
-            className={`shrink-0 text-amber-700 ${ultraCompact ? 'h-4 w-4' : compact ? 'h-5 w-5' : 'h-6 w-6 sm:h-7 sm:w-7'}`}
+            className={`shrink-0 text-amber-700 ${compact ? 'h-5 w-5' : 'h-6 w-6 sm:h-7 sm:w-7'}`}
             aria-hidden
           />
           <div className="min-w-0">
-            <h2 className={`font-black text-amber-950 ${ultraCompact ? 'text-xs sm:text-sm' : compact ? 'text-sm sm:text-base' : 'text-base sm:text-lg'}`}>
+            <h2 className={`font-black text-amber-950 ${compact ? 'text-sm sm:text-base' : 'text-base sm:text-lg'}`}>
               最新の重要周知（ヒヤリハット）
             </h2>
-            {!ultraCompact ? (
-              <p className={`font-bold text-amber-900/80 ${compact ? 'text-[10px] leading-snug sm:text-[11px]' : 'text-[11px] sm:text-xs'}`}>
-                {facilityTabLabel ? `${facilityTabLabel}：` : ''}
-                未確認の周知を上に表示します。内容を読んだら「確認しました」を押してください。
-              </p>
-            ) : null}
+            <p className={`font-bold text-amber-900/80 ${compact ? 'text-[10px] leading-snug sm:text-[11px]' : 'text-[11px] sm:text-xs'}`}>
+              {facilityTabLabel ? `${facilityTabLabel}：` : ''}
+              未確認の周知を上に表示します。内容を読んだら「確認しました」を押してください。
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
-            onClick={() => setPanelOpen((v) => !v)}
-            className={`inline-flex items-center gap-1 rounded-lg border-2 border-amber-700 bg-white font-black text-amber-900 hover:bg-amber-50 ${ultraCompact ? 'px-1.5 py-0.5 text-[10px]' : compact ? 'px-2 py-1 text-[10px] sm:text-[11px]' : 'rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs'}`}
+            onClick={() => setPanelOpen(false)}
+            className={`inline-flex items-center gap-1 rounded-lg border-2 border-amber-700 bg-white font-black text-amber-900 hover:bg-amber-50 ${compact ? 'px-2 py-1 text-[10px] sm:text-[11px]' : 'rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs'}`}
           >
-            {panelOpen ? <ChevronUp className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} /> : <ChevronDown className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />}
-            {panelOpen ? '周知を閉じる' : '周知を開く'}
+            <ChevronUp className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+            周知を閉じる
           </button>
           <button
             type="button"
             onClick={() => onOpenAdmin()}
-            className={`inline-flex items-center gap-1 rounded-lg border-2 border-slate-600 bg-slate-800 font-black text-white hover:bg-slate-700 ${ultraCompact ? 'px-1.5 py-0.5 text-[10px]' : compact ? 'px-2 py-1 text-[10px] sm:text-[11px]' : 'rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs'}`}
+            className={`inline-flex items-center gap-1 rounded-lg border-2 border-slate-600 bg-slate-800 font-black text-white hover:bg-slate-700 ${compact ? 'px-2 py-1 text-[10px] sm:text-[11px]' : 'rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs'}`}
           >
             <LayoutDashboard className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
             管理・進捗
@@ -231,32 +261,14 @@ export function NearMissAwarenessPanel({
             type="button"
             disabled={!hasSheet || loading}
             onClick={() => void refreshSheet()}
-            className={`inline-flex items-center gap-1 rounded-lg border-2 border-amber-600 bg-amber-100 font-black text-amber-950 hover:bg-amber-200 disabled:opacity-50 ${ultraCompact ? 'px-1.5 py-0.5 text-[10px]' : compact ? 'px-2 py-1 text-[10px] sm:text-[11px]' : 'rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs'}`}
+            className={`inline-flex items-center gap-1 rounded-lg border-2 border-amber-600 bg-amber-100 font-black text-amber-950 hover:bg-amber-200 disabled:opacity-50 ${compact ? 'px-2 py-1 text-[10px] sm:text-[11px]' : 'rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs'}`}
           >
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />}
             台帳を同期
           </button>
         </div>
       </div>
-
-      {!panelOpen ? (
-        pendingHighCount === 0 ? (
-          <div
-            className={`rounded-lg border border-amber-200 bg-white/90 px-3 py-1.5 font-bold text-slate-700 ${compact ? 'text-[11px]' : 'text-xs'}`}
-          >
-            未確認 {pending.length}件（重要なし）- 必要時に「周知を開く」
-          </div>
-        ) : (
-          <div className={`rounded-lg border border-amber-200 bg-white/90 px-3 py-2 font-bold text-slate-700 ${compact ? 'text-xs' : 'text-sm'}`}>
-            未確認の周知: <span className="font-black text-amber-900">{pending.length}件</span>
-            <span className="ml-2 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-black text-white">
-              重要 {pendingHighCount}件
-            </span>
-            <span className="ml-2 text-slate-500">利用者一覧を優先して、必要時に「周知を開く」で確認できます。</span>
-          </div>
-        )
-      ) : (
-        <>
+      <>
           {!hasSheet ? (
             <p
               className={`rounded-lg border border-amber-200 bg-white/80 px-2 py-1.5 font-bold text-amber-900 ${compact ? 'mb-1.5 text-[10px] sm:text-[11px]' : 'mb-2 text-[11px] sm:text-xs'}`}
@@ -433,8 +445,7 @@ export function NearMissAwarenessPanel({
               </span>
             </label>
           </div>
-        </>
-      )}
+      </>
     </section>
   );
 }
