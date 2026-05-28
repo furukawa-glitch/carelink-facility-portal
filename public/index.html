@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CareLink — 運用ツール</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #1a1a1a; }
+    h1 { font-size: 1.35rem; }
+    .note { background: #f4f4f5; padding: 1rem; border-radius: 8px; margin: 1.5rem 0; }
+    code { background: #eee; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
+    ul { padding-left: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1>CareLink 運用ツール（公開ページ）</h1>
+  <p>この URL は <strong>Vercel 上の静的ページ</strong>です。請求・Slack・監査などの<strong>本体は各 PC で Python を実行</strong>する構成です。</p>
+  <div class="note">
+    <strong>スマホ・他 PC から見えるもの:</strong> この説明ページのみです。<br />
+    <strong>機密データ（Webhook・トークン・利用者名簿）は置いていません。</strong>
+  </div>
+  <h2>ローカルで動かす主なコマンド（例）</h2>
+  <ul>
+    <li>Slack テスト: <code>python integrations/slack_notification.py --test</code></li>
+    <li>手順: リポジトリ内 <code>integrations/SLACK_SETUP.md</code></li>
+  </ul>
+  <p>問い合わせ: 社内の CareLink 担当まで。</p>
+</body>
+</html>

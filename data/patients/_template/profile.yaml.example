@@ -1,0 +1,39 @@
+# CareLink 利用者プロフィール（例・架空）
+# コピー先: data/patients/{patient_id}/profile.yaml
+# 機微情報はこのファイルをGitに含めない運用とする。
+
+patient_id: "P000000"
+display_name_note: "内部用略号のみ（氏名は書かない運用推奨）"
+
+# フェースシート要約（監査・整合用。原文PDFは face_sheet/ へ）
+face_sheet:
+  adl_mobility: "全介助"           # 例: 端座位・自歩 等との矛盾検知用
+  contracture: "あり"             # 例: なし / あり
+  devices:                      # 装着器具キーワード（録音・SOAPと照合）
+    - "気管カニューレ"
+    - "経管栄養"
+  enteral:
+    tube_type: "NG"              # NG / PEG 等
+    fixation_cm: null            # 例: 55 （数値が分かる場合）
+  risk_flags:
+    - "褥瘡リスク"
+    - "誤嚥性肺炎リスク"
+
+# 指示書・MCS（テキスト要約またはキーワード。詳細は orders/）
+standing_orders_keywords:
+  - "週3回 点滴"                 # 例: 該当日に記録必須のキーワード
+  - "経管栄養 1日3回"
+
+# 過去SOAPの参照（パスは利用者フォルダからの相対）
+soap_baseline_glob: "soap_reference/*.md"
+
+# 訪問看護計画書の目標（月次の計画照合 operations/monthly_clinical_automation.py plan 用）
+# 正本は帳票PDF。ここは照合用の要約＋キーワード（docs/nursing_manual.md の監査観点と別層）
+care_plan_nursing:
+  goals:
+    - id: G1
+      text: "例: 気道感染を起こさない"
+      keywords: ["喀痰", "吸引", "SpO2"]
+
+# メモ（非臨床・運用）
+notes: "NotebookLMやカイポケIDとの対応は integrations/ に書く"

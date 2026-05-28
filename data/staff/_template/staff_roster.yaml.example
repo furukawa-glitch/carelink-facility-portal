@@ -1,0 +1,35 @@
+# スタッフ契約・スキル台帳（例・架空）
+# コピー先: data/staff/{org_id}/staff_roster.yaml（Git に含めない）
+
+org:
+  # 1.0 常勤換算に相当する週労働時間（事業所の就業規則に合わせる）
+  fte_reference_hours_per_week: 40
+  # 契約ベースの合計 FTE がこれ未満なら警告
+  min_fte_contractual: 2.5
+  # 日次シフトの合計が「日あたり換算」でこれ未満なら警告（8時間=1.0 日換算）
+  min_fte_daily_shift: 2.5
+  daily_reference_hours: 8
+
+staff:
+  - staff_id: "S001"
+    display_name: "デモ常勤A"
+    employment_type: full_time
+    weekly_contract_hours: 40
+    skills:
+      - visit_nursing
+      - pressure_ulcer
+
+  - staff_id: "S002"
+    display_name: "デモパートB"
+    employment_type: part_time
+    weekly_contract_hours: 24
+    skills:
+      - visit_nursing
+
+  - staff_id: "S003"
+    display_name: "デモパートC"
+    employment_type: part_time
+    weekly_contract_hours: 16
+    skills:
+      - visit_nursing
+      - rehab

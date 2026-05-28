@@ -1,0 +1,52 @@
+# 勤務照合用の実データ（個人情報が含まれるためリポジトリに含めない）
+data/attendance_inbox/*.xlsx
+data/attendance_inbox/*.csv
+data/attendance_inbox/*.xlsm
+
+# 照合レポート（個人情報を含むためコミットしない）
+data/reports/*.xlsx
+data/reports/*.xlsm
+data/reports/batch_*/
+
+# 利用者プロフィール（個人情報）。雛形 _template のみ追跡
+data/patients/*
+!data/patients/README.md
+!data/patients/_template/
+!data/patients/_template/**
+
+# 日次インボックス（音声・起こし）
+data/inbox_daily/*
+!data/inbox_daily/README.md
+
+# スタッフ台帳・訪問予定（個人情報・住所）
+data/staff/*
+!data/staff/README.md
+!data/staff/_template/
+!data/staff/_template/**
+
+data/schedule/*
+!data/schedule/README.md
+!data/schedule/_template/
+!data/schedule/_template/**
+
+# 請求・LINEリスト（個人情報）
+data/billing/*
+!data/billing/README.md
+!data/billing/_template/
+!data/billing/_template/**
+
+# Vercel CLI（ローカルにリンク情報ができる）
+.vercel
+
+# フロント（facility-portal）
+facility-portal/node_modules
+facility-portal/dist
+
+# フロント（facility-portal）
+facility-portal/node_modules/
+facility-portal/dist/
+facility-portal/.env
+facility-portal/.env.local
+facility-portal/.env*.local
+
+.env

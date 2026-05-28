@@ -1,0 +1,115 @@
+# CareLink 汎用監査・加算漏れチェック用ルール（機微情報なし）
+# docs/nursing_manual.md と整合。operations/audit_check_engine.py が読み込む。
+# 改定・事業所方針で随時更新すること。
+
+version: "0.1"
+
+rules:
+  - id: visit_time_documented
+    name: 訪問開始・終了の言及
+    severity: error
+    description: 実訪問の開始・終了が記録に触れられているか（様式欄外でも本文中でも可）
+    any_keywords:
+      - "開始"
+      - "終了"
+      - "訪問時"
+    # 厳密には時刻形式チェックは別ルールで拡張
+
+  - id: medication_or_residual
+    name: 服薬状況・残薬
+    severity: warning
+    description: 令和8年度改定観点の服薬・残薬の把握
+    any_keywords:
+      - "服薬"
+      - "残薬"
+      - "薬"
+      - "未確認"
+
+  - id: assessment_not_vague_only
+    name: A の画一のみ禁止
+    severity: warning
+    description: 「変わりなし」等のみの評価は避ける
+    forbidden_if_only:
+      whole_text: true
+      patterns:
+        - "^\\s*(変わりなし|著変なし|前回同様)\\s*$"
+
+  - id: plan_review_mention
+    name: 計画見直し
+    severity: info
+    description: P または A で計画見直しの要否に触れることを推奨
+    any_keywords:
+      - "計画"
+      - "見直し"
+      - "継続"
+
+  - id: enteral_fixation_memory
+    name: 経管 固定・メモリ
+    severity: warning
+    applies_if_any_keywords:
+      - "経管"
+      - "胃ろう"
+      - "ＮＧ"
+      - "NG"
+      - "チューブ"
+    require_any_keywords:
+      - "メモリ"
+      - "固定"
+      - "挿入"
+      - "cm"
+
+  - id: enteral_formula_rate
+    name: 経管 栄養剤・量・速度
+    severity: warning
+    applies_if_any_keywords:
+      - "経管"
+      - "胃ろう"
+      - "ＮＧ"
+      - "NG"
+    require_any_keywords:
+      - "mL"
+      - "ｍｌ"
+      - "栄養"
+      - "注入"
+      - "速度"
+
+  - id: suction_context
+    name: 吸引 性状
+    severity: info
+    applies_if_any_keywords:
+      - "吸引"
+    require_any_keywords:
+      - "痰"
+      - "透明"
+      - "白"
+      - "多量"
+      - "中等量"
+      - "少量"
+
+  - id: pressure_redness_compare
+    name: 褥瘡・皮膚 範囲比較
+    severity: info
+    applies_if_any_keywords:
+      - "褥瘡"
+      - "発赤"
+      - "創"
+      - "ドレッシング"
+    require_any_keywords:
+      - "前回"
+      - "拡大"
+      - "縮小"
+      - "同程度"
+      - "変化なし"
+
+  - id: eol_breathing_family
+    name: 終末期 呼吸・家族
+    severity: warning
+    applies_if_any_keywords:
+      - "看取"
+      - "終末期"
+      - "ターミナル"
+    require_any_keywords:
+      - "呼吸"
+      - "家族"
+      - "声かけ"
+      - "説明"

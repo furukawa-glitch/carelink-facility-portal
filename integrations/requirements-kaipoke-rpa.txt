@@ -1,0 +1,2 @@
+# カイポケ「観察記録」SOAP 貼り付け RPA（Playwright）
+playwright>=1.40.0

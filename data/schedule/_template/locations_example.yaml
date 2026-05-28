@@ -1,0 +1,18 @@
+# 利用者・拠点の座標（例・架空の緯度経度）
+# 実運用では data/schedule/{org}/locations.yaml をローカル専用で管理
+
+office:
+  name: "事業所（出発点）"
+  lat: 35.18
+  lon: 136.90
+
+patients:
+  P001:
+    lat: 35.19
+    lon: 136.91
+  P002:
+    lat: 35.17
+    lon: 136.89
+  P003:
+    lat: 35.20
+    lon: 136.92

@@ -1,0 +1,60 @@
+# CareLink 運営データ ⇄ カイポケ「勤務実績」「予定管理」突合のための中間スキーマ（たたき台）
+# 実CSV列名はテナントで異なるため、取り込み時に column_aliases でマッピングする。
+
+version: "0.1"
+
+# --- 勤務実績（カイポケ側の概念に寄せた正規形）---
+canonical_shift_actual:
+  description: 1行=スタッフ×日の実績（または打刻単位を後で集計）
+  fields:
+    business_date: { type: date, required: true, note: "勤務日" }
+    staff_code: { type: string, required: true, note: "カイポケ職員コード（staff_roster.staff_id と一致推奨）" }
+    staff_name: { type: string, required: false }
+    shift_start: { type: time, required: true, note: "実績開始" }
+    shift_end: { type: time, required: true, note: "実績終了" }
+    break_minutes: { type: number, required: false, default: 0 }
+    facility_or_office_code: { type: string, required: false }
+    source_system: { type: string, required: true, example: "kaipoke" }
+
+# --- 予定（シフト・訪問予定）---
+canonical_shift_plan:
+  description: 計画シフト or 訪問枠の予定
+  fields:
+    business_date: { type: date, required: true }
+    staff_code: { type: string, required: true }
+    plan_start: { type: time, required: true }
+    plan_end: { type: time, required: true }
+    visit_id: { type: string, required: false, note: "CareLink 側 visit_id（ライン提案と連結）" }
+    patient_ref: { type: string, required: false, note: "利用者ID（マイナンバー等は載せない）" }
+    service_type_code: { type: string, required: false }
+
+# --- FTE エンジン出力（Slack/レポート用）---
+canonical_fte_snapshot:
+  fields:
+    generated_at: { type: datetime, required: true }
+    org_id: { type: string, required: true }
+    contractual_fte_total: { type: number, required: true }
+    min_fte_threshold: { type: number, required: true }
+    daily_fte: { type: object, required: false, note: "date -> number" }
+    warnings: { type: array, items: string, required: false }
+
+# --- ライン提案出力 ---
+canonical_line_proposal:
+  fields:
+    date: { type: date, required: true }
+    lines:
+      type: array
+      items:
+        staff_code: { type: string }
+        visit_order: { type: array, items: string }
+        approx_route_km: { type: number }
+
+# カイポケCSVとの列エイリアス例（実データに合わせて上書き）
+kaipoke_column_aliases_example:
+  shift_actual:
+    # "カイポケCSV列名": "canonical 論理名"
+    実績開始: shift_start
+    実績終了: shift_end
+  shift_plan:
+    予定開始: plan_start
+    予定終了: plan_end

@@ -1,0 +1,3 @@
+# カイポケ / MCS Selenium クローラー用（実装時に使用）
+selenium>=4.15.0
+webdriver-manager>=4.0.0

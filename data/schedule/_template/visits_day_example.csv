@@ -1,0 +1,5 @@
+visit_id,date,staff_id,patient_id,start_time,end_time,required_skill,notes
+V1,2026-04-07,S001,P001,09:00,09:45,visit_nursing,
+V2,2026-04-07,S001,P002,10:30,11:00,visit_nursing,
+V3,2026-04-07,S002,P003,09:15,10:00,pressure_ulcer,褥瘡フォロー
+V4,2026-04-07,S002,P001,11:00,11:30,visit_nursing,

@@ -1,0 +1,5 @@
+# Slack Web API（Bot Token でチャンネル投稿する場合）
+slack-sdk>=3.27.0
+slack-bolt>=1.23.0
+
+# Incoming Webhook のみ使う場合は標準ライブラリのみで動作（本ファイル不要）
