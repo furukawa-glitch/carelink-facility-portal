@@ -1867,7 +1867,9 @@ export function RecordPage({
             };
           })();
         const hp = Array.isArray(base.hourPatrol) && base.hourPatrol.length === 24 ? [...base.hourPatrol] : freshHourly24();
-        for (let h = 0; h <= maxHour; h++) hp[h] = true;
+        for (let h = 0; h <= maxHour; h++) {
+          if (h % 3 === 0) hp[h] = true;
+        }
         next[id] = { ...base, hourPatrol: hp };
       }
       return next;
