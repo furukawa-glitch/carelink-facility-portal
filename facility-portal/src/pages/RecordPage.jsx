@@ -1439,7 +1439,11 @@ export function RecordPage({
       ...(String(vitalHandwritingDataUrl ?? '').trim() ? { handwrittenMemo: 'あり', handwrittenImage: String(vitalHandwritingDataUrl).trim() } : {}),
     });
     if (patrol) {
-      const at = normalizePatrolDateTimeLocal(patrolAt);
+      const defaultHour = Math.floor(new Date().getHours() / 3) * 3;
+      const atBase =
+        String(patrolAt ?? '').trim() ||
+        `${bulkTableYmd(bulkSheetDate)}T${String(Math.max(0, Math.min(21, defaultHour))).padStart(2, '0')}:00`;
+      const at = normalizePatrolDateTimeLocal(atBase);
       Report.logCareEvent({
         type: 'patrol',
         ts: toEventIsoOrNow(at),
