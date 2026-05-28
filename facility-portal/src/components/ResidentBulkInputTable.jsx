@@ -75,6 +75,7 @@ function emptySavedHourly() {
  *   bulkRowHasInput: (row: Partial<typeof DEFAULT_ROW> | undefined) => boolean;
  *   saveBulkRow: (res: Record<string, unknown>) => void;
  *   saveBulkAllWithInput: () => void;
+ *   saveBulkVitalsOnly: () => void;
  *   geminiApiKey?: string;
  * }} props
  */
@@ -92,6 +93,7 @@ export function ResidentBulkInputTable({
   bulkRowHasInput,
   saveBulkRow,
   saveBulkAllWithInput,
+  saveBulkVitalsOnly,
   geminiApiKey = '',
 }) {
   const [voiceTarget, setVoiceTarget] = React.useState({ id: '', name: '' });
@@ -160,6 +162,31 @@ export function ResidentBulkInputTable({
           >
             入力した行をまとめて保存
           </button>
+          <button
+            type="button"
+            onClick={() => keepTableScrollPosition(saveBulkVitalsOnly)}
+            className="rounded-xl border-2 border-rose-500 bg-rose-50 px-4 py-2.5 text-sm font-black text-rose-900 hover:bg-rose-100"
+          >
+            バイタルのみ一括保存
+          </button>
+        </div>
+      </div>
+      <div className="sticky bottom-2 z-20 mb-2 flex justify-end">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border-2 border-emerald-300 bg-white/95 px-2 py-2 shadow-lg backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={() => keepTableScrollPosition(saveBulkAllWithInput)}
+            className="rounded-xl border-2 border-emerald-600 bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 sm:text-sm"
+          >
+            一括保存（全入力）
+          </button>
+          <button
+            type="button"
+            onClick={() => keepTableScrollPosition(saveBulkVitalsOnly)}
+            className="rounded-xl border-2 border-rose-500 bg-rose-50 px-3 py-2 text-xs font-black text-rose-900 hover:bg-rose-100 sm:text-sm"
+          >
+            一括保存（バイタルのみ）
+          </button>
         </div>
       </div>
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
@@ -225,6 +252,12 @@ export function ResidentBulkInputTable({
                 氏名
               </th>
               <th className="border border-slate-200 px-0.5 py-1">部屋</th>
+              <th className="border border-slate-200 bg-rose-50/70 px-0.5 py-1 whitespace-nowrap text-rose-900">最新バイタル</th>
+              <th className="border border-slate-200 bg-orange-50/70 px-0.5 py-1 whitespace-nowrap text-orange-900">食事</th>
+              <th className="border border-slate-200 bg-violet-50/70 px-0.5 py-1 whitespace-nowrap text-violet-900">内服</th>
+              <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
+              <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">尿回数</th>
+              <th className="border border-slate-200 bg-amber-50/70 px-0.5 py-1 whitespace-nowrap text-amber-900">便回数</th>
               <th className="border border-slate-200 bg-slate-50 px-0 py-0 text-center align-bottom">
                 <div className="min-w-[28.5rem] px-0.5 py-1">
                   <p className="mb-0.5 text-[10px] font-black normal-case text-slate-800">
@@ -304,6 +337,21 @@ export function ResidentBulkInputTable({
               const hp = ensureHour24(row.hourPatrol);
               const hu = ensureHour24Str(row.hourUrine);
               const hs = ensureHour24Str(row.hourStool);
+              const urineCount = hu.filter((v) => String(v ?? '').trim() !== '').length + (String(row.urineVolume ?? '').trim() ? 1 : 0);
+              const stoolCount =
+                hs.filter((v) => String(v ?? '').trim() !== '').length +
+                (String(row.stoolVolume ?? '').trim() || String(row.stoolCharacter ?? '').trim() ? 1 : 0);
+              const vitalFrontLabel = [
+                String(row.temp ?? '').trim() ? `${String(row.temp).trim()}℃` : '',
+                String(row.bpU ?? '').trim() || String(row.bpL ?? '').trim()
+                  ? `${String(row.bpU ?? '').trim() || '-'} / ${String(row.bpL ?? '').trim() || '-'}`
+                  : '',
+                String(row.pulse ?? '').trim() ? `P${String(row.pulse).trim()}` : '',
+                String(row.spo2 ?? '').trim() ? `SpO2 ${String(row.spo2).trim()}` : '',
+              ]
+                .filter(Boolean)
+                .join(' ・ ');
+              const mealFrontLabel = [String(row.mealSlot ?? '').trim(), String(row.mealAmount ?? '').trim()].filter(Boolean).join(' ');
 
               const hourRows = [
                 {
@@ -341,6 +389,24 @@ export function ResidentBulkInputTable({
                     {nm}
                   </td>
                   <td className="border border-slate-200 px-1 py-1 text-center font-mono">{String(res.room ?? '')}</td>
+                  <td className="border border-slate-200 bg-rose-50/50 px-1 py-1 text-[10px] font-bold text-rose-900 sm:text-xs">
+                    {vitalFrontLabel || '—'}
+                  </td>
+                  <td className="border border-slate-200 bg-orange-50/50 px-1 py-1 text-[10px] font-bold text-orange-900 sm:text-xs">
+                    {mealFrontLabel || '—'}
+                  </td>
+                  <td className="border border-slate-200 bg-violet-50/50 px-1 py-1 text-center text-[10px] font-bold text-violet-900 sm:text-xs">
+                    {row.medicationTaken === 'yes' ? '済' : row.medicationTaken === 'no' ? '未' : '—'}
+                  </td>
+                  <td className="border border-slate-200 bg-sky-50/50 px-1 py-1 text-center font-mono text-[11px] font-bold text-sky-900 sm:text-xs">
+                    {String(row.waterMl ?? '').trim() || '—'}
+                  </td>
+                  <td className="border border-slate-200 bg-sky-50/50 px-1 py-1 text-center font-mono text-[11px] font-bold text-sky-900 sm:text-xs">
+                    {urineCount}
+                  </td>
+                  <td className="border border-slate-200 bg-amber-50/50 px-1 py-1 text-center font-mono text-[11px] font-bold text-amber-900 sm:text-xs">
+                    {stoolCount}
+                  </td>
                   <td className="border border-slate-200 bg-slate-50/40 p-0 align-top">
                     <table className="w-full min-w-[28.5rem] border-collapse text-[9px] font-black">
                       <tbody>
