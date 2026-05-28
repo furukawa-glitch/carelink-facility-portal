@@ -61,7 +61,7 @@ import {
   getQuickCareMealEventKind,
   parseHourlyStoolCellValue,
 } from '../lib/careQuickCareFields.js';
-import { buildHourlyCareFromEvents, tokyoDateHourToIso } from '../lib/hourlyCareGrid.js';
+import { buildHourlyCareFromEvents, tokyoDateHourToIso, tokyoHourFromTs } from '../lib/hourlyCareGrid.js';
 import { parsePharmacyMedicationPdf } from '../lib/pharmacyMedicationPdf.js';
 import { normalizePatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { AccidentMonthlyAnalysisModal } from '../components/AccidentMonthlyAnalysisModal.jsx';
@@ -670,6 +670,40 @@ function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
   return seed;
 }
 
+/** 24時間表（巡視・尿・便）の保存済み値を対象日から復元 */
+function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
+  const ymd = bulkTableYmd(bulkSheetDate);
+  const rid = String(residentId ?? '').trim();
+  const out = {
+    hourPatrol: freshHourly24(),
+    hourUrine: freshHourlyText24(),
+    hourStool: freshHourlyText24(),
+  };
+  if (!rid) return out;
+  const events = Report.getCareEventsForResidentDay(rid, ymd);
+  for (const ev of events) {
+    const h = tokyoHourFromTs(ev?.ts);
+    if (!Number.isFinite(h) || h < 0 || h > 23) continue;
+    const typ = String(ev?.type ?? '');
+    const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+    const note = String(meta.note ?? '').trim();
+    if (typ === 'patrol') {
+      out.hourPatrol[h] = true;
+      continue;
+    }
+    if (typ !== 'hourly_excretion' && typ !== 'excretion') continue;
+    const hourlyKind = String(meta.hourlyKind ?? '').trim();
+    const u = String(meta.urineVolume ?? '').trim();
+    const sv = String(meta.stoolVolume ?? '').trim();
+    const sc = String(meta.stoolCharacter ?? '').trim();
+    if (hourlyKind === 'urine' || /排尿（\d{2}時）/u.test(note)) out.hourUrine[h] = u || 'plain';
+    if (hourlyKind === 'stool' || /排便（\d{2}時）/u.test(note)) {
+      out.hourStool[h] = sv || sc ? `${sv || ''}\t${sc || ''}` : 'plain';
+    }
+  }
+  return out;
+}
+
 function emptyEmergencyDraft() {
   return {
     senderOffice: '',
@@ -1017,9 +1051,7 @@ export function RecordPage({
           ...vitalSeedForBulkTableRow(id, ymd),
           ...bulkCareSeedForResidentDay(id, ymd),
           mealSlot,
-          hourPatrol: freshHourly24(),
-          hourUrine: freshHourlyText24(),
-          hourStool: freshHourlyText24(),
+          ...hourlyDraftSeedForResidentDay(id, ymd),
           vitalHandwritingDataUrl: '',
           ...stored,
         };
@@ -1595,9 +1627,7 @@ export function RecordPage({
         ...vitalSeedForBulkTableRow(id, ymd),
         ...bulkCareSeedForResidentDay(id, ymd),
         mealSlot: bulkGlobalMealSlot,
-        hourPatrol: freshHourly24(),
-        hourUrine: freshHourlyText24(),
-        hourStool: freshHourlyText24(),
+        ...hourlyDraftSeedForResidentDay(id, ymd),
       };
     }
     setBulkDraft(init);
@@ -1630,9 +1660,7 @@ export function RecordPage({
             ...vitalSeedForBulkTableRow(id, ymd),
             ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
-            hourPatrol: freshHourly24(),
-            hourUrine: freshHourlyText24(),
-            hourStool: freshHourlyText24(),
+            ...hourlyDraftSeedForResidentDay(id, ymd),
           };
         })();
       return { ...prev, [id]: { ...base, ...patch } };
@@ -1696,9 +1724,7 @@ export function RecordPage({
           ...vitalSeedForBulkTableRow(id, ymd),
           ...bulkCareSeedForResidentDay(id, ymd),
           mealSlot: bulkGlobalMealSlot,
-          hourPatrol: freshHourly24(),
-          hourUrine: freshHourlyText24(),
-          hourStool: freshHourlyText24(),
+          ...hourlyDraftSeedForResidentDay(id, ymd),
         },
       }));
       setTick((n) => n + 1);
@@ -1726,9 +1752,7 @@ export function RecordPage({
             ...vitalSeedForBulkTableRow(id, ymd),
             ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
-            hourPatrol: freshHourly24(),
-            hourUrine: freshHourlyText24(),
-            hourStool: freshHourlyText24(),
+            ...hourlyDraftSeedForResidentDay(id, ymd),
           };
       }
       return next;
@@ -1785,9 +1809,7 @@ export function RecordPage({
                 ...vitalSeedForBulkTableRow(id, ymd),
                 ...bulkCareSeedForResidentDay(id, ymd),
                 mealSlot: bulkGlobalMealSlot,
-                hourPatrol: freshHourly24(),
-                hourUrine: freshHourlyText24(),
-                hourStool: freshHourlyText24(),
+                ...hourlyDraftSeedForResidentDay(id, ymd),
               };
             })();
           next[id] = {
@@ -1814,9 +1836,7 @@ export function RecordPage({
             ...vitalSeedForBulkTableRow(id, ymd),
             ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
-            hourPatrol: freshHourly24(),
-            hourUrine: freshHourlyText24(),
-            hourStool: freshHourlyText24(),
+            ...hourlyDraftSeedForResidentDay(id, ymd),
           };
         } else {
           let cur = next[id];
