@@ -351,7 +351,17 @@ export function ResidentBulkInputTable({
               ]
                 .filter(Boolean)
                 .join(' ・ ');
-              const mealFrontLabel = [String(row.mealSlot ?? '').trim(), String(row.mealAmount ?? '').trim()].filter(Boolean).join(' ');
+              const mealSlotLabel = String(row.mealSlot ?? '').trim() || String(bulkGlobalMealSlot ?? '').trim();
+              const mealMainLabel = [
+                String(row.mealStaple ?? '').trim() ? `主${String(row.mealStaple).trim()}` : '',
+                String(row.mealSide ?? '').trim() ? `副${String(row.mealSide).trim()}` : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+              const mealFallback = String(row.mealAmount ?? '').trim();
+              const ensureLabel = String(row.ensurePortion ?? '').trim() ? `エンシュア${String(row.ensurePortion).trim()}` : '';
+              const extrasLabel = String(row.mealExtras ?? '').trim();
+              const mealFrontLabel = [mealSlotLabel, mealMainLabel || mealFallback, ensureLabel, extrasLabel].filter(Boolean).join(' ');
 
               const hourRows = [
                 {
