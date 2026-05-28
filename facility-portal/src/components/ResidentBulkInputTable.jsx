@@ -365,9 +365,11 @@ export function ResidentBulkInputTable({
               const extrasLabel = String(row.mealExtras ?? '').trim();
               const draftMealLabel = [mealMainLabel || mealFallback, ensureLabel, extrasLabel].filter(Boolean).join(' ');
               const savedMealSlots = bulkMealSummaryByResident[id] ?? {};
-              const mealFrontLabel = ['朝', '昼', '夜']
-                .map((slot) => `${slot}:${String(savedMealSlots[slot] ?? '').trim() || '—'}`)
-                .join(' / ');
+              const mealFrontBySlot = {
+                朝: String(savedMealSlots['朝'] ?? '').trim() || '—',
+                昼: String(savedMealSlots['昼'] ?? '').trim() || '—',
+                夜: String(savedMealSlots['夜'] ?? '').trim() || '—',
+              };
               const draftMealPreview =
                 mealSlotLabel && draftMealLabel ? `入力中 ${mealSlotLabel}:${draftMealLabel}` : '';
 
@@ -411,9 +413,11 @@ export function ResidentBulkInputTable({
                     {vitalFrontLabel || '—'}
                   </td>
                   <td className="border border-slate-200 bg-orange-50/50 px-1 py-1 text-[10px] font-bold text-orange-900 sm:text-xs">
-                    <div className="leading-snug">
-                      <p>{mealFrontLabel}</p>
-                      {draftMealPreview ? <p className="mt-0.5 text-[9px] text-orange-700">{draftMealPreview}</p> : null}
+                    <div className="space-y-0.5 leading-snug">
+                      <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">朝</span>{mealFrontBySlot.朝}</p>
+                      <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">昼</span>{mealFrontBySlot.昼}</p>
+                      <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">夜</span>{mealFrontBySlot.夜}</p>
+                      {draftMealPreview ? <p className="mt-1 border-t border-orange-200 pt-0.5 text-[9px] text-orange-700">{draftMealPreview}</p> : null}
                     </div>
                   </td>
                   <td className="border border-slate-200 bg-violet-50/50 px-1 py-1 text-center text-[10px] font-bold text-violet-900 sm:text-xs">
