@@ -973,6 +973,27 @@ export function RecordPage({
     return m;
   }, [displayResidents, bulkSheetDate, tick]);
 
+  /** 一覧表先頭表示用: 当日の食事（朝・昼・夜）の最新保存値 */
+  const bulkMealSummaryByResident = useMemo(() => {
+    const ymd = bulkTableYmd(bulkSheetDate);
+    const out = {};
+    for (const r of displayResidents) {
+      const id = String(r.id);
+      const slots = { 朝: '', 昼: '', 夜: '' };
+      const events = Report.getCareEventsForResidentDay(id, ymd);
+      for (const ev of events) {
+        if (String(ev?.type ?? '') !== 'meal') continue;
+        const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+        const slot = String(meta.mealSlot ?? '').trim();
+        if (slot !== '朝' && slot !== '昼' && slot !== '夜') continue;
+        const amount = String(meta.mealAmount ?? '').trim();
+        slots[slot] = amount || '食事記録';
+      }
+      out[id] = slots;
+    }
+    return out;
+  }, [displayResidents, bulkSheetDate, tick]);
+
   const displayResidentsForBulkHydrateRef = useRef(displayResidents);
   displayResidentsForBulkHydrateRef.current = displayResidents;
   const bulkGlobalMealSlotHydrateRef = useRef(bulkGlobalMealSlot);
@@ -3305,6 +3326,7 @@ export function RecordPage({
                       bulkSheetDate={bulkSheetDate}
                       onBulkSheetDateChange={setBulkSheetDate}
                       hourlySavedByResident={bulkHourlySavedByResident}
+                      bulkMealSummaryByResident={bulkMealSummaryByResident}
                       residentNameWithoutSama={residentNameWithoutSama}
                       patchBulkRow={patchBulkRow}
                       setBulkPatrolForAllVisible={setBulkPatrolForAllVisible}

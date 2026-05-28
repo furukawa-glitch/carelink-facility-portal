@@ -69,6 +69,7 @@ function emptySavedHourly() {
  *   bulkSheetDate: string;
  *   onBulkSheetDateChange: (ymd: string) => void;
  *   hourlySavedByResident: Record<string, { patrol: boolean[]; urine: boolean[]; stool: boolean[] }>;
+ *   bulkMealSummaryByResident: Record<string, { 朝?: string; 昼?: string; 夜?: string }>;
  *   residentNameWithoutSama: (nameRaw: unknown) => string;
  *   patchBulkRow: (id: string, patch: Partial<typeof DEFAULT_ROW>) => void;
  *   setBulkPatrolForAllVisible: (checked: boolean) => void;
@@ -87,6 +88,7 @@ export function ResidentBulkInputTable({
   bulkSheetDate,
   onBulkSheetDateChange,
   hourlySavedByResident,
+  bulkMealSummaryByResident,
   residentNameWithoutSama,
   patchBulkRow,
   setBulkPatrolForAllVisible,
@@ -361,7 +363,13 @@ export function ResidentBulkInputTable({
               const mealFallback = String(row.mealAmount ?? '').trim();
               const ensureLabel = String(row.ensurePortion ?? '').trim() ? `エンシュア${String(row.ensurePortion).trim()}` : '';
               const extrasLabel = String(row.mealExtras ?? '').trim();
-              const mealFrontLabel = [mealSlotLabel, mealMainLabel || mealFallback, ensureLabel, extrasLabel].filter(Boolean).join(' ');
+              const draftMealLabel = [mealMainLabel || mealFallback, ensureLabel, extrasLabel].filter(Boolean).join(' ');
+              const savedMealSlots = bulkMealSummaryByResident[id] ?? {};
+              const mealFrontLabel = ['朝', '昼', '夜']
+                .map((slot) => `${slot}:${String(savedMealSlots[slot] ?? '').trim() || '—'}`)
+                .join(' / ');
+              const draftMealPreview =
+                mealSlotLabel && draftMealLabel ? `入力中 ${mealSlotLabel}:${draftMealLabel}` : '';
 
               const hourRows = [
                 {
@@ -403,7 +411,10 @@ export function ResidentBulkInputTable({
                     {vitalFrontLabel || '—'}
                   </td>
                   <td className="border border-slate-200 bg-orange-50/50 px-1 py-1 text-[10px] font-bold text-orange-900 sm:text-xs">
-                    {mealFrontLabel || '—'}
+                    <div className="leading-snug">
+                      <p>{mealFrontLabel}</p>
+                      {draftMealPreview ? <p className="mt-0.5 text-[9px] text-orange-700">{draftMealPreview}</p> : null}
+                    </div>
                   </td>
                   <td className="border border-slate-200 bg-violet-50/50 px-1 py-1 text-center text-[10px] font-bold text-violet-900 sm:text-xs">
                     {row.medicationTaken === 'yes' ? '済' : row.medicationTaken === 'no' ? '未' : '—'}
