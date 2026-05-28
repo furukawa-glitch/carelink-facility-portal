@@ -105,6 +105,33 @@ const BULK_CARE_RESET = Object.freeze({
   /** 間食・補助食など自由記述（パン、バナナ等）— 食事メモに連結 */
   mealExtras: '',
 });
+const BULK_DRAFT_LS_KEY = 'carelink_os_bulk_table_draft_v1';
+
+function readBulkDraftStore() {
+  try {
+    const raw = localStorage.getItem(BULK_DRAFT_LS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeBulkDraftStore(store) {
+  try {
+    localStorage.setItem(BULK_DRAFT_LS_KEY, JSON.stringify(store && typeof store === 'object' ? store : {}));
+  } catch {
+    // localStorage が使えない環境は黙って無視
+  }
+}
+
+function makeBulkDraftScopeKey(facilityLinkKey, selectedSheetTitle, ymd) {
+  const f = String(facilityLinkKey ?? '').trim();
+  const s = String(selectedSheetTitle ?? '').trim();
+  const d = String(ymd ?? '').trim();
+  return `${f || s || 'unknown'}::${d || 'unknown'}`;
+}
 
 function freshHourly24() {
   return Array(24).fill(false);
@@ -598,6 +625,51 @@ function vitalSeedForBulkTableRow(residentId, bulkSheetDate) {
   return fromEvents;
 }
 
+function localDateTimeForInput(ts) {
+  const t = new Date(ts);
+  if (!Number.isFinite(t.getTime())) return '';
+  const y = t.getFullYear();
+  const m = String(t.getMonth() + 1).padStart(2, '0');
+  const d = String(t.getDate()).padStart(2, '0');
+  const h = String(t.getHours()).padStart(2, '0');
+  const mm = String(t.getMinutes()).padStart(2, '0');
+  return `${y}-${m}-${d}T${h}:${mm}`;
+}
+
+/** 保存済みログから一覧入力行の初期値を復元（対象日） */
+function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
+  const ymd = bulkTableYmd(bulkSheetDate);
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return { ...BULK_CARE_RESET };
+  const events = Report.getCareEventsForResidentDay(rid, ymd);
+  const seed = { ...BULK_CARE_RESET };
+  for (const ev of events) {
+    const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+    if (ev?.type === 'patrol') {
+      seed.patrol = true;
+      const dt = normalizePatrolDateTimeLocal(localDateTimeForInput(ev?.ts));
+      if (dt) seed.patrolAt = dt;
+    } else if (ev?.type === 'excretion') {
+      seed.excretion = true;
+      if (meta.urineVolume != null && String(meta.urineVolume).trim() !== '') seed.urineVolume = String(meta.urineVolume);
+      if (meta.stoolVolume != null && String(meta.stoolVolume).trim() !== '') seed.stoolVolume = String(meta.stoolVolume);
+      if (meta.stoolCharacter != null && String(meta.stoolCharacter).trim() !== '') seed.stoolCharacter = String(meta.stoolCharacter);
+      if (meta.toiletGuidance === true) seed.toiletGuidance = true;
+    } else if (ev?.type === 'meal') {
+      seed.meal = true;
+      if (meta.mealSlot != null && String(meta.mealSlot).trim() !== '') seed.mealSlot = String(meta.mealSlot);
+      if (meta.mealAmount != null && String(meta.mealAmount).trim() !== '') seed.mealAmount = String(meta.mealAmount);
+      if (meta.waterMl != null && String(meta.waterMl).trim() !== '') seed.waterMl = String(meta.waterMl);
+      if (meta.medicationTaken === 'yes' || meta.medicationTaken === 'no') seed.medicationTaken = meta.medicationTaken;
+    } else if (ev?.type === 'fluid_intake') {
+      if (meta.waterMl != null && String(meta.waterMl).trim() !== '') seed.waterMl = String(meta.waterMl);
+    } else if (ev?.type === 'enteral') {
+      if (meta.note != null && String(meta.note).trim() !== '') seed.enteralMenu = String(meta.note);
+    }
+  }
+  return seed;
+}
+
 function emptyEmergencyDraft() {
   return {
     senderOffice: '',
@@ -732,6 +804,10 @@ export function RecordPage({
     [selectedSheetTitle]
   );
   const selectedFacilityLinkKey = String(selectedDef?.linkKey ?? '').trim();
+  const bulkDraftScopeKey = useMemo(
+    () => makeBulkDraftScopeKey(selectedFacilityLinkKey, selectedSheetTitle, bulkTableYmd(bulkSheetDate)),
+    [selectedFacilityLinkKey, selectedSheetTitle, bulkSheetDate]
+  );
   const visitCalendarConfigured = useMemo(
     () => hasGoogleCalendarForFacility(selectedFacilityLinkKey),
     [selectedFacilityLinkKey]
@@ -908,19 +984,23 @@ export function RecordPage({
     const ymd = bulkTableYmd(bulkSheetDate);
     const list = displayResidentsForBulkHydrateRef.current;
     const mealSlot = bulkGlobalMealSlotHydrateRef.current;
+    const storedAll = readBulkDraftStore();
+    const storedRows = storedAll[bulkDraftScopeKey] && typeof storedAll[bulkDraftScopeKey] === 'object' ? storedAll[bulkDraftScopeKey] : {};
     setBulkDraft((prev) => {
       const next = { ...prev };
       for (const r of list) {
         const id = String(r.id);
+        const stored = storedRows[id] && typeof storedRows[id] === 'object' ? storedRows[id] : {};
         next[id] = {
           ...(prev[id] || {}),
           ...vitalSeedForBulkTableRow(id, ymd),
-          ...BULK_CARE_RESET,
+          ...bulkCareSeedForResidentDay(id, ymd),
           mealSlot,
           hourPatrol: freshHourly24(),
           hourUrine: freshHourlyText24(),
           hourStool: freshHourlyText24(),
           vitalHandwritingDataUrl: '',
+          ...stored,
         };
       }
       const keep = new Set(list.map((x) => String(x.id)));
@@ -929,7 +1009,27 @@ export function RecordPage({
       }
       return next;
     });
-  }, [bulkSheetDate, residentInputView]);
+  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey]);
+
+  /** 一覧入力の下書きを施設×日付ごとに保存（保存押し忘れの復元用） */
+  useEffect(() => {
+    if (residentInputView !== 'table') return;
+    const keep = new Set(displayResidents.map((r) => String(r.id)));
+    const scoped = {};
+    for (const [id, row] of Object.entries(bulkDraft ?? {})) {
+      if (!keep.has(String(id))) continue;
+      scoped[id] = row;
+    }
+    const store = readBulkDraftStore();
+    store[bulkDraftScopeKey] = scoped;
+    // ストレージ肥大化防止: 直近 21 スコープだけ保持
+    const keys = Object.keys(store);
+    if (keys.length > 21) {
+      keys.sort();
+      for (const k of keys.slice(0, keys.length - 21)) delete store[k];
+    }
+    writeBulkDraftStore(store);
+  }, [residentInputView, bulkDraft, bulkDraftScopeKey, displayResidents]);
 
   const insuranceBreakdown = useMemo(() => {
     const m = {};
@@ -1421,7 +1521,7 @@ export function RecordPage({
       if (hu[h] && !occ.urine[h]) {
         const uCode = String(hu[h] ?? '').trim();
         Report.logCareEvent({
-          type: 'excretion',
+          type: 'hourly_excretion',
           ts: tokyoDateHourToIso(ymdLog, h),
           residentId: id,
           residentName: name,
@@ -1429,6 +1529,7 @@ export function RecordPage({
           meta: {
             note: `排尿（${String(h).padStart(2, '0')}時）`,
             ...(uCode && uCode !== 'plain' ? { urineVolume: uCode } : {}),
+            hourlyKind: 'urine',
             hourlySheet: true,
           },
         });
@@ -1439,7 +1540,7 @@ export function RecordPage({
         const sCode = String(hs[h] ?? '').trim();
         const parsedStool = parseHourlyStoolCellValue(sCode);
         Report.logCareEvent({
-          type: 'excretion',
+          type: 'hourly_excretion',
           ts: tokyoDateHourToIso(ymdLog, h),
           residentId: id,
           residentName: name,
@@ -1448,6 +1549,7 @@ export function RecordPage({
             note: `排便（${String(h).padStart(2, '0')}時）`,
             ...(parsedStool?.stoolVolume ? { stoolVolume: parsedStool.stoolVolume } : {}),
             ...(parsedStool?.stoolCharacter ? { stoolCharacter: parsedStool.stoolCharacter } : {}),
+            hourlyKind: 'stool',
             hourlySheet: true,
           },
         });
@@ -1470,7 +1572,7 @@ export function RecordPage({
       const id = String(r.id);
       init[id] = {
         ...vitalSeedForBulkTableRow(id, ymd),
-        ...BULK_CARE_RESET,
+        ...bulkCareSeedForResidentDay(id, ymd),
         mealSlot: bulkGlobalMealSlot,
         hourPatrol: freshHourly24(),
         hourUrine: freshHourlyText24(),
@@ -1505,7 +1607,7 @@ export function RecordPage({
           const ymd = bulkTableYmd(bulkSheetDate);
           return {
             ...vitalSeedForBulkTableRow(id, ymd),
-            ...BULK_CARE_RESET,
+            ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
             hourPatrol: freshHourly24(),
             hourUrine: freshHourlyText24(),
@@ -1546,17 +1648,32 @@ export function RecordPage({
     );
   }, []);
 
+  const bulkRowHasVitalInput = useCallback((row) => {
+    if (!row) return false;
+    return (
+      String(row.temp ?? '').trim() !== '' ||
+      String(row.bpU ?? '').trim() !== '' ||
+      String(row.bpL ?? '').trim() !== '' ||
+      String(row.pulse ?? '').trim() !== '' ||
+      String(row.spo2 ?? '').trim() !== '' ||
+      String(row.weight ?? '').trim() !== '' ||
+      String(row.vitalHandwritingDataUrl ?? '').trim() !== ''
+    );
+  }, []);
+
   const saveBulkRow = useCallback(
     (res) => {
       const id = String(res.id);
       const row = bulkDraft[id];
       if (!row || !bulkRowHasInput(row)) return;
       applyCareQuickRecord(res, row);
+      const ymd = bulkTableYmd(bulkSheetDate);
       setBulkDraft((prev) => ({
         ...prev,
         [id]: {
           ...prev[id],
-          ...BULK_CARE_RESET,
+          ...vitalSeedForBulkTableRow(id, ymd),
+          ...bulkCareSeedForResidentDay(id, ymd),
           mealSlot: bulkGlobalMealSlot,
           hourPatrol: freshHourly24(),
           hourUrine: freshHourlyText24(),
@@ -1565,7 +1682,7 @@ export function RecordPage({
       }));
       setTick((n) => n + 1);
     },
-    [bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot]
+    [bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate]
   );
 
   const saveBulkAllWithInput = useCallback(() => {
@@ -1577,6 +1694,7 @@ export function RecordPage({
     for (const res of toSave) {
       applyCareQuickRecord(res, bulkDraft[String(res.id)]);
     }
+    const ymd = bulkTableYmd(bulkSheetDate);
     setBulkDraft((prev) => {
       const next = { ...prev };
       for (const res of toSave) {
@@ -1584,7 +1702,8 @@ export function RecordPage({
         if (next[id])
           next[id] = {
             ...next[id],
-            ...BULK_CARE_RESET,
+            ...vitalSeedForBulkTableRow(id, ymd),
+            ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
             hourPatrol: freshHourly24(),
             hourUrine: freshHourlyText24(),
@@ -1594,7 +1713,42 @@ export function RecordPage({
       return next;
     });
     setTick((t) => t + 1);
-  }, [displayResidents, bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot]);
+  }, [displayResidents, bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate]);
+
+  /** バイタル列のみを全員一括保存（巡視・食事などは触らない） */
+  const saveBulkVitalsOnly = useCallback(() => {
+    const toSave = displayResidents.filter((res) => {
+      const row = bulkDraft[String(res.id)];
+      return bulkRowHasVitalInput(row);
+    });
+    if (toSave.length === 0) return;
+    for (const res of toSave) {
+      const row = bulkDraft[String(res.id)] ?? {};
+      applyCareQuickRecord(res, {
+        temp: row.temp,
+        bpU: row.bpU,
+        bpL: row.bpL,
+        pulse: row.pulse,
+        spo2: row.spo2,
+        weight: row.weight,
+        vitalHandwritingDataUrl: row.vitalHandwritingDataUrl,
+      });
+    }
+    const ymd = bulkTableYmd(bulkSheetDate);
+    setBulkDraft((prev) => {
+      const next = { ...prev };
+      for (const res of toSave) {
+        const id = String(res.id);
+        if (!next[id]) continue;
+        next[id] = {
+          ...next[id],
+          ...vitalSeedForBulkTableRow(id, ymd),
+        };
+      }
+      return next;
+    });
+    setTick((t) => t + 1);
+  }, [displayResidents, bulkDraft, bulkRowHasVitalInput, applyCareQuickRecord, bulkSheetDate]);
 
   const setBulkPatrolForAllVisible = useCallback(
     (checked) => {
@@ -1608,7 +1762,7 @@ export function RecordPage({
               const ymd = bulkTableYmd(bulkSheetDate);
               return {
                 ...vitalSeedForBulkTableRow(id, ymd),
-                ...BULK_CARE_RESET,
+                ...bulkCareSeedForResidentDay(id, ymd),
                 mealSlot: bulkGlobalMealSlot,
                 hourPatrol: freshHourly24(),
                 hourUrine: freshHourlyText24(),
@@ -1637,7 +1791,7 @@ export function RecordPage({
         if (!next[id]) {
           next[id] = {
             ...vitalSeedForBulkTableRow(id, ymd),
-            ...BULK_CARE_RESET,
+            ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
             hourPatrol: freshHourly24(),
             hourUrine: freshHourlyText24(),
@@ -3157,6 +3311,7 @@ export function RecordPage({
                       bulkRowHasInput={bulkRowHasInput}
                       saveBulkRow={saveBulkRow}
                       saveBulkAllWithInput={saveBulkAllWithInput}
+                      saveBulkVitalsOnly={saveBulkVitalsOnly}
                       geminiApiKey={GEMINI_KEY}
                     />
                   ) : (

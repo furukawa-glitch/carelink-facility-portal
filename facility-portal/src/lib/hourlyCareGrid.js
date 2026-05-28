@@ -108,14 +108,17 @@ export function buildHourlyCareFromEvents(events, ymd) {
       patrol[h] = true;
       continue;
     }
-    if (typ !== 'excretion') continue;
+    if (typ !== 'excretion' && typ !== 'hourly_excretion') continue;
     const meta = e.meta && typeof e.meta === 'object' ? e.meta : {};
     const u = String(meta.urineVolume ?? '').trim();
     const sv = String(meta.stoolVolume ?? '').trim();
     const sc = String(meta.stoolCharacter ?? '').trim();
     const note = String(meta.note ?? '').trim();
+    const hourlyKind = String(meta.hourlyKind ?? '').trim();
     if (u || /排尿/u.test(note) || meta.toiletGuidance) urine[h] = true;
     if (sv || sc || /排便/u.test(note)) stool[h] = true;
+    if (hourlyKind === 'urine') urine[h] = true;
+    if (hourlyKind === 'stool') stool[h] = true;
     if (note === '排泄確認（クイック）') {
       urine[h] = true;
       stool[h] = true;
