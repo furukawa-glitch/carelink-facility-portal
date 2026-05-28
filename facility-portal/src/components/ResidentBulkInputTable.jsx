@@ -73,6 +73,7 @@ function emptySavedHourly() {
  *   residentNameWithoutSama: (nameRaw: unknown) => string;
  *   patchBulkRow: (id: string, patch: Partial<typeof DEFAULT_ROW>) => void;
  *   setBulkPatrolForAllVisible: (checked: boolean) => void;
+ *   fillPastHourlyPatrolForAllVisible: () => void;
  *   bulkRowHasInput: (row: Partial<typeof DEFAULT_ROW> | undefined) => boolean;
  *   saveBulkRow: (res: Record<string, unknown>) => void;
  *   saveBulkAllWithInput: () => void;
@@ -92,6 +93,7 @@ export function ResidentBulkInputTable({
   residentNameWithoutSama,
   patchBulkRow,
   setBulkPatrolForAllVisible,
+  fillPastHourlyPatrolForAllVisible,
   bulkRowHasInput,
   saveBulkRow,
   saveBulkAllWithInput,
@@ -156,6 +158,14 @@ export function ResidentBulkInputTable({
             className="rounded-lg border border-slate-500 bg-slate-50 px-3 py-1.5 text-sm font-black text-slate-700 hover:bg-slate-100"
           >
             巡視を全員OFF
+          </button>
+          <button
+            type="button"
+            onClick={() => fillPastHourlyPatrolForAllVisible()}
+            className="rounded-lg border border-cyan-700 bg-cyan-600 px-3 py-1.5 text-sm font-black text-white hover:bg-cyan-500"
+            title="対象日の過去時間（現在時刻まで）の巡視を全員分まとめてON"
+          >
+            巡視し忘れ分を一括ON
           </button>
           <button
             type="button"

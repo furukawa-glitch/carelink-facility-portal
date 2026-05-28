@@ -1828,6 +1828,36 @@ export function RecordPage({
     [displayResidents, bulkGlobalMealSlot, bulkSheetDate]
   );
 
+  /** し忘れ対策: 対象日の過去時間（現在時刻まで）を全員の巡視マスで一括ON */
+  const fillPastHourlyPatrolForAllVisible = useCallback(() => {
+    const ymd = bulkTableYmd(bulkSheetDate);
+    const now = new Date();
+    const today = bulkTableYmd(currentYmd());
+    const nowHour = now.getHours();
+    const maxHour = ymd < today ? 23 : ymd > today ? -1 : nowHour;
+    if (maxHour < 0) return;
+    setBulkDraft((prev) => {
+      const next = { ...prev };
+      for (const r of displayResidents) {
+        const id = String(r.id);
+        const base =
+          next[id] ??
+          (() => {
+            return {
+              ...vitalSeedForBulkTableRow(id, ymd),
+              ...bulkCareSeedForResidentDay(id, ymd),
+              mealSlot: bulkGlobalMealSlot,
+              ...hourlyDraftSeedForResidentDay(id, ymd),
+            };
+          })();
+        const hp = Array.isArray(base.hourPatrol) && base.hourPatrol.length === 24 ? [...base.hourPatrol] : freshHourly24();
+        for (let h = 0; h <= maxHour; h++) hp[h] = true;
+        next[id] = { ...base, hourPatrol: hp };
+      }
+      return next;
+    });
+  }, [bulkSheetDate, displayResidents, bulkGlobalMealSlot]);
+
   useEffect(() => {
     if (residentInputView !== 'table') return;
     const ymd = bulkTableYmd(bulkSheetDate);
@@ -3354,6 +3384,7 @@ export function RecordPage({
                       residentNameWithoutSama={residentNameWithoutSama}
                       patchBulkRow={patchBulkRow}
                       setBulkPatrolForAllVisible={setBulkPatrolForAllVisible}
+                      fillPastHourlyPatrolForAllVisible={fillPastHourlyPatrolForAllVisible}
                       bulkRowHasInput={bulkRowHasInput}
                       saveBulkRow={saveBulkRow}
                       saveBulkAllWithInput={saveBulkAllWithInput}
