@@ -2209,10 +2209,16 @@ export function RecordPage({
           return a != null ? stripCsvBom(String(a)) : '';
         };
         let applied = 0;
+        const resolveResidentForCsvRow = (nameCell) => {
+          const inCurrent = findResidentForVitalsCsvName(filteredResidents, nameCell);
+          if (inCurrent) return inCurrent;
+          // 他施設タブの利用者名もCSVに含まれるため、全名簿にもフォールバック
+          return findResidentForVitalsCsvName(allResidents, nameCell);
+        };
         for (let r = headerRow + 1; r < rows.length; r++) {
           const row = rows[r] ?? [];
           if (!row.length) continue;
-          const hit = findResidentForVitalsCsvName(filteredResidents, getCell(row, idx.name));
+          const hit = resolveResidentForCsvRow(getCell(row, idx.name));
           if (!hit) continue;
           /** ヘッダに無い列は送らない（空で既存値を消さない） */
           const patch = {};
@@ -2272,7 +2278,7 @@ export function RecordPage({
       };
       reader.readAsArrayBuffer(file);
     },
-    [filteredResidents, selectedSheetTitle]
+    [filteredResidents, allResidents, selectedSheetTitle]
   );
 
   const importKaipokeMonthlySupplementCsv = useCallback(
