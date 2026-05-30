@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, FolderOpen, HardDrive, Lock, Moon, Clock } from 'lucide-react';
 import { CARE_RECORD_RETENTION_YEARS } from '../lib/careRecordRetention.js';
 import {
-  isBackupAdminLockEnabled,
+  isBackupAdminPasswordConfigured,
   verifyBackupAdminPassword,
 } from '../lib/careBackupAdminAuth.js';
 import {
@@ -43,8 +43,8 @@ export function CareAutoBackupPanel({
   const [autoLog, setAutoLog] = useState(() => readAutoBackupLog());
   const [ssdPrimary, setSsdPrimary] = useState(false);
   const [ssdSecondary, setSsdSecondary] = useState(false);
-  const adminLockEnabled = isBackupAdminLockEnabled();
-  const [adminUnlocked, setAdminUnlocked] = useState(() => !adminLockEnabled);
+  const adminPinConfigured = isBackupAdminPasswordConfigured();
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminPinDraft, setAdminPinDraft] = useState('');
   const [adminPinErr, setAdminPinErr] = useState('');
   const [showAdminPinForm, setShowAdminPinForm] = useState(false);
@@ -88,7 +88,6 @@ export function CareAutoBackupPanel({
   }, [runBackup]);
 
   useEffect(() => {
-    if (!adminLockEnabled) return;
     const onVis = () => {
       if (document.visibilityState === 'hidden') {
         adminTabHiddenAtRef.current = Date.now();
@@ -105,10 +104,16 @@ export function CareAutoBackupPanel({
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
-  }, [adminLockEnabled]);
+  }, []);
 
   const submitAdminPin = (e) => {
     e?.preventDefault?.();
+    if (!adminPinConfigured) {
+      setAdminPinErr(
+        '管理者PINが未設定です。Vercel → Environment Variables に VITE_BACKUP_ADMIN_PASSWORD を追加し、再デプロイしてください。'
+      );
+      return;
+    }
     if (verifyBackupAdminPassword(adminPinDraft)) {
       setAdminUnlocked(true);
       setAdminPinErr('');
@@ -171,7 +176,7 @@ export function CareAutoBackupPanel({
         </div>
       ) : null}
 
-      {adminLockEnabled && !adminUnlocked ? (
+      {!adminUnlocked ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
           <p className="text-[10px] font-bold leading-snug text-slate-600">
             生活記録は<strong> 毎日23:59</strong>に自動保存されます（法定{CARE_RECORD_RETENTION_YEARS}年・ブラウザ内＋SSD）。
@@ -244,17 +249,15 @@ export function CareAutoBackupPanel({
       </p>
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2">
-        {adminLockEnabled ? (
-          <button
-            type="button"
-            onClick={lockAdminPanel}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-400 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-100"
-            title="バックアップ操作をロック"
-          >
-            <Lock className="h-3 w-3" aria-hidden />
-            ロック
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={lockAdminPanel}
+          className="inline-flex items-center gap-1 rounded-lg border border-slate-400 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-100"
+          title="バックアップ操作をロック"
+        >
+          <Lock className="h-3 w-3" aria-hidden />
+          ロック
+        </button>
         <button
           type="button"
           onClick={() => runBackup('manual')}
