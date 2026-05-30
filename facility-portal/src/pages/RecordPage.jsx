@@ -62,6 +62,9 @@ import {
   parseHourlyStoolCellValue,
 } from '../lib/careQuickCareFields.js';
 import { buildHourlyCareFromEvents, tokyoDateHourToIso, tokyoHourFromTs } from '../lib/hourlyCareGrid.js';
+import { bulkCareEventTs, parseMealAmountFieldsFromLog } from '../lib/bulkCareEventTs.js';
+import { defaultEnteralMenuFromResident } from '../lib/residentDetailSeed.js';
+import { CareAutoBackupPanel } from '../components/CareAutoBackupPanel.jsx';
 import { parsePharmacyMedicationPdf } from '../lib/pharmacyMedicationPdf.js';
 import { normalizePatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { AccidentMonthlyAnalysisModal } from '../components/AccidentMonthlyAnalysisModal.jsx';
@@ -628,13 +631,14 @@ function vitalFieldsFromSnapshotMeta(meta) {
   };
 }
 
-/** 対象日の最終 vital_snapshot から一覧表1行分のバイタル初期値（当日でログが無いときは LS の直近スナップ） */
+/** 対象日の最終 vital_snapshot から一覧表1行分のバイタル初期値 */
 function vitalSeedForBulkTableRow(residentId, bulkSheetDate) {
   const ymd = bulkTableYmd(bulkSheetDate);
   const rid = String(residentId ?? '');
   const fromEvents = vitalFieldsFromSnapshotMeta(Report.getLatestVitalSnapshotMetaForResidentDay(rid, ymd));
   const hasAny = Object.values(fromEvents).some((v) => String(v ?? '').trim() !== '');
-  if (!hasAny && ymd === currentYmd()) {
+  if (hasAny) return fromEvents;
+  if (ymd === currentYmd()) {
     const snap = Report.getResidentVitalSnapshot(rid);
     return vitalFieldsFromSnapshotMeta(snap);
   }
@@ -674,7 +678,12 @@ function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
     } else if (ev?.type === 'meal') {
       seed.meal = true;
       if (meta.mealSlot != null && String(meta.mealSlot).trim() !== '') seed.mealSlot = String(meta.mealSlot);
-      if (meta.mealAmount != null && String(meta.mealAmount).trim() !== '') seed.mealAmount = String(meta.mealAmount);
+      if (meta.mealAmount != null && String(meta.mealAmount).trim() !== '') {
+        seed.mealAmount = String(meta.mealAmount);
+        const parsed = parseMealAmountFieldsFromLog(meta.mealAmount);
+        if (parsed.mealStaple) seed.mealStaple = parsed.mealStaple;
+        if (parsed.mealSide) seed.mealSide = parsed.mealSide;
+      }
       if (meta.waterMl != null && String(meta.waterMl).trim() !== '') seed.waterMl = String(meta.waterMl);
       if (meta.medicationTaken === 'yes' || meta.medicationTaken === 'no') seed.medicationTaken = meta.medicationTaken;
     } else if (ev?.type === 'fluid_intake') {
@@ -693,6 +702,7 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
   const out = {
     hourPatrol: freshHourly24(),
     hourUrine: freshHourlyText24(),
+    hourUrineMl: freshHourlyText24(),
     hourStool: freshHourlyText24(),
   };
   if (!rid) return out;
@@ -712,7 +722,14 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
     const u = String(meta.urineVolume ?? '').trim();
     const sv = String(meta.stoolVolume ?? '').trim();
     const sc = String(meta.stoolCharacter ?? '').trim();
-    if (hourlyKind === 'urine' || /排尿（\d{2}時）/u.test(note)) out.hourUrine[h] = u || 'plain';
+    if (hourlyKind === 'urine' || /排尿（\d{2}時）/u.test(note)) {
+      out.hourUrine[h] = u || 'plain';
+      const cm = String(meta.catheterMl ?? '').trim();
+      if (cm) out.hourUrineMl[h] = cm;
+      else if (u === 'カテ' && /^\d+$/.test(String(meta.urineVolume ?? '').trim())) {
+        out.hourUrineMl[h] = String(meta.urineVolume).trim();
+      }
+    }
     if (hourlyKind === 'stool' || /排便（\d{2}時）/u.test(note)) {
       out.hourStool[h] = sv || sc ? `${sv || ''}\t${sc || ''}` : 'plain';
     }
@@ -740,7 +757,7 @@ function emptyEmergencyDraft() {
 
 /**
  * @param {{
- *   onSelectResident: (res: Record<string, unknown>) => void;
+ *   onSelectResident: (res: Record<string, unknown>, navList?: Record<string, unknown>[]) => void;
  *   onBack: () => void;
  *   onOpenMonthlyReport: () => void;
  *   onOpenNotionNewResidents?: () => void;
@@ -1059,17 +1076,21 @@ export function RecordPage({
     const storedRows = storedAll[bulkDraftScopeKey] && typeof storedAll[bulkDraftScopeKey] === 'object' ? storedAll[bulkDraftScopeKey] : {};
     setBulkDraft((prev) => {
       const next = { ...prev };
+      const isPastDay = ymd < currentYmd();
       for (const r of list) {
         const id = String(r.id);
-        const stored = storedRows[id] && typeof storedRows[id] === 'object' ? storedRows[id] : {};
+        const stored = !isPastDay && storedRows[id] && typeof storedRows[id] === 'object' ? storedRows[id] : {};
+        const saved = {
+          ...hourlyDraftSeedForResidentDay(id, ymd),
+          ...bulkCareSeedForResidentDay(id, ymd),
+          ...vitalSeedForBulkTableRow(id, ymd),
+        };
         next[id] = {
           ...(prev[id] || {}),
-          ...vitalSeedForBulkTableRow(id, ymd),
-          ...bulkCareSeedForResidentDay(id, ymd),
-          mealSlot,
-          ...hourlyDraftSeedForResidentDay(id, ymd),
-          vitalHandwritingDataUrl: '',
           ...stored,
+          mealSlot: stored.mealSlot || mealSlot,
+          ...saved,
+          vitalHandwritingDataUrl: '',
         };
       }
       const keep = new Set(list.map((x) => String(x.id)));
@@ -1091,11 +1112,11 @@ export function RecordPage({
     }
     const store = readBulkDraftStore();
     store[bulkDraftScopeKey] = scoped;
-    // ストレージ肥大化防止: 直近 21 スコープだけ保持
+    // ストレージ肥大化防止: 直近 90 スコープ（施設×日付）だけ保持
     const keys = Object.keys(store);
-    if (keys.length > 21) {
+    if (keys.length > 90) {
       keys.sort();
-      for (const k of keys.slice(0, keys.length - 21)) delete store[k];
+      for (const k of keys.slice(0, keys.length - 90)) delete store[k];
     }
     writeBulkDraftStore(store);
   }, [residentInputView, bulkDraft, bulkDraftScopeKey, displayResidents]);
@@ -1400,6 +1421,15 @@ export function RecordPage({
     setDaySvcExternalFor(res);
   }, [clock]);
 
+  const careRetentionSummary = useMemo(() => Report.getCareRecordRetentionSummary(), [tick]);
+
+  const openBulkTableForYmd = useCallback((ymd) => {
+    const s = String(ymd ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return;
+    setBulkSheetDate(s);
+    setResidentInputView('table');
+  }, []);
+
   const applyCareQuickRecord = useCallback((res, row) => {
     const {
       temp = '',
@@ -1428,11 +1458,13 @@ export function RecordPage({
       vitalHandwritingDataUrl = '',
       hourPatrol,
       hourUrine,
+      hourUrineMl,
       hourStool,
     } = row;
     const id = String(res.id);
     const fac = String(res.facility ?? selectedSheetTitle);
     const name = String(res.name ?? '');
+    const ymdLog = bulkTableYmd(bulkSheetDate);
     const weightTrim = String(weight ?? '').trim();
     const spo2Trim = String(spo2 ?? '').trim();
     const vitalPatch = {
@@ -1443,17 +1475,30 @@ export function RecordPage({
     };
     if (spo2Trim) vitalPatch.spo2 = spo2Trim;
     if (weightTrim) vitalPatch.weight = weightTrim;
-    Report.setResidentVitalSnapshot(id, vitalPatch);
-    const snap = Report.getResidentVitalSnapshot(id);
-    Report.logVitalSnapshot(id, name, fac, {
-      temp: snap?.temp,
-      bpUpper: snap?.bpUpper,
-      bpLower: snap?.bpLower,
-      pulse: snap?.pulse,
-      spo2: snap?.spo2,
-      weight: snap?.weight,
-      ...(String(vitalHandwritingDataUrl ?? '').trim() ? { handwrittenMemo: 'あり', handwrittenImage: String(vitalHandwritingDataUrl).trim() } : {}),
-    });
+    const hasVitalInput = Object.values(vitalPatch).some((v) => String(v ?? '').trim() !== '') || weightTrim || spo2Trim;
+    if (hasVitalInput) {
+      Report.setResidentVitalSnapshot(id, vitalPatch);
+      const snap = Report.getResidentVitalSnapshot(id);
+      const vts = bulkCareEventTs(ymdLog, 'vital');
+      Report.removeCareEventsByResidentAtMinute(id, vts, ['vital_snapshot']);
+      Report.logVitalSnapshot(
+        id,
+        name,
+        fac,
+        {
+          temp: snap?.temp,
+          bpUpper: snap?.bpUpper,
+          bpLower: snap?.bpLower,
+          pulse: snap?.pulse,
+          spo2: snap?.spo2,
+          weight: snap?.weight,
+          ...(String(vitalHandwritingDataUrl ?? '').trim()
+            ? { handwrittenMemo: 'あり', handwrittenImage: String(vitalHandwritingDataUrl).trim() }
+            : {}),
+        },
+        vts
+      );
+    }
     if (patrol) {
       const defaultHour = Math.floor(new Date().getHours() / 3) * 3;
       const atBase =
@@ -1475,8 +1520,11 @@ export function RecordPage({
     const tg = Boolean(toiletGuidance);
     const hasDetailedEx = u || sv || sc;
     if (hasDetailedEx) {
+      const ets = bulkCareEventTs(ymdLog, 'excretion');
+      Report.removeCareEventsByResidentAtMinute(id, ets, ['excretion']);
       Report.logCareEvent({
         type: 'excretion',
+        ts: ets,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -1490,8 +1538,10 @@ export function RecordPage({
       if (sv || sc) Report.recordStoolForIntervalAlert(id, { stoolVolume: sv, stoolCharacter: sc });
       if (u || tg) Report.setLastUrineNow(id);
     } else if (excretion) {
+      const ets = bulkCareEventTs(ymdLog, 'excretion');
       Report.logCareEvent({
         type: 'excretion',
+        ts: ets,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -1500,8 +1550,10 @@ export function RecordPage({
       Report.setLastStoolNow(id);
       Report.setLastUrineNow(id);
     } else if (tg) {
+      const ets = bulkCareEventTs(ymdLog, 'excretion');
       Report.logCareEvent({
         type: 'excretion',
+        ts: ets,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -1525,8 +1577,11 @@ export function RecordPage({
     );
     if (kind === 'fluid_intake') {
       const wm = String(waterMl ?? '').trim();
+      const fts = bulkCareEventTs(ymdLog, 'fluid_intake');
+      Report.removeCareEventsByResidentAtMinute(id, fts, ['fluid_intake']);
       Report.logCareEvent({
         type: 'fluid_intake',
+        ts: fts,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -1543,9 +1598,12 @@ export function RecordPage({
       const maForLog = [ma, extrasTrim].filter(Boolean).join(' ／ ').trim();
       const wm = String(waterMl ?? '').trim();
       const med = medicationTaken === 'yes' || medicationTaken === 'no' ? medicationTaken : '';
+      const mts = bulkCareEventTs(ymdLog, 'meal', { mealSlot: slot });
+      Report.removeCareEventsByResidentAtMinute(id, mts, ['meal']);
       if (slot || maForLog || wm || med) {
         Report.logCareEvent({
           type: 'meal',
+          ts: mts,
           residentId: id,
           residentName: name,
           facilitySheetTitle: fac,
@@ -1554,6 +1612,7 @@ export function RecordPage({
       } else {
         Report.logCareEvent({
           type: 'meal',
+          ts: mts,
           residentId: id,
           residentName: name,
           facilitySheetTitle: fac,
@@ -1564,8 +1623,11 @@ export function RecordPage({
 
     const entMenu = String(enteralMenu ?? '').trim();
     if (entMenu) {
+      const ents = bulkCareEventTs(ymdLog, 'enteral', { mealSlot: String(mealSlot ?? bulkGlobalMealSlot ?? '') });
+      Report.removeCareEventsByResidentAtMinute(id, ents, ['enteral']);
       Report.logCareEvent({
         type: 'enteral',
+        ts: ents,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -1573,9 +1635,9 @@ export function RecordPage({
       });
     }
 
-    const ymdLog = bulkTableYmd(bulkSheetDate);
     const hp = Array.isArray(hourPatrol) && hourPatrol.length === 24 ? hourPatrol : freshHourly24();
     const hu = normalizeHourlyText24(hourUrine);
+    const hum = normalizeHourlyText24(hourUrineMl);
     const hs = normalizeHourlyText24(hourStool);
     const dayEv = Report.getCareEventsForResidentDay(id, ymdLog);
     let occ = buildHourlyCareFromEvents(dayEv, ymdLog);
@@ -1593,6 +1655,7 @@ export function RecordPage({
       }
       if (hu[h] && !occ.urine[h]) {
         const uCode = String(hu[h] ?? '').trim();
+        const cMl = String(hum[h] ?? '').trim();
         Report.logCareEvent({
           type: 'hourly_excretion',
           ts: tokyoDateHourToIso(ymdLog, h),
@@ -1601,7 +1664,8 @@ export function RecordPage({
           facilitySheetTitle: fac,
           meta: {
             note: `排尿（${String(h).padStart(2, '0')}時）`,
-            ...(uCode && uCode !== 'plain' ? { urineVolume: uCode } : {}),
+            ...(uCode && uCode !== 'plain' ? { urineVolume: uCode === 'カテ' && cMl ? cMl : uCode } : {}),
+            ...(uCode === 'カテ' && cMl ? { catheterMl: cMl } : {}),
             hourlyKind: 'urine',
             hourlySheet: true,
           },
@@ -1643,12 +1707,16 @@ export function RecordPage({
     const ymd = bulkTableYmd(bulkSheetDate);
     for (const r of displayResidents) {
       const id = String(r.id);
+      const enteralDefault = defaultEnteralMenuFromResident(r);
       init[id] = {
         ...vitalSeedForBulkTableRow(id, ymd),
         ...bulkCareSeedForResidentDay(id, ymd),
         mealSlot: bulkGlobalMealSlot,
         ...hourlyDraftSeedForResidentDay(id, ymd),
       };
+      if (!String(init[id].enteralMenu ?? '').trim() && enteralDefault) {
+        init[id].enteralMenu = enteralDefault;
+      }
     }
     setBulkDraft(init);
     setResidentInputView('table');
@@ -1903,6 +1971,11 @@ export function RecordPage({
           } else {
             cur = { ...cur, hourUrine: normalizeHourlyText24(cur.hourUrine) };
           }
+          if (!Array.isArray(cur.hourUrineMl) || cur.hourUrineMl.length !== 24) {
+            cur = { ...cur, hourUrineMl: freshHourlyText24() };
+          } else {
+            cur = { ...cur, hourUrineMl: normalizeHourlyText24(cur.hourUrineMl) };
+          }
           if (!Array.isArray(cur.hourStool) || cur.hourStool.length !== 24) {
             cur = { ...cur, hourStool: freshHourlyText24() };
           } else {
@@ -1910,6 +1983,10 @@ export function RecordPage({
           }
           if (cur.ensurePortion === undefined) cur = { ...cur, ensurePortion: '' };
           if (cur.enteralMenu === undefined) cur = { ...cur, enteralMenu: '' };
+          if (!String(cur.enteralMenu ?? '').trim()) {
+            const def = defaultEnteralMenuFromResident(r);
+            if (def) cur = { ...cur, enteralMenu: def };
+          }
           if (cur.mealExtras === undefined) cur = { ...cur, mealExtras: '' };
           if (cur.mealSlot === undefined || cur.mealSlot === '') {
             cur = { ...cur, mealSlot: bulkGlobalMealSlot };
@@ -3398,6 +3475,12 @@ export function RecordPage({
                     <p className="mt-2 text-[11px] font-bold leading-snug text-slate-600 sm:text-xs">
                       名前をタップで行動メニュー（巡視・生活記録・障害福祉進捗・入退院・薬情報・情報提供書など）。画面上部の「情報提供書」から全体の取込もできます。一覧表は横スクロールで連続入力し、Tabキーで移動できます。
                     </p>
+                    <CareAutoBackupPanel
+                      facilityLabel={selectedSheetTitle}
+                      retentionSummary={careRetentionSummary}
+                      onBackupDone={() => setTick((n) => n + 1)}
+                      onOpenBulkForYmd={openBulkTableForYmd}
+                    />
                   </div>
                   {residentInputView === 'table' ? (
                     <ResidentBulkInputTable
@@ -3481,11 +3564,11 @@ export function RecordPage({
                         <div
                           role="button"
                           tabIndex={0}
-                          onClick={() => onSelectResident(res)}
+                          onClick={() => onSelectResident(res, displayResidents)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
-                              onSelectResident(res);
+                              onSelectResident(res, displayResidents);
                             }
                           }}
                           className="w-full cursor-pointer text-left outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2"

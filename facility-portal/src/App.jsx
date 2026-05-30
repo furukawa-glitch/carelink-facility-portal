@@ -5,6 +5,7 @@ import {
   Building2,
   CheckCircle2,
   ChevronLeft,
+  ChevronRight,
   Clock,
   Thermometer,
   Droplets,
@@ -49,6 +50,9 @@ import { ShiftSchedulePage } from './pages/ShiftSchedulePage.jsx';
 import { FacilityStatsPage } from './pages/FacilityStatsPage.jsx';
 import { CARELINK_FACILITIES } from './config/carelinkFacilities.js';
 import { fetchResidentsFromSheet } from './services/GoogleSheetService.js';
+import { vitalStateFromSaved, careStateFromTodayEvents } from './lib/residentDetailSeed.js';
+import { WATER_ML_50_OPTIONS } from './lib/careQuickCareFields.js';
+import { WeeklyFlowSheet } from './components/WeeklyFlowSheet.jsx';
 
 /** 施設向けの画面ロック。未設定のときはロックなし。設定時は全画面の前にパスワード必須。 */
 const VITE_FACILITY_PORTAL_PASSWORD = String(
@@ -920,6 +924,8 @@ const App = () => {
   }, []);
 
   const [selectedResident, setSelectedResident] = useState(null);
+  const [residentNavList, setResidentNavList] = useState(/** @type {Record<string, unknown>[]} */ ([]));
+  const [weeklyFlowOpen, setWeeklyFlowOpen] = useState(false);
   const [residentAdminOverlay, setResidentAdminOverlay] = useState(
     /** @type {null | 'disability' | 'move_log' | 'med' | 'info_provision'} */ (null)
   );
@@ -962,6 +968,7 @@ const App = () => {
   const [isBalloon, setIsBalloon] = useState(false);
   const [urineMethod, setUrineMethod] = useState('おむつ');
   const [urineLevel, setUrineLevel] = useState('中');
+  const [catheterMl, setCatheterMl] = useState('');
   const [balloonAmount, setBalloonAmount] = useState('');
 
   const [patrolStatus, setPatrolStatus] = useState('就寝中');
@@ -1112,36 +1119,83 @@ const App = () => {
     [panoramaFacilityLinkKey, panoramaNursingRev]
   );
 
-  const handleResidentClick = (res) => {
-    setResidentAdminOverlay(null);
-    setSelectedResident(res);
-    setVitals({
-      temp: '36.5',
-      spo2: '98',
-      pulse: '72',
-      bpUpper: '120',
-      bpLower: '80',
-      weight: res.weight != null && res.weight !== '' ? String(res.weight) : '',
-    });
-    setIsEnteral(res.isEnteral || false);
-    setIsBalloon(res.isBalloon || false);
-    setUrineMethod('おむつ');
-    setUrineLevel('中');
-    setBalloonAmount('');
-    setEnteralExecuted(false);
-    const th = Report.resolveAlertThresholdsForResident(String(res?.id ?? ''));
-    setAlertThresholdDraft({
-      tempCMinFever: String(th.tempCMinFever),
-      bpSystolicHigh: String(th.bpSystolicHigh),
-      bpDiastolicLow: String(th.bpDiastolicLow),
-      stoolHoursMax: String(th.stoolHoursMax),
-      urineHoursMax: String(th.urineHoursMax),
-      patrolIntervalWarnMin: String(th.patrolIntervalWarnMin),
-    });
-    setRecordDate(localYmd());
-    setRecordTime(localHm());
-    setView('action_selection');
-  };
+  const applyResidentDetailState = useCallback((res, ymd = localYmd()) => {
+    const id = String(res?.id ?? '').trim();
+    const vitalsLoaded = vitalStateFromSaved(res, ymd);
+    setVitals(
+      vitalsLoaded ?? {
+        temp: '',
+        spo2: '',
+        pulse: '',
+        bpUpper: '',
+        bpLower: '',
+        weight: res?.weight != null && res.weight !== '' ? String(res.weight) : '',
+      }
+    );
+
+    const care = careStateFromTodayEvents(id, ymd);
+    setMealValue(care.mealValue);
+    setIsMissedMeal(care.isMissedMeal);
+    setHydration(care.hydration || '150');
+    setMedicationDone(care.medicationDone);
+    setActiveMealTime(care.activeMealTime);
+    setEnteralExecuted(care.enteralExecuted);
+    setIsEnteral(Boolean(res?.isEnteral) || care.enteralExecuted);
+    setIsBalloon(care.isBalloon || Boolean(res?.isBalloon));
+    setBalloonAmount(care.balloonAmount);
+    setUrineMethod(care.urineMethod);
+    setUrineLevel(care.urineLevel);
+    setCatheterMl('');
+    if (care.stoolAmount) setStoolAmount(care.stoolAmount);
+    if (care.stoolForm) setStoolForm(care.stoolForm);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedResident) return;
+    if (view !== 'detail' && view !== 'action_selection') return;
+    applyResidentDetailState(selectedResident, recordDate);
+  }, [recordDate, selectedResident, view, applyResidentDetailState]);
+
+  const handleResidentClick = useCallback(
+    (res, navList) => {
+      setResidentAdminOverlay(null);
+      setSelectedResident(res);
+      if (Array.isArray(navList) && navList.length > 0) setResidentNavList(navList);
+      applyResidentDetailState(res);
+      const th = Report.resolveAlertThresholdsForResident(String(res?.id ?? ''));
+      setAlertThresholdDraft({
+        tempCMinFever: String(th.tempCMinFever),
+        bpSystolicHigh: String(th.bpSystolicHigh),
+        bpDiastolicLow: String(th.bpDiastolicLow),
+        stoolHoursMax: String(th.stoolHoursMax),
+        urineHoursMax: String(th.urineHoursMax),
+        patrolIntervalWarnMin: String(th.patrolIntervalWarnMin),
+      });
+      setRecordDate(localYmd());
+      setRecordTime(localHm());
+      setView('action_selection');
+    },
+    [applyResidentDetailState]
+  );
+
+  const navigateResident = useCallback(
+    (delta) => {
+      if (!selectedResident || !residentNavList.length) return;
+      const curId = String(selectedResident.id ?? '');
+      const idx = residentNavList.findIndex((r) => String(r.id) === curId);
+      if (idx < 0) return;
+      const next = residentNavList[idx + delta];
+      if (!next) return;
+      setSelectedResident(next);
+      applyResidentDetailState(next);
+    },
+    [selectedResident, residentNavList, applyResidentDetailState]
+  );
+
+  const residentNavIndex = useMemo(() => {
+    if (!selectedResident || !residentNavList.length) return -1;
+    return residentNavList.findIndex((r) => String(r.id) === String(selectedResident.id));
+  }, [selectedResident, residentNavList]);
 
   const saveResidentAlertThresholds = useCallback(() => {
     const id = String(selectedResident?.id ?? '').trim();
@@ -1320,7 +1374,10 @@ const App = () => {
         stoolForm,
         urineLevel: isBalloon
           ? `バルーン 1日Total(23時締め) ${balloonAmount || '記録なし'}ml`
-          : `${urineMethod} ${urineLevel}`,
+          : urineMethod === 'カテ'
+            ? `カテ ${catheterMl || '—'}ml`
+            : `${urineMethod} ${urineLevel}`,
+        ...(urineMethod === 'カテ' && catheterMl ? { urineVolume: catheterMl, catheterMl } : {}),
       },
     });
     Report.recordStoolForIntervalAlert(id, { stoolAmount, stoolCharacter: stoolForm });
@@ -1341,6 +1398,7 @@ const App = () => {
     stoolForm,
     urineMethod,
     urineLevel,
+    catheterMl,
     isBalloon,
     balloonAmount,
     recordDate,
@@ -1381,8 +1439,28 @@ const App = () => {
           一覧に戻る
         </button>
         <div className="mb-10 font-bold">
-          <div className="mb-1 text-sm font-black tracking-wide text-slate-700">
-            居室 <span className="tabular-nums text-slate-900">{selectedResident?.room ?? '—'}</span>
+          <div className="mb-1 flex items-center justify-center gap-2 text-sm font-black tracking-wide text-slate-700">
+            <button
+              type="button"
+              disabled={residentNavIndex <= 0}
+              onClick={() => navigateResident(-1)}
+              className="rounded-xl border-2 border-slate-300 bg-white p-2 text-slate-700 transition hover:border-blue-400 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label="前の利用者"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <span>
+              居室 <span className="tabular-nums text-slate-900">{selectedResident?.room ?? '—'}</span>
+            </span>
+            <button
+              type="button"
+              disabled={residentNavIndex < 0 || residentNavIndex >= residentNavList.length - 1}
+              onClick={() => navigateResident(1)}
+              className="rounded-xl border-2 border-slate-300 bg-white p-2 text-slate-700 transition hover:border-blue-400 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label="次の利用者"
+            >
+              <ChevronRight size={20} />
+            </button>
           </div>
           <h2 className="text-3xl text-slate-800 tracking-tight font-bold">
             {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
@@ -1683,10 +1761,35 @@ const App = () => {
           <h2 className="text-2xl text-slate-900 tracking-tight font-bold font-bold">
             {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
           </h2>
-          <div className="flex gap-2 mt-2 font-bold font-bold">
+          <div className="flex gap-2 mt-2 font-bold font-bold items-center flex-wrap">
+            <button
+              type="button"
+              disabled={residentNavIndex <= 0}
+              onClick={() => navigateResident(-1)}
+              className="rounded-lg border border-slate-300 bg-white p-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-30"
+              aria-label="前の利用者"
+            >
+              <ChevronLeft size={18} />
+            </button>
             <span className="bg-blue-50 text-blue-600 text-[10px] px-2 py-1 rounded-lg border border-blue-100 uppercase font-bold">
               Room {selectedResident?.room}
             </span>
+            <button
+              type="button"
+              disabled={residentNavIndex < 0 || residentNavIndex >= residentNavList.length - 1}
+              onClick={() => navigateResident(1)}
+              className="rounded-lg border border-slate-300 bg-white p-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-30"
+              aria-label="次の利用者"
+            >
+              <ChevronRight size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeeklyFlowOpen(true)}
+              className="ml-auto rounded-lg border border-teal-300 bg-teal-50 px-2 py-1 text-[10px] font-black text-teal-800 hover:bg-teal-100"
+            >
+              1週間フローシート
+            </button>
             <span className="bg-slate-100 text-slate-500 text-[10px] px-2 py-1 rounded-lg border border-slate-200 font-bold uppercase tracking-widest">
               体重: {selectedResident?.weight}kg
             </span>
@@ -1712,7 +1815,7 @@ const App = () => {
               activeDetailTab === 'meal' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 font-bold'
             }`}
           >
-            食事・内服
+            食事・水分・内服
           </button>
           <button
             type="button"
@@ -1751,8 +1854,10 @@ const App = () => {
               この日時の保存を削除
             </button>
           </div>
-          <p className="mt-1 text-[10px] font-bold text-slate-500">
-            同じ日時で保存すると、前の内容を上書きして修正できます。
+          <p className="mt-2 text-[10px] font-bold leading-relaxed text-slate-600">
+            <strong className="text-slate-800">修正方法:</strong>{' '}
+            ① 間違えた日時を上の欄に合わせる → ②「この日時の保存を削除」で取り消し、または正しい値を入れて再保存（上書き）。
+            一覧表の入力は「生活・バイタル・排泄」画面とは別保存です。一覧表で直す場合は対象日を合わせて一覧表から再入力してください。
           </p>
         </div>
         {!GEMINI_KEY && (
@@ -1931,12 +2036,17 @@ const App = () => {
                   補助食有
                 </button>
               </div>
-              <input
-                type="number"
+              <select
                 value={hydration}
                 onChange={(e) => setHydration(e.target.value)}
                 className="w-full bg-slate-50 border-none rounded-2xl p-4 text-2xl font-bold focus:ring-2 focus:ring-blue-100 outline-none font-bold"
-              />
+              >
+                {WATER_ML_50_OPTIONS.map((opt) => (
+                  <option key={opt.value || 'empty'} value={opt.value}>
+                    {opt.label === '—' ? '選択（50ml刻み）' : opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between font-bold">
               <div className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-2 font-bold">
@@ -2001,8 +2111,8 @@ const App = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    {['おむつ', 'トイレ'].map((m) => (
+                  <div className="grid grid-cols-3 gap-2">
+                    {['おむつ', 'トイレ', 'カテ'].map((m) => (
                       <button
                         key={m}
                         type="button"
@@ -2016,6 +2126,19 @@ const App = () => {
                       </button>
                     ))}
                   </div>
+                  {urineMethod === 'カテ' ? (
+                    <div className="flex gap-3 items-center font-bold">
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        value={catheterMl}
+                        onChange={(e) => setCatheterMl(e.target.value)}
+                        placeholder="尿量 (ml)"
+                        className="flex-1 bg-slate-50 border-none rounded-2xl p-4 text-xl font-bold"
+                      />
+                      <span className="text-slate-400 font-bold">ml</span>
+                    </div>
+                  ) : (
                   <div className="grid grid-cols-3 gap-2 font-bold">
                     {['多', '中', '小'].map((lvl) => (
                       <button
@@ -2031,6 +2154,7 @@ const App = () => {
                       </button>
                     ))}
                   </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2091,6 +2215,9 @@ const App = () => {
           {saveStatus}
         </div>
       )}
+      {weeklyFlowOpen && selectedResident ? (
+        <WeeklyFlowSheet resident={selectedResident} onClose={() => setWeeklyFlowOpen(false)} />
+      ) : null}
     </div>
   );
 

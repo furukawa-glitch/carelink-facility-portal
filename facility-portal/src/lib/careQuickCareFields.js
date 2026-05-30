@@ -139,6 +139,18 @@ export function parseVoiceToMealWari(text) {
   return '';
 }
 
+/** 一覧表・個人カードの水分量（50ml刻み） */
+export const WATER_ML_50_OPTIONS = Object.freeze(
+  (() => {
+    /** @type {{ value: string; label: string }[]} */
+    const out = [{ value: '', label: '—' }];
+    for (let ml = 50; ml <= 1000; ml += 50) {
+      out.push({ value: String(ml), label: `${ml}ml` });
+    }
+    return out;
+  })()
+);
+
 /** 水分 ml 用（数字を拾う） */
 export function parseVoiceToWaterMl(text) {
   const n = normVoiceChars(String(text ?? ''));

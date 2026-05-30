@@ -1138,6 +1138,7 @@ function rowsToResidents(rows, defaultFacilityName, options) {
       '一ヶ月食事',
     ]),
     enteral: colIndex(headers, ['経管栄養', '管栄', 'ＮＧＴ', 'NGT', '胃ろう', '胃瘻', '経管']),
+    enteralMenu: colIndex(headers, ['経管栄養メニュー', '管栄メニュー', '経管内容', '管栄内容', '経管メニュー', '管栄']),
     facility: colIndex(headers, [
       '施設名',
       '施設',
@@ -1320,6 +1321,8 @@ function rowsToResidents(rows, defaultFacilityName, options) {
 
     const mealFromSheet = ix.mealMonth >= 0 ? parseMealCountCell(row[ix.mealMonth]) : 0;
     const enteralFromSheet = ix.enteral >= 0 ? parseEnteralFlagCell(row[ix.enteral]) : false;
+    const enteralMenuDefault =
+      ix.enteralMenu >= 0 ? String(row[ix.enteralMenu] ?? '').trim() : '';
 
     out.push({
       id: `${facility}::${room}::${name}::${r}`,
@@ -1352,6 +1355,8 @@ function rowsToResidents(rows, defaultFacilityName, options) {
       isBalloon: false,
       /** 名簿の経管栄養列から。管理料算定の対象者フラグ */
       isEnteral: enteralFromSheet,
+      /** 名簿の経管メニュー列（製剤・量など） */
+      enteralMenuDefault: enteralMenuDefault || undefined,
       homeDoctor,
       history: { patrols: [], week: [] },
       managerWords: '',

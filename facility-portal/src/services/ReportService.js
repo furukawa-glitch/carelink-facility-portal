@@ -1,6 +1,6 @@
 /**
  * CareLink OS — 監査ログ・異常検知・救急サマリー・月次出力・AIアドバイス補助
- * 永続化: localStorage（本番は API 差し替え想定）
+ * 永続化: localStorage + IndexedDB（生活記録は法定5年保存。5年超のみ自動削除）
  */
 
 import { nowJapanIsoString } from '../utils/japanIsoTime.js';
@@ -8,6 +8,20 @@ import { buildNearMissReportHtml, NEAR_MISS_CATEGORY_LABELS } from './nearMissRe
 import { CARELINK_FACILITIES, facilityDefBySheetTitle } from '../config/carelinkFacilities.js';
 import { deleteAllResidentPdfs } from '../lib/residentInfoProvisionIdb.js';
 import { tokyoYmdFromTs } from '../lib/hourlyCareGrid.js';
+import {
+  CARE_RECORD_RETENTION_YEARS,
+  careEventsRetentionSummary,
+  pruneCareEventsBeyondRetention,
+} from '../lib/careRecordRetention.js';
+import {
+  idbAppendCareEvent,
+  idbLoadAllCareEvents,
+  idbMigrateFromLocalStorage,
+  idbSaveAllCareEvents,
+  mergeCareEventsById,
+} from '../lib/careEventsIdb.js';
+
+export { CARE_RECORD_RETENTION_YEARS, careEventsRetentionSummary };
 
 export { buildNearMissReportHtml, NEAR_MISS_CATEGORY_LABELS };
 
@@ -426,8 +440,8 @@ function writeJson(key, val) {
   localStorage.setItem(key, JSON.stringify(val));
 }
 
-/** 名簿直近バイタル（LS.vitals）と vital_snapshot ログの保持期間 */
-export const VITAL_SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
+/** 直近表示用キャッシュの目安（削除はしない） */
+export const VITAL_SNAPSHOT_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 /**
  * @param {Record<string, unknown> | null | undefined} s
@@ -440,7 +454,7 @@ function vitalSnapshotRowHasData(s) {
 }
 
 /**
- * バイタル表示用スナップショット。updatedAt から 24 時間超で localStorage から削除。
+ * バイタル表示用スナップショット（名簿カードの直近値）。過去分は careEvents の vital_snapshot を参照。
  * @returns {{ temp?: string; bpUpper?: string; bpLower?: string; pulse?: string; spo2?: string; weight?: string; updatedAt?: string } | null}
  */
 export function getResidentVitalSnapshot(residentId) {
@@ -453,22 +467,9 @@ export function getResidentVitalSnapshot(residentId) {
     writeJson(LS.vitals, all);
     return null;
   }
-  let u = String(row.updatedAt ?? '').trim();
-  if (!u) {
+  if (!String(row.updatedAt ?? '').trim()) {
     all[id] = { ...row, updatedAt: new Date().toISOString() };
     writeJson(LS.vitals, all);
-    u = String(all[id].updatedAt ?? '');
-  }
-  const t = new Date(u).getTime();
-  if (!Number.isFinite(t)) {
-    delete all[id];
-    writeJson(LS.vitals, all);
-    return null;
-  }
-  if (Date.now() - t > VITAL_SNAPSHOT_TTL_MS) {
-    delete all[id];
-    writeJson(LS.vitals, all);
-    return null;
   }
   return all[id] ?? null;
 }
@@ -982,38 +983,48 @@ export function removeWeeklyPlan(linkKey, planId) {
   return true;
 }
 
+/** @type {unknown[] | null} */
+let careEventsCache = null;
+let careEventsIdbHydrateStarted = false;
+
+function readCareEventsRawFromLs() {
+  const raw = readJson(LS.careEvents, []);
+  return Array.isArray(raw) ? raw : [];
+}
+
+function startCareEventsIdbHydrate() {
+  if (careEventsIdbHydrateStarted) return;
+  careEventsIdbHydrateStarted = true;
+  const local = careEventsCache ?? readCareEventsRawFromLs();
+  void idbMigrateFromLocalStorage(local).then(() =>
+    idbLoadAllCareEvents().then((fromIdb) => {
+      const merged = mergeCareEventsById(local, fromIdb);
+      persistCareEventsList(merged, { skipIdbFullSave: fromIdb.length > 0 });
+    })
+  );
+}
+
 /**
- * careEvents から記録から 24h 超の type=vital_snapshot のみ除外して保存する。
  * @param {unknown[]} list
- * @returns {{ list: unknown[]; changed: boolean }}
+ * @param {{ skipIdbFullSave?: boolean }} [opts]
  */
-function pruneExpiredVitalSnapshotEventsInList(list) {
-  if (!Array.isArray(list)) return { list: [], changed: false };
-  const cutoff = Date.now() - VITAL_SNAPSHOT_TTL_MS;
-  let changed = false;
-  const next = list.filter((e) => {
-    if (e == null || typeof e !== 'object' || e.type !== 'vital_snapshot') return true;
-    const t = new Date(e.ts).getTime();
-    if (!Number.isFinite(t)) return true;
-    if (t < cutoff) {
-      changed = true;
-      return false;
-    }
-    return true;
-  });
-  return { list: next, changed };
+function persistCareEventsList(list, opts = {}) {
+  const pruned = pruneCareEventsBeyondRetention(Array.isArray(list) ? list : []);
+  careEventsCache = pruned;
+  try {
+    writeJson(LS.careEvents, pruned);
+  } catch {
+    // localStorage 容量不足時は IndexedDB を正とする
+  }
+  if (!opts.skipIdbFullSave) void idbSaveAllCareEvents(pruned);
 }
 
 export function getAllCareEvents() {
-  const raw = readJson(LS.careEvents, []);
-  const { list: pruned, changed } = pruneExpiredVitalSnapshotEventsInList(raw);
-  if (changed) {
-    const max = 8000;
-    const out = pruned.slice(-max);
-    writeJson(LS.careEvents, out);
-    return out;
+  if (!careEventsCache) {
+    careEventsCache = pruneCareEventsBeyondRetention(readCareEventsRawFromLs());
   }
-  return raw;
+  startCareEventsIdbHydrate();
+  return careEventsCache;
 }
 
 export function logCareEvent(payload) {
@@ -1027,9 +1038,19 @@ export function logCareEvent(payload) {
     ts,
   };
   list.push(row);
-  const max = 8000;
-  writeJson(LS.careEvents, list.slice(-max));
+  persistCareEventsList(list);
+  void idbAppendCareEvent(row);
   return row;
+}
+
+export function reloadCareEventsFromStorage() {
+  careEventsCache = pruneCareEventsBeyondRetention(readCareEventsRawFromLs());
+  void idbSaveAllCareEvents(careEventsCache);
+  return careEventsCache.length;
+}
+
+export function getCareRecordRetentionSummary() {
+  return careEventsRetentionSummary(getAllCareEvents());
 }
 
 function minuteKey(isoLike) {
@@ -1060,7 +1081,7 @@ export function removeCareEventsByResidentAtMinute(residentId, isoTs, types = []
     return false;
   });
   const removed = list.length - next.length;
-  if (removed > 0) writeJson(LS.careEvents, next);
+  if (removed > 0) persistCareEventsList(next);
   return removed;
 }
 
