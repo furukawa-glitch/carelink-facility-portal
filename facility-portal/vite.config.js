@@ -116,6 +116,12 @@ export default defineConfig(({ mode }) => {
   ).trim();
   define['import.meta.env.VITE_FACILITY_PORTAL_PASSWORD'] = JSON.stringify(facilityPortalPassword);
 
+  /** バックアップ・SSD・復元 UI の管理者 PIN（現場共有パスワードとは別） */
+  const backupAdminPassword = String(
+    env.VITE_BACKUP_ADMIN_PASSWORD || env.BACKUP_ADMIN_PASSWORD || '',
+  ).trim();
+  define['import.meta.env.VITE_BACKUP_ADMIN_PASSWORD'] = JSON.stringify(backupAdminPassword);
+
   return {
     define,
     envDir: __dirname,

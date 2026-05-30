@@ -1,6 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Download, FolderOpen, HardDrive, Moon, Clock } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Download, FolderOpen, HardDrive, Lock, Moon, Clock } from 'lucide-react';
 import { CARE_RECORD_RETENTION_YEARS } from '../lib/careRecordRetention.js';
+import {
+  isBackupAdminLockEnabled,
+  verifyBackupAdminPassword,
+} from '../lib/careBackupAdminAuth.js';
 import {
   downloadCareDataBackupJson,
   importCareDataBackupFromFile,
@@ -18,6 +22,8 @@ import {
   saveBackupDirectoryHandle,
 } from '../lib/careBackupDirIdb.js';
 import * as Report from '../services/ReportService.js';
+
+const BACKUP_ADMIN_RELOCK_AFTER_HIDDEN_MS = 90_000;
 
 /**
  * @param {{
@@ -37,6 +43,14 @@ export function CareAutoBackupPanel({
   const [autoLog, setAutoLog] = useState(() => readAutoBackupLog());
   const [ssdPrimary, setSsdPrimary] = useState(false);
   const [ssdSecondary, setSsdSecondary] = useState(false);
+  const adminLockEnabled = isBackupAdminLockEnabled();
+  const [adminUnlocked, setAdminUnlocked] = useState(() => !adminLockEnabled);
+  const [adminPinDraft, setAdminPinDraft] = useState('');
+  const [adminPinErr, setAdminPinErr] = useState('');
+  const [showAdminPinForm, setShowAdminPinForm] = useState(false);
+  const adminUnlockedRef = useRef(adminUnlocked);
+  const adminTabHiddenAtRef = useRef(0);
+  adminUnlockedRef.current = adminUnlocked;
   const fsSupported = isFileSystemAccessSupported();
   const nightWindow = isNightShiftCorrectionWindow();
   const suggestYmd = suggestedBulkInputYmdForNow();
@@ -73,6 +87,45 @@ export function CareAutoBackupPanel({
     return startAutoBackup2359Scheduler(() => runBackup('auto2359'));
   }, [runBackup]);
 
+  useEffect(() => {
+    if (!adminLockEnabled) return;
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        adminTabHiddenAtRef.current = Date.now();
+        return;
+      }
+      const t0 = adminTabHiddenAtRef.current;
+      if (t0 && Date.now() - t0 > BACKUP_ADMIN_RELOCK_AFTER_HIDDEN_MS && adminUnlockedRef.current) {
+        setAdminUnlocked(false);
+        setShowAdminPinForm(false);
+        setAdminPinDraft('');
+        setAdminPinErr('');
+      }
+      adminTabHiddenAtRef.current = 0;
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [adminLockEnabled]);
+
+  const submitAdminPin = (e) => {
+    e?.preventDefault?.();
+    if (verifyBackupAdminPassword(adminPinDraft)) {
+      setAdminUnlocked(true);
+      setAdminPinErr('');
+      setAdminPinDraft('');
+      setShowAdminPinForm(false);
+    } else {
+      setAdminPinErr('管理者PINが違います。');
+    }
+  };
+
+  const lockAdminPanel = () => {
+    setAdminUnlocked(false);
+    setShowAdminPinForm(false);
+    setAdminPinDraft('');
+    setAdminPinErr('');
+  };
+
   const pickSsdFolder = useCallback(async (slot) => {
     if (!fsSupported) {
       setStatus('このブラウザはSSD直接保存に未対応です（Chrome/Edge をご利用ください）');
@@ -97,14 +150,6 @@ export function CareAutoBackupPanel({
 
   return (
     <div className="mt-2 space-y-2">
-      <p className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-bold leading-snug text-amber-900">
-        <strong className="text-amber-950">GitHub には記録は保存されません</strong>（プログラムのソースのみ）。
-        生活記録は<strong> ①ブラウザ内 ②接続SSD</strong>の2か所＋毎日
-        <strong> 23:59 自動バックアップ</strong>（法定{CARE_RECORD_RETENTION_YEARS}年）。
-        現在 <strong>{retentionSummary.total.toLocaleString()} 件</strong>
-        {retentionSummary.oldestYmd ? `（最古 ${retentionSummary.oldestYmd}）` : ''}。
-      </p>
-
       {nightWindow ? (
         <div className="rounded-lg border border-indigo-300 bg-indigo-50 px-2 py-2 text-[10px] font-bold leading-snug text-indigo-950">
           <p className="mb-1 flex items-center gap-1 text-indigo-900">
@@ -126,7 +171,90 @@ export function CareAutoBackupPanel({
         </div>
       ) : null}
 
+      {adminLockEnabled && !adminUnlocked ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+          <p className="text-[10px] font-bold leading-snug text-slate-600">
+            生活記録は<strong> 毎日23:59</strong>に自動保存されます（法定{CARE_RECORD_RETENTION_YEARS}年・ブラウザ内＋SSD）。
+            {lastAuto ? (
+              <span className="ml-1 text-slate-500">
+                最終バックアップ: {lastAuto.backupYmd} {lastAuto.timeLabel}
+              </span>
+            ) : null}
+            <br />
+            <span className="text-slate-500">SSD・手動バックアップ・復元は管理者のみ操作できます。</span>
+          </p>
+          {showAdminPinForm ? (
+            <form onSubmit={submitAdminPin} className="mt-2 flex flex-wrap items-end gap-2">
+              <label className="min-w-[8rem] flex-1 text-left">
+                <span className="mb-0.5 block text-[10px] font-black text-slate-600">管理者PIN</span>
+                <input
+                  type="password"
+                  value={adminPinDraft}
+                  onChange={(e) => {
+                    setAdminPinDraft(e.target.value);
+                    if (adminPinErr) setAdminPinErr('');
+                  }}
+                  className="w-full rounded-lg border-2 border-slate-300 bg-white px-2 py-1.5 text-xs font-bold text-slate-800"
+                  autoComplete="off"
+                  autoFocus
+                />
+              </label>
+              <button
+                type="submit"
+                className="rounded-lg border-2 border-slate-600 bg-slate-700 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-600"
+              >
+                解除
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAdminPinForm(false);
+                  setAdminPinDraft('');
+                  setAdminPinErr('');
+                }}
+                className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-bold text-slate-600"
+              >
+                キャンセル
+              </button>
+              {adminPinErr ? (
+                <p className="w-full text-[10px] font-bold text-rose-600" role="alert">
+                  {adminPinErr}
+                </p>
+              ) : null}
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowAdminPinForm(true)}
+              className="mt-2 inline-flex items-center gap-1 rounded-lg border border-slate-400 bg-white px-2.5 py-1 text-[10px] font-black text-slate-700 hover:bg-slate-100"
+            >
+              <Lock className="h-3 w-3" aria-hidden />
+              管理者用（SSD・バックアップ）
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+      <p className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-bold leading-snug text-amber-900">
+        <strong className="text-amber-950">GitHub には記録は保存されません</strong>（プログラムのソースのみ）。
+        生活記録は<strong> ①ブラウザ内 ②接続SSD</strong>の2か所＋毎日
+        <strong> 23:59 自動バックアップ</strong>（法定{CARE_RECORD_RETENTION_YEARS}年）。
+        現在 <strong>{retentionSummary.total.toLocaleString()} 件</strong>
+        {retentionSummary.oldestYmd ? `（最古 ${retentionSummary.oldestYmd}）` : ''}。
+      </p>
+
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2">
+        {adminLockEnabled ? (
+          <button
+            type="button"
+            onClick={lockAdminPanel}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-400 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-100"
+            title="バックアップ操作をロック"
+          >
+            <Lock className="h-3 w-3" aria-hidden />
+            ロック
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => runBackup('manual')}
@@ -196,6 +324,8 @@ export function CareAutoBackupPanel({
           </ul>
         ) : null}
       </details>
+        </>
+      )}
     </div>
   );
 }
