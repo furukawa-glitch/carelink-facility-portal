@@ -1,8 +1,8 @@
 /** 排便量（クイック／一覧入力のプルダウン） */
-export const STOOL_VOLUME_OPTIONS = ['', '多', '中', '小'];
+export const STOOL_VOLUME_OPTIONS = ['', '多', '中', '小', 'A', 'B', '付'];
 
 /** 排便性状 */
-export const STOOL_CHARACTER_OPTIONS = ['', '普通便', '硬便', '軟便', '水様便'];
+export const STOOL_CHARACTER_OPTIONS = ['', '普通便', '硬便', '軟便', '泥状便', '水様便'];
 
 /** 主食・副食の摂取割合 */
 export const MEAL_WARI_OPTIONS = ['', '10割', '9割', '8割', '7割', '6割', '5割', '4割', '3割', '2割', '1割', '0割'];
@@ -81,6 +81,7 @@ export function parseVoiceToStoolCharacter(text) {
   if (STOOL_CHARACTER_OPTIONS.includes(raw)) return raw;
   const n = normVoiceChars(raw);
   if (/水様|みずよう|スイヨ/u.test(n)) return '水様便';
+  if (/泥状|でいじょう|デイジョウ/u.test(n)) return '泥状便';
   if (/硬便|こうべん|カタ|硬い/u.test(n)) return '硬便';
   if (/軟便|なんべん|ナン|やわらか|軟か/u.test(n)) return '軟便';
   if (/普通便|ふつうべん|ふつう|フツウ|普通/u.test(n)) return '普通便';
@@ -163,10 +164,13 @@ export function parseVoiceToWaterMl(text) {
 /** 24時間表・各時の排尿セル */
 export const HOURLY_URINE_OPTIONS = Object.freeze([
   { value: '', label: '—' },
+  { value: 'トイレ', label: 'トイレ' },
+  { value: '尿器', label: '尿器' },
   { value: '少量', label: '少量' },
   { value: '中量', label: '中量' },
   { value: '多量', label: '多量' },
-  { value: '失禁', label: '失禁' },
+  { value: 'Ba', label: 'Ba' },
+  { value: '尿測', label: '尿測' },
   { value: 'カテ', label: 'カテ' },
 ]);
 

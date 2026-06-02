@@ -120,6 +120,7 @@ const BULK_CARE_RESET = Object.freeze({
   mealExtras: '',
 });
 const BULK_DRAFT_LS_KEY = 'carelink_os_bulk_table_draft_v1';
+const AUTO_URINE_DAILY_TOTAL_LS_KEY = 'carelink_os_auto_urine_daily_total_v1';
 
 function readBulkDraftStore() {
   try {
@@ -138,6 +139,33 @@ function writeBulkDraftStore(store) {
   } catch {
     // localStorage が使えない環境は黙って無視
   }
+}
+
+function readAutoUrineDailyTotalState() {
+  try {
+    const raw = localStorage.getItem(AUTO_URINE_DAILY_TOTAL_LS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAutoUrineDailyTotalState(state) {
+  try {
+    localStorage.setItem(AUTO_URINE_DAILY_TOTAL_LS_KEY, JSON.stringify(state && typeof state === 'object' ? state : {}));
+  } catch {
+    // ignore
+  }
+}
+
+function measuredUrineMlFromEvent(ev) {
+  const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+  const measured = String(meta.measuredUrineMl ?? meta.catheterMl ?? '').trim();
+  if (/^\d+$/u.test(measured)) return parseInt(measured, 10);
+  const uv = String(meta.urineVolume ?? '').trim();
+  if (/^\d+$/u.test(uv)) return parseInt(uv, 10);
+  return 0;
 }
 
 function makeBulkDraftScopeKey(facilityLinkKey, selectedSheetTitle, ymd) {
@@ -832,9 +860,9 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
     const sc = String(meta.stoolCharacter ?? '').trim();
     if (hourlyKind === 'urine' || /排尿（\d{2}時）/u.test(note)) {
       out.hourUrine[h] = u || 'plain';
-      const cm = String(meta.catheterMl ?? '').trim();
+      const cm = String(meta.measuredUrineMl ?? meta.catheterMl ?? '').trim();
       if (cm) out.hourUrineMl[h] = cm;
-      else if (u === 'カテ' && /^\d+$/.test(String(meta.urineVolume ?? '').trim())) {
+      else if ((u === 'カテ' || u === 'Ba' || u === '尿測') && /^\d+$/.test(String(meta.urineVolume ?? '').trim())) {
         out.hourUrineMl[h] = String(meta.urineVolume).trim();
       }
     }
@@ -1160,15 +1188,22 @@ export function RecordPage({
     const out = {};
     for (const r of displayResidents) {
       const id = String(r.id);
-      const slots = { 朝: '', 昼: '', 夜: '' };
+      const slots = { 朝: '', 昼: '', 夜: '', enteral: '' };
       const events = Report.getCareEventsForResidentDay(id, ymd);
       for (const ev of events) {
-        if (String(ev?.type ?? '') !== 'meal') continue;
+        const typ = String(ev?.type ?? '');
         const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
-        const slot = String(meta.mealSlot ?? '').trim();
-        if (slot !== '朝' && slot !== '昼' && slot !== '夜') continue;
-        const amount = String(meta.mealAmount ?? '').trim();
-        slots[slot] = amount || '食事記録';
+        if (typ === 'meal') {
+          const slot = String(meta.mealSlot ?? '').trim();
+          if (slot !== '朝' && slot !== '昼' && slot !== '夜') continue;
+          const amount = String(meta.mealAmount ?? '').trim();
+          slots[slot] = amount || '食事記録';
+          continue;
+        }
+        if (typ === 'enteral') {
+          const note = String(meta.note ?? '').trim();
+          if (note) slots.enteral = note;
+        }
       }
       out[id] = slots;
     }
@@ -1557,6 +1592,47 @@ export function RecordPage({
   const nowLabel = clock.toLocaleString('ja-JP', { dateStyle: 'medium', timeStyle: 'short' });
   const todayStrip = useMemo(() => todayYmdFromDate(clock), [clock]);
 
+  useEffect(() => {
+    if (clock.getHours() !== 23) return;
+    const ymd = todayYmdFromDate(clock);
+    const state = readAutoUrineDailyTotalState();
+    let changed = false;
+    for (const r of displayResidents) {
+      const rid = String(r?.id ?? '').trim();
+      if (!rid) continue;
+      const markKey = `${String(selectedSheetTitle ?? '')}::${rid}::${ymd}`;
+      if (state[markKey]) continue;
+      const events = Report.getCareEventsForResidentDay(rid, ymd);
+      let totalMl = 0;
+      for (const ev of events) {
+        const typ = String(ev?.type ?? '');
+        if (typ !== 'hourly_excretion' && typ !== 'excretion') continue;
+        totalMl += measuredUrineMlFromEvent(ev);
+      }
+      if (totalMl > 0) {
+        Report.logCareEvent({
+          type: 'excretion',
+          residentId: rid,
+          residentName: String(r?.name ?? ''),
+          facilitySheetTitle: String(r?.facility ?? selectedSheetTitle ?? ''),
+          ts: `${ymd}T23:59:30+09:00`,
+          meta: {
+            urineVolume: String(totalMl),
+            note: `尿量日計（自動集計）${totalMl}ml`,
+            autoUrineDailyTotal: true,
+            autoUrineDailyTotalYmd: ymd,
+          },
+        });
+      }
+      state[markKey] = true;
+      changed = true;
+    }
+    if (changed) {
+      writeAutoUrineDailyTotalState(state);
+      setTick((n) => n + 1);
+    }
+  }, [clock, displayResidents, selectedSheetTitle]);
+
   const openDaySvcExternalEditor = useCallback((res) => {
     const rid = String(res?.id ?? '').trim();
     if (!rid) return;
@@ -1807,6 +1883,7 @@ export function RecordPage({
       if (hu[h] && !occ.urine[h]) {
         const uCode = String(hu[h] ?? '').trim();
         const cMl = String(hum[h] ?? '').trim();
+        const needsMeasuredMl = uCode === 'カテ' || uCode === 'Ba' || uCode === '尿測';
         Report.logCareEvent({
           type: 'hourly_excretion',
           ts: tokyoDateHourToIso(ymdLog, h),
@@ -1815,8 +1892,8 @@ export function RecordPage({
           facilitySheetTitle: fac,
           meta: {
             note: `排尿（${String(h).padStart(2, '0')}時）`,
-            ...(uCode && uCode !== 'plain' ? { urineVolume: uCode === 'カテ' && cMl ? cMl : uCode } : {}),
-            ...(uCode === 'カテ' && cMl ? { catheterMl: cMl } : {}),
+            ...(uCode && uCode !== 'plain' ? { urineVolume: needsMeasuredMl && cMl ? cMl : uCode } : {}),
+            ...(needsMeasuredMl && cMl ? { measuredUrineMl: cMl } : {}),
             hourlyKind: 'urine',
             hourlySheet: true,
           },
@@ -1881,7 +1958,21 @@ export function RecordPage({
         for (const r of displayResidents) {
           const id = String(r.id);
           const cur = next[id];
-          if (cur) next[id] = { ...cur, mealSlot: slot };
+          if (cur) {
+            next[id] = {
+              ...cur,
+              mealSlot: slot,
+              meal: false,
+              mealStaple: '',
+              mealSide: '',
+              mealAmount: '',
+              waterMl: '',
+              medicationTaken: '',
+              ensurePortion: '',
+              enteralMenu: '',
+              mealExtras: '',
+            };
+          }
         }
         return next;
       });

@@ -156,6 +156,8 @@ export function ResidentBulkInputTable({
     []
   );
   const tableScrollRef = React.useRef(/** @type {HTMLDivElement | null} */ (null));
+  const mealInputHeaderRef = React.useRef(/** @type {HTMLTableCellElement | null} */ (null));
+  const showDetailedCareColumns = false;
   const scrollTableX = React.useCallback((delta) => {
     const el = tableScrollRef.current;
     if (!el) return;
@@ -171,6 +173,13 @@ export function ResidentBulkInputTable({
       tableScrollRef.current.scrollTop = prevTop;
       tableScrollRef.current.scrollLeft = prevLeft;
     });
+  }, []);
+  const scrollToMealInputs = React.useCallback(() => {
+    const scroller = tableScrollRef.current;
+    const mealHeader = mealInputHeaderRef.current;
+    if (!scroller || !mealHeader) return;
+    const targetLeft = Math.max(0, mealHeader.offsetLeft - 160);
+    scroller.scrollTo({ left: targetLeft, behavior: 'smooth' });
   }, []);
 
   return (
@@ -261,7 +270,10 @@ export function ResidentBulkInputTable({
               <button
                 key={slot}
                 type="button"
-                onClick={() => onBulkGlobalMealSlotChange(slot)}
+                onClick={() => {
+                  onBulkGlobalMealSlotChange(slot);
+                  requestAnimationFrame(() => scrollToMealInputs());
+                }}
                 className={`min-w-[3.5rem] rounded-xl border-2 px-4 py-2 text-sm font-black transition sm:min-w-[4rem] sm:px-5 sm:text-base ${
                   on
                     ? 'border-orange-600 bg-orange-500 text-white shadow-md ring-2 ring-orange-400/80'
@@ -369,18 +381,26 @@ export function ResidentBulkInputTable({
               <th className="border border-slate-200 px-0.5 py-1 whitespace-nowrap text-teal-900" title="月1回の体重測定">
                 体重kg<span className="block text-[9px] font-bold normal-case">月1回</span>
               </th>
-              <th className="border border-slate-200 px-0.5 py-1">巡</th>
-              <th className="border border-slate-200 px-0.5 py-1">巡視(3h)</th>
-              <th className="border border-slate-200 px-0.5 py-1">排尿量</th>
+              {showDetailedCareColumns ? (
+                <>
+                  <th className="border border-slate-200 px-0.5 py-1">巡</th>
+                  <th className="border border-slate-200 px-0.5 py-1">巡視(3h)</th>
+                  <th className="border border-slate-200 px-0.5 py-1">排尿量</th>
+                  <th
+                    className="border border-slate-200 px-0.5 py-1 whitespace-nowrap text-sky-900"
+                    title="トイレ誘導を実施したらチェック（6時間アラートの基準を更新）"
+                  >
+                    誘導
+                  </th>
+                  <th className="border border-slate-200 px-0.5 py-1">性状</th>
+                  <th className="border border-slate-200 px-0.5 py-1">排便量</th>
+                </>
+              ) : null}
               <th
-                className="border border-slate-200 px-0.5 py-1 whitespace-nowrap text-sky-900"
-                title="トイレ誘導を実施したらチェック（6時間アラートの基準を更新）"
+                ref={mealInputHeaderRef}
+                className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950"
+                title="上の「朝・昼・夜」が保存時に入ります"
               >
-                誘導
-              </th>
-              <th className="border border-slate-200 px-0.5 py-1">性状</th>
-              <th className="border border-slate-200 px-0.5 py-1">排便量</th>
-              <th className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950" title="上の「朝・昼・夜」が保存時に入ります">
                 主食<span className="block text-[9px] font-bold normal-case">（区分は上）</span>
               </th>
               <th className="border border-slate-200 px-0.5 py-1">副食</th>
@@ -460,6 +480,7 @@ export function ResidentBulkInputTable({
                 朝: String(savedMealSlots['朝'] ?? '').trim() || '—',
                 昼: String(savedMealSlots['昼'] ?? '').trim() || '—',
                 夜: String(savedMealSlots['夜'] ?? '').trim() || '—',
+                enteral: String(savedMealSlots.enteral ?? '').trim(),
               };
               const draftMealPreview =
                 mealSlotLabel && draftMealLabel ? `入力中 ${mealSlotLabel}:${draftMealLabel}` : '';
@@ -525,6 +546,9 @@ export function ResidentBulkInputTable({
                       <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">朝</span>{mealFrontBySlot.朝}</p>
                       <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">昼</span>{mealFrontBySlot.昼}</p>
                       <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">夜</span>{mealFrontBySlot.夜}</p>
+                      {mealFrontBySlot.enteral ? (
+                        <p className="truncate border-t border-orange-200 pt-0.5 text-[9px] text-violet-800">経管: {mealFrontBySlot.enteral}</p>
+                      ) : null}
                       {draftMealPreview ? <p className="mt-1 border-t border-orange-200 pt-0.5 text-[9px] text-orange-700">{draftMealPreview}</p> : null}
                     </div>
                   </td>
@@ -564,7 +588,7 @@ export function ResidentBulkInputTable({
                                     : String(hr.arr[h] ?? '');
                               const draftPatrolOn = isPatrol && hr.arr[h] === true;
                               const filled = isPatrol ? saved || draftPatrolOn : saved || Boolean(cell);
-                              const urineIsCate = isUrine && cell === 'カテ';
+                              const urineNeedsMl = isUrine && (cell === 'カテ' || cell === 'Ba' || cell === '尿測');
                               return (
                                 <td key={`${hr.key}-${h}`} className={`border border-slate-300 p-0 text-center ${hr.tdBg}`}>
                                   {isPatrol ? (
@@ -613,7 +637,7 @@ export function ResidentBulkInputTable({
                                           const base = [...hu];
                                           base[h] = e.target.value;
                                           const mlBase = [...hum];
-                                          if (e.target.value !== 'カテ') mlBase[h] = '';
+                                          if (e.target.value !== 'カテ' && e.target.value !== 'Ba' && e.target.value !== '尿測') mlBase[h] = '';
                                           patchBulkRow(id, { hourUrine: base, hourUrineMl: mlBase });
                                         }}
                                         className={`h-full w-full min-w-[1.15rem] bg-white px-0 py-0 text-[8px] font-black ${
@@ -627,7 +651,7 @@ export function ResidentBulkInputTable({
                                           </option>
                                         ))}
                                       </select>
-                                      {urineIsCate && !saved ? (
+                                      {urineNeedsMl && !saved ? (
                                         <input
                                           value={String(hum[h] ?? '')}
                                           onChange={(e) => {
@@ -751,91 +775,95 @@ export function ResidentBulkInputTable({
                       </button>
                     </div>
                   </td>
-                  <td className="border border-slate-200 px-0.5 py-0 text-center">
-                    <input
-                      type="checkbox"
-                      checked={row.patrol}
-                      onChange={(e) => patchBulkRow(id, { patrol: e.target.checked })}
-                      className="h-5 w-5 accent-cyan-600 sm:h-5 sm:w-5"
-                      aria-label={`${nm} 巡視`}
-                    />
-                  </td>
-                  <td className="border border-slate-200 p-0.5 align-top">
-                    <div className="flex min-w-[8.5rem] flex-col gap-0.5">
-                      <input
-                        type="date"
-                        value={pa.date}
-                        onChange={(e) =>
-                          patchBulkRow(id, { patrolAt: joinPatrolDateTimeLocal(e.target.value, pa.hour) })
-                        }
-                        className="w-full bg-white px-1 py-1 font-mono text-[11px] font-bold sm:text-xs"
-                        aria-label={`${nm} 巡視の日付`}
-                      />
-                      <select
-                        value={pa.hour}
-                        onChange={(e) =>
-                          patchBulkRow(id, {
-                            patrolAt: joinPatrolDateTimeLocal(pa.date, Number(e.target.value)),
-                          })
-                        }
-                        className="w-full bg-white px-1 py-1 text-[11px] font-bold sm:text-xs"
-                        aria-label={`${nm} 巡視時刻（3時間おき）`}
-                      >
-                        {PATROL_SLOT_HOURS.map((h) => (
-                          <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </td>
-                  <td className="border border-slate-200 p-0">
-                    <input
-                      value={row.urineVolume}
-                      onChange={(e) => patchBulkRow(id, { urineVolume: e.target.value })}
-                      placeholder="ml等"
-                      className="w-full min-w-[3rem] bg-transparent px-1 py-1.5 text-sm sm:text-base"
-                      aria-label={`${nm} 排尿量`}
-                    />
-                  </td>
-                  <td className="border border-slate-200 bg-sky-50/50 px-0.5 py-0 text-center">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(row.toiletGuidance)}
-                      onChange={(e) => patchBulkRow(id, { toiletGuidance: e.target.checked })}
-                      className="h-5 w-5 accent-sky-700 sm:h-5 sm:w-5"
-                      title="トイレ誘導"
-                      aria-label={`${nm} トイレ誘導`}
-                    />
-                  </td>
-                  <td className="border border-slate-200 p-0">
-                    <select
-                      value={row.stoolCharacter}
-                      onChange={(e) => patchBulkRow(id, { stoolCharacter: e.target.value })}
-                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 排便性状`}
-                    >
-                      {STOOL_CHARACTER_OPTIONS.map((opt) => (
-                        <option key={opt || 'empty'} value={opt}>
-                          {opt || '—'}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="border border-slate-200 p-0">
-                    <select
-                      value={row.stoolVolume}
-                      onChange={(e) => patchBulkRow(id, { stoolVolume: e.target.value })}
-                      className="w-full min-w-[2.75rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 排便量`}
-                    >
-                      {STOOL_VOLUME_OPTIONS.map((opt) => (
-                        <option key={opt || 'empty'} value={opt}>
-                          {opt || '—'}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
+                  {showDetailedCareColumns ? (
+                    <>
+                      <td className="border border-slate-200 px-0.5 py-0 text-center">
+                        <input
+                          type="checkbox"
+                          checked={row.patrol}
+                          onChange={(e) => patchBulkRow(id, { patrol: e.target.checked })}
+                          className="h-5 w-5 accent-cyan-600 sm:h-5 sm:w-5"
+                          aria-label={`${nm} 巡視`}
+                        />
+                      </td>
+                      <td className="border border-slate-200 p-0.5 align-top">
+                        <div className="flex min-w-[8.5rem] flex-col gap-0.5">
+                          <input
+                            type="date"
+                            value={pa.date}
+                            onChange={(e) =>
+                              patchBulkRow(id, { patrolAt: joinPatrolDateTimeLocal(e.target.value, pa.hour) })
+                            }
+                            className="w-full bg-white px-1 py-1 font-mono text-[11px] font-bold sm:text-xs"
+                            aria-label={`${nm} 巡視の日付`}
+                          />
+                          <select
+                            value={pa.hour}
+                            onChange={(e) =>
+                              patchBulkRow(id, {
+                                patrolAt: joinPatrolDateTimeLocal(pa.date, Number(e.target.value)),
+                              })
+                            }
+                            className="w-full bg-white px-1 py-1 text-[11px] font-bold sm:text-xs"
+                            aria-label={`${nm} 巡視時刻（3時間おき）`}
+                          >
+                            {PATROL_SLOT_HOURS.map((h) => (
+                              <option key={h} value={h}>
+                                {String(h).padStart(2, '0')}:00
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </td>
+                      <td className="border border-slate-200 p-0">
+                        <input
+                          value={row.urineVolume}
+                          onChange={(e) => patchBulkRow(id, { urineVolume: e.target.value })}
+                          placeholder="ml等"
+                          className="w-full min-w-[3rem] bg-transparent px-1 py-1.5 text-sm sm:text-base"
+                          aria-label={`${nm} 排尿量`}
+                        />
+                      </td>
+                      <td className="border border-slate-200 bg-sky-50/50 px-0.5 py-0 text-center">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(row.toiletGuidance)}
+                          onChange={(e) => patchBulkRow(id, { toiletGuidance: e.target.checked })}
+                          className="h-5 w-5 accent-sky-700 sm:h-5 sm:w-5"
+                          title="トイレ誘導"
+                          aria-label={`${nm} トイレ誘導`}
+                        />
+                      </td>
+                      <td className="border border-slate-200 p-0">
+                        <select
+                          value={row.stoolCharacter}
+                          onChange={(e) => patchBulkRow(id, { stoolCharacter: e.target.value })}
+                          className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
+                          aria-label={`${nm} 排便性状`}
+                        >
+                          {STOOL_CHARACTER_OPTIONS.map((opt) => (
+                            <option key={opt || 'empty'} value={opt}>
+                              {opt || '—'}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="border border-slate-200 p-0">
+                        <select
+                          value={row.stoolVolume}
+                          onChange={(e) => patchBulkRow(id, { stoolVolume: e.target.value })}
+                          className="w-full min-w-[2.75rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
+                          aria-label={`${nm} 排便量`}
+                        >
+                          {STOOL_VOLUME_OPTIONS.map((opt) => (
+                            <option key={opt || 'empty'} value={opt}>
+                              {opt || '—'}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    </>
+                  ) : null}
                   <td className="border border-slate-200 bg-orange-50/40 p-0">
                     <select
                       value={row.mealStaple}
