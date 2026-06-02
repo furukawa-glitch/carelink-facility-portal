@@ -450,7 +450,7 @@ export function ResidentBulkInputTable({
               const stoolCount =
                 hs.filter((v) => String(v ?? '').trim() !== '').length +
                 (String(row.stoolVolume ?? '').trim() || String(row.stoolCharacter ?? '').trim() ? 1 : 0);
-              const latestVital = Report.getLatestVitalMetaForResident(id);
+              const latestVital = Report.getLatestVitalMetaForResidentDay(id, bulkSheetDate);
               const vitalSavedLabel = fmtVitalFrontLabelFromMeta(latestVital.meta);
               const vitalMeasuredAt = fmtMeasuredAtJa(latestVital.measuredAt);
               const vitalDraftLabel = [

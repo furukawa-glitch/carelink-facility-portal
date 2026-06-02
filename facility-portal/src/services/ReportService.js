@@ -1374,6 +1374,32 @@ export function getLatestVitalSnapshotMetaForResidentDay(residentId, ymd) {
 }
 
 /**
+ * 指定日の最新バイタル（フォールバックなし）
+ * @param {string} residentId
+ * @param {string} ymd YYYY-MM-DD
+ * @returns {{ meta: Record<string, unknown> | null; measuredAt: string }}
+ */
+export function getLatestVitalMetaForResidentDay(residentId, ymd) {
+  const rid = String(residentId ?? '').trim();
+  const day = String(ymd ?? '').trim();
+  if (!rid || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return { meta: null, measuredAt: '' };
+  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  let latest = null;
+  for (const e of getCareEventsForResidentDay(rid, day)) {
+    if (e?.type !== 'vital_snapshot') continue;
+    if (!e.meta || typeof e.meta !== 'object') continue;
+    const ts = String(e.ts ?? '').trim();
+    const t = new Date(ts).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (!latest || t >= new Date(latest.ts).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts };
+    }
+  }
+  if (!latest) return { meta: null, measuredAt: '' };
+  return { meta: latest.meta, measuredAt: latest.ts };
+}
+
+/**
  * 利用者の最新バイタル（スナップショットキャッシュ → 記録ログの最終 vital_snapshot）
  * @param {string} residentId
  * @returns {{ meta: Record<string, unknown> | null; measuredAt: string }}
