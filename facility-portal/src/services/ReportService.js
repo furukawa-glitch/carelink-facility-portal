@@ -857,6 +857,12 @@ export function getFacilityHandoverMeta(linkKey) {
   };
 }
 
+function dispatchHandoverStorageEvent() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('carelink-handover-storage'));
+  }
+}
+
 /**
  * 個別申し送り・処置メモがある利用者だけを一覧用に返す
  * @param {Record<string, unknown>[]} residents
@@ -898,14 +904,23 @@ export function listIndividualHandoversForResidents(residents) {
  * @param {string} linkKey
  * @param {string} text
  */
-export function setFacilityHandoverNote(linkKey, text) {
+export function setFacilityHandoverNote(linkKey, text, opts = {}) {
   const k = String(linkKey ?? '').trim();
   if (!k) return false;
   const all = readJson(LS.facilityHandover, {});
-  all[k] = { text: String(text ?? '').trim(), updatedAt: new Date().toISOString() };
+  const updatedAt = String(opts?.updatedAt ?? '').trim() || new Date().toISOString();
+  all[k] = { text: String(text ?? '').trim(), updatedAt };
   writeJson(LS.facilityHandover, all);
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event('carelink-handover-storage'));
+  dispatchHandoverStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    logCareEvent({
+      type: 'facility_handover',
+      residentId: '',
+      residentName: '',
+      facilitySheetTitle: k,
+      ts: updatedAt,
+      meta: { linkKey: k, text: String(text ?? '').trim(), updatedAt },
+    });
   }
   return true;
 }
@@ -955,23 +970,85 @@ export function getResidentRoomNotes(residentId) {
  * @param {string} residentId
  * @param {{ handover?: string; treatment?: string }} patch
  */
-export function setResidentRoomNotes(residentId, patch) {
+export function setResidentRoomNotes(residentId, patch, opts = {}) {
   const rid = String(residentId ?? '').trim();
   if (!rid) return false;
   const all = readJson(LS.residentRoomNotes, {});
   const prev = all[rid] && typeof all[rid] === 'object' ? all[rid] : {};
+  const updatedAt = String(opts?.updatedAt ?? '').trim() || new Date().toISOString();
   all[rid] = {
     ...prev,
     ...(patch && typeof patch === 'object' ? patch : {}),
     handover: String(patch?.handover ?? prev.handover ?? '').trim(),
     treatment: String(patch?.treatment ?? prev.treatment ?? '').trim(),
-    updatedAt: new Date().toISOString(),
+    updatedAt,
   };
   writeJson(LS.residentRoomNotes, all);
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event('carelink-handover-storage'));
+  dispatchHandoverStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    logCareEvent({
+      type: 'resident_room_note',
+      residentId: rid,
+      residentName: '',
+      facilitySheetTitle: '',
+      ts: updatedAt,
+      meta: {
+        residentId: rid,
+        handover: String(all[rid].handover ?? '').trim(),
+        treatment: String(all[rid].treatment ?? '').trim(),
+        updatedAt,
+      },
+    });
   }
   return true;
+}
+
+function applyHandoverStoresFromEvents(events) {
+  const list = Array.isArray(events) ? events : [];
+  if (!list.length) return 0;
+  const facilityStore = readJson(LS.facilityHandover, {});
+  const roomStore = readJson(LS.residentRoomNotes, {});
+  let changed = 0;
+  for (const e of list) {
+    const typ = String(e?.type ?? '').trim();
+    const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+    const ts = String(meta.updatedAt ?? e?.ts ?? '').trim();
+    if (typ === 'facility_handover') {
+      const linkKey = String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+      if (!linkKey) continue;
+      const prev = facilityStore[linkKey] && typeof facilityStore[linkKey] === 'object' ? facilityStore[linkKey] : {};
+      const prevAt = new Date(String(prev.updatedAt ?? '')).getTime();
+      const nextAt = new Date(ts).getTime();
+      if (Number.isFinite(prevAt) && Number.isFinite(nextAt) && prevAt > nextAt) continue;
+      facilityStore[linkKey] = {
+        text: String(meta.text ?? '').trim(),
+        updatedAt: ts || new Date().toISOString(),
+      };
+      changed++;
+      continue;
+    }
+    if (typ === 'resident_room_note') {
+      const rid = String(meta.residentId ?? e?.residentId ?? '').trim();
+      if (!rid) continue;
+      const prev = roomStore[rid] && typeof roomStore[rid] === 'object' ? roomStore[rid] : {};
+      const prevAt = new Date(String(prev.updatedAt ?? '')).getTime();
+      const nextAt = new Date(ts).getTime();
+      if (Number.isFinite(prevAt) && Number.isFinite(nextAt) && prevAt > nextAt) continue;
+      roomStore[rid] = {
+        ...prev,
+        handover: String(meta.handover ?? prev.handover ?? '').trim(),
+        treatment: String(meta.treatment ?? prev.treatment ?? '').trim(),
+        updatedAt: ts || new Date().toISOString(),
+      };
+      changed++;
+    }
+  }
+  if (changed > 0) {
+    writeJson(LS.facilityHandover, facilityStore);
+    writeJson(LS.residentRoomNotes, roomStore);
+    dispatchHandoverStorageEvent();
+  }
+  return changed;
 }
 
 function localYmd(d) {
@@ -1118,6 +1195,7 @@ function startCareEventsIdbHydrate() {
     idbLoadAllCareEvents().then((fromIdb) => {
       const merged = mergeCareEventsById(local, fromIdb);
       persistCareEventsList(merged, { skipIdbFullSave: fromIdb.length > 0 });
+      applyHandoverStoresFromEvents(merged);
     })
   );
 }
@@ -1178,6 +1256,7 @@ export function mergeCareEventsFromCloud(cloudEvents) {
   const merged = mergeCareEventsById(local, Array.isArray(cloudEvents) ? cloudEvents : []);
   const delta = Math.max(0, merged.length - local.length);
   persistCareEventsList(merged);
+  applyHandoverStoresFromEvents(merged);
   return delta;
 }
 
