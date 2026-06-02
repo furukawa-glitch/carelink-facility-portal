@@ -84,6 +84,33 @@ function localDateTimeToIso(ymd, hm) {
   return Number.isFinite(d.getTime()) ? d.toISOString() : '';
 }
 
+function toNumOrNull(v) {
+  const n = parseFloat(String(v ?? '').replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+function ymdLabelFromIso(isoLike) {
+  const d = new Date(String(isoLike ?? ''));
+  if (!Number.isFinite(d.getTime())) return '';
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function linePointsFromValues(values, width = 280, height = 96, pad = 10) {
+  const valid = values.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+  if (!valid.length) return '';
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const span = max - min || 1;
+  const step = valid.length > 1 ? (width - pad * 2) / (valid.length - 1) : 0;
+  return valid
+    .map((val, idx) => {
+      const px = pad + step * idx;
+      const py = pad + ((max - val) / span) * (height - pad * 2);
+      return `${px},${py}`;
+    })
+    .join(' ');
+}
+
 /**
  * @param {{ onBack: () => void; residents: Record<string, unknown>[]; apiKey: string }} props
  */
@@ -1286,6 +1313,33 @@ const App = () => {
     return residentNavList.findIndex((r) => String(r.id) === String(selectedResident.id));
   }, [selectedResident, residentNavList]);
 
+  const vitalTrendRows = useMemo(() => {
+    const rid = String(selectedResident?.id ?? '').trim();
+    if (!rid) return [];
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(start.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+    const events = Report.getAllCareEvents()
+      .filter((e) => String(e?.residentId ?? '').trim() === rid && String(e?.type ?? '') === 'vital_snapshot')
+      .map((e) => ({
+        ts: String(e?.ts ?? ''),
+        meta: e?.meta && typeof e.meta === 'object' ? e.meta : {},
+      }))
+      .filter((e) => {
+        const t = new Date(e.ts).getTime();
+        return Number.isFinite(t) && t >= start.getTime();
+      })
+      .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+    return events.map((e) => ({
+      ts: e.ts,
+      temp: toNumOrNull(e.meta.temp),
+      bpU: toNumOrNull(e.meta.bpUpper),
+      bpL: toNumOrNull(e.meta.bpLower),
+      pulse: toNumOrNull(e.meta.pulse),
+    }));
+  }, [selectedResident, saveStatus]);
+
   const saveResidentAlertThresholds = useCallback(() => {
     const id = String(selectedResident?.id ?? '').trim();
     if (!id) return;
@@ -1672,17 +1726,20 @@ const App = () => {
             <ClipboardList size={28} />
             <span className="text-xl font-bold italic tracking-tight">個室メモ（申し送り・処置）</span>
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveDetailTab('vital');
+              setView('detail');
+            }}
+            className="group flex flex-col items-center gap-2 rounded-[2rem] border-2 border-violet-400 bg-violet-50 p-5 text-violet-950 shadow-md transition-all active:scale-95 font-bold"
+          >
+            <Activity size={26} className="text-violet-700" />
+            <span className="text-base font-black italic tracking-tight">バイタル異常値アラーム（個別設定）</span>
+          </button>
           <p className="text-center text-[11px] font-bold leading-snug text-slate-500">
             次の5つは必要なときだけ。
           </p>
-          <button
-            type="button"
-            onClick={() => setResidentAdminOverlay('disability')}
-            className="group flex flex-col items-center gap-2 rounded-[2rem] border-2 border-violet-400 bg-violet-50 p-5 text-violet-950 shadow-md transition-all active:scale-95 font-bold"
-          >
-            <FileSpreadsheet size={26} className="text-violet-700" />
-            <span className="text-base font-black italic tracking-tight">障害福祉サービス進捗</span>
-          </button>
           <button
             type="button"
             onClick={() => setResidentAdminOverlay('move_log')}
@@ -1706,6 +1763,14 @@ const App = () => {
           >
             <Pill size={26} className="text-indigo-700" />
             <span className="text-base font-black italic tracking-tight">薬情報（薬局PDF）</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setResidentAdminOverlay('disability')}
+            className="group flex flex-col items-center gap-2 rounded-[2rem] border-2 border-violet-400 bg-violet-50 p-5 text-violet-950 shadow-md transition-all active:scale-95 font-bold"
+          >
+            <FileSpreadsheet size={26} className="text-violet-700" />
+            <span className="text-base font-black italic tracking-tight">障害福祉サービス進捗</span>
           </button>
           <button
             type="button"
@@ -1894,8 +1959,70 @@ const App = () => {
           </div>
         )}
         {activeHistoryTab === 'week' && (
-          <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 text-sm text-slate-500 text-center">
-            1週間推移（デモ：データ連携後に表示）
+          <div className="space-y-4 rounded-[2rem] border border-slate-100 bg-white p-5 shadow-sm">
+            <h3 className="text-sm font-black text-slate-800">1週間のバイタル推移</h3>
+            {vitalTrendRows.length === 0 ? (
+              <p className="text-sm font-bold text-slate-500">直近1週間のバイタル記録がありません。</p>
+            ) : (
+              <>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {[
+                    { key: 'temp', label: '体温(℃)', cls: 'text-rose-700', stroke: '#e11d48' },
+                    { key: 'bpU', label: '血圧上', cls: 'text-indigo-700', stroke: '#4f46e5' },
+                    { key: 'bpL', label: '血圧下', cls: 'text-sky-700', stroke: '#0284c7' },
+                    { key: 'pulse', label: '脈拍', cls: 'text-emerald-700', stroke: '#059669' },
+                  ].map((series) => {
+                    const values = vitalTrendRows.map((r) => r[series.key]).filter((v) => Number.isFinite(v));
+                    return (
+                      <div key={series.key} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <p className={`mb-2 text-xs font-black ${series.cls}`}>{series.label}</p>
+                        {values.length > 0 ? (
+                          <svg viewBox="0 0 280 96" className="h-24 w-full rounded bg-white">
+                            <polyline
+                              fill="none"
+                              stroke={series.stroke}
+                              strokeWidth="2.5"
+                              points={linePointsFromValues(values, 280, 96, 10)}
+                            />
+                          </svg>
+                        ) : (
+                          <p className="text-[11px] font-bold text-slate-400">データなし</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="overflow-auto rounded-xl border border-slate-200">
+                  <table className="w-full border-collapse text-left text-xs">
+                    <thead className="bg-slate-100 text-slate-700">
+                      <tr>
+                        <th className="border-b border-slate-200 px-2 py-1">日時</th>
+                        <th className="border-b border-slate-200 px-2 py-1">体温</th>
+                        <th className="border-b border-slate-200 px-2 py-1">血圧上</th>
+                        <th className="border-b border-slate-200 px-2 py-1">血圧下</th>
+                        <th className="border-b border-slate-200 px-2 py-1">脈拍</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vitalTrendRows
+                        .slice()
+                        .reverse()
+                        .map((row) => (
+                          <tr key={row.ts} className="odd:bg-white even:bg-slate-50">
+                            <td className="border-b border-slate-100 px-2 py-1.5 font-bold text-slate-700">
+                              {ymdLabelFromIso(row.ts)} {new Date(row.ts).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.temp) ? row.temp : '—'}</td>
+                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.bpU) ? row.bpU : '—'}</td>
+                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.bpL) ? row.bpL : '—'}</td>
+                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.pulse) ? row.pulse : '—'}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         )}
         <button
