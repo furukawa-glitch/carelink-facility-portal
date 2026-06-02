@@ -3752,21 +3752,15 @@ export function RecordPage({
                     全利用者に共通する介護の継続事項。上段「介護からの申し送り」と同じ内容です。
                   </p>
                   <textarea
-                    value={facilityHandoverDraft}
-                    onChange={(e) => setFacilityHandoverDraft(e.target.value)}
+                    value={String(facilityHandoverMeta.text ?? '')}
+                    readOnly
                     rows={6}
-                    placeholder="例：感染対策の継続／面会制限／フロア全体の見守り強化…"
-                    className="min-h-[7rem] w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
+                    placeholder="上段で保存した介護申し送りがここに表示されます"
+                    className="min-h-[7rem] w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900"
                   />
-                  <button
-                    type="button"
-                    onClick={saveFacilityHandoverFromList}
-                    className={`mt-2 w-full rounded-xl py-2.5 text-sm font-black text-white shadow-md ${
-                      facilityHandoverSaveFlash ? 'bg-emerald-600' : 'bg-indigo-600 hover:bg-indigo-500'
-                    }`}
-                  >
-                    {facilityHandoverSaveFlash ? '保存しました' : '継続の申し送りを保存'}
-                  </button>
+                  <p className="mt-2 text-[11px] font-bold text-indigo-700">
+                    この欄は表示専用です。編集・保存は上段「介護からの申し送り」から行ってください。
+                  </p>
                 </div>
 
                 <div className="flex min-h-0 flex-col rounded-xl border-2 border-emerald-300 bg-emerald-50/50 p-3">
