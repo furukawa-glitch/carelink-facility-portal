@@ -1,0 +1,104 @@
+/**
+ * 生活記録 → Supabase（/api/care-sync 経由）。
+ * VITE_CARE_CLOUD_SYNC=1 のときのみ動作。未設定時は no-op（現状運用と同じ）。
+ */
+
+const SYNC_DEBOUNCE_MS = 8_000;
+const MAX_BATCH = 200;
+
+/** @type {Map<string, Record<string, unknown>>} */
+const pendingById = new Map();
+let flushTimer = 0;
+let flushing = false;
+
+function isCloudSyncEnabled() {
+  return String(import.meta.env.VITE_CARE_CLOUD_SYNC ?? '').trim() === '1';
+}
+
+function syncSecret() {
+  return String(import.meta.env.VITE_CARE_SYNC_SECRET ?? '').trim();
+}
+
+function organizationId() {
+  return String(import.meta.env.VITE_CARELINK_ORGANIZATION_ID ?? '').trim();
+}
+
+async function postCareSync(body) {
+  const secret = syncSecret();
+  if (!secret) return { ok: false, skipped: true, reason: 'no_secret' };
+  const res = await fetch('/api/care-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret, organizationId: organizationId(), ...body }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(String(json.error ?? `care-sync HTTP ${res.status}`));
+  }
+  return json;
+}
+
+function scheduleFlush() {
+  if (!isCloudSyncEnabled()) return;
+  if (flushTimer) window.clearTimeout(flushTimer);
+  flushTimer = window.setTimeout(() => {
+    flushTimer = 0;
+    void flushCareEventsCloudSync();
+  }, SYNC_DEBOUNCE_MS);
+}
+
+/**
+ * 1件または複数件をキュー（logCareEvent / 一覧表保存後）
+ * @param {Record<string, unknown> | Record<string, unknown>[]} events
+ */
+export function queueCareEventsCloudSync(events) {
+  if (!isCloudSyncEnabled()) return;
+  const list = Array.isArray(events) ? events : [events];
+  for (const e of list) {
+    const id = String(e?.id ?? '').trim();
+    if (!id) continue;
+    pendingById.set(id, e);
+  }
+  scheduleFlush();
+}
+
+/** キューを即送信 */
+export async function flushCareEventsCloudSync() {
+  if (!isCloudSyncEnabled() || flushing || pendingById.size === 0) return { ok: true, upserted: 0 };
+  flushing = true;
+  const batch = [...pendingById.values()].slice(0, MAX_BATCH);
+  for (const e of batch) {
+    const id = String(e?.id ?? '').trim();
+    if (id) pendingById.delete(id);
+  }
+  try {
+    const result = await postCareSync({ action: 'upsert_events', events: batch });
+    if (pendingById.size > 0) scheduleFlush();
+    return result;
+  } finally {
+    flushing = false;
+  }
+}
+
+/**
+ * 23:59 / 手動バックアップ後に日次スナップショットをクラウドへ
+ * @param {{ snapshotYmd: string; facilityLabel: string; trigger: string; eventCount: number; payload: object; facilityId?: string }} snap
+ */
+export async function uploadCareDailySnapshotCloud(snap) {
+  if (!isCloudSyncEnabled()) return { ok: true, skipped: true };
+  return postCareSync({
+    action: 'upsert_snapshot',
+    snapshot: {
+      snapshot_ymd: snap.snapshotYmd,
+      facility_label: snap.facilityLabel,
+      trigger: snap.trigger,
+      event_count: snap.eventCount,
+      payload: snap.payload,
+      facility_id: snap.facilityId ?? null,
+    },
+  });
+}
+
+export function isCareCloudSyncConfigured() {
+  return isCloudSyncEnabled() && Boolean(syncSecret()) && Boolean(organizationId());
+}

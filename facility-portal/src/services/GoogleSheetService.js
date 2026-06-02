@@ -8,6 +8,7 @@ import {
   facilityDefBySheetTitle,
   resolveFacilityDefForSheetTab,
 } from '../config/carelinkFacilities.js';
+import { medicalInsuranceCellLooksLikeDiseaseName } from '../lib/residentDiseaseLabel.js';
 
 export const CARELINK_RESIDENT_SPREADSHEET_ID =
   import.meta.env.VITE_GOOGLE_SHEET_ID ?? '1uIWPeOkr47OA1kB9iFzjBB0y9JIlt9d2Ud_p1dKliXI';
@@ -1123,7 +1124,7 @@ function rowsToResidents(rows, defaultFacilityName, options) {
     room: colIndex(headers, ['部屋', '居室', '号室', 'room', '部屋番号', '居室番号']),
     status: colIndex(headers, ['入居状況', '状況', 'ステータス', '入所状況', 'status']),
     careLevel: colIndexCareLevel(headers),
-    disease: colIndex(headers, ['主たる疾患', '主疾患', '疾病', '診断名']),
+    disease: colIndex(headers, ['病名', '主たる疾患', '主疾患', '疾病', '診断名', '診断']),
     fallbackNote: colIndex(headers, ['コンディション', 'condition', 'メモ', '特記', '備考', 'コメント']),
     insurance: colIndexInsuranceKind(headers),
     medicalInsuranceTarget: colIndexMedicalInsuranceTarget(headers),
@@ -1280,6 +1281,19 @@ function rowsToResidents(rows, defaultFacilityName, options) {
 
     const medicalInsuranceTargetLabel =
       ix.medicalInsuranceTarget >= 0 ? String(row[ix.medicalInsuranceTarget] ?? '').trim() : '';
+    let diseaseName = diseaseRaw;
+    if (diseaseName) {
+      const pd = parseCareLevelFromText(diseaseName);
+      if (pd.careLevel && pd.remainder && pd.remainder !== '—') diseaseName = pd.remainder;
+    }
+    if (!diseaseName || diseaseName === '—') {
+      if (medicalInsuranceCellLooksLikeDiseaseName(medicalInsuranceTargetLabel)) {
+        diseaseName = medicalInsuranceTargetLabel;
+      }
+    }
+    if ((!conditionDisplay || conditionDisplay === '—') && diseaseName && diseaseName !== '—') {
+      conditionDisplay = diseaseName;
+    }
     let isMedicalInsuranceTarget = parseMedicalTargetCell(medicalInsuranceTargetLabel);
     const useNonEmptyMedicalRule =
       Boolean(options?.medicalInsuranceTargetNonEmptyMeansTrue) || isAozoraOkiSheet;
@@ -1330,6 +1344,7 @@ function rowsToResidents(rows, defaultFacilityName, options) {
       nameKana,
       room: room || '—',
       condition: conditionDisplay,
+      diseaseName: diseaseName && diseaseName !== '—' ? diseaseName : undefined,
       careLevelLabel: careLevelNormalized,
       insuranceLabel,
       insuranceCategory,
@@ -1488,7 +1503,7 @@ export function aggregateFacilityStatsFromSheetRows(rows, defaultFacilityName, o
     room: colIndex(headers, ['部屋', '居室', '号室', 'room', '部屋番号', '居室番号']),
     status: colIndex(headers, ['入居状況', '状況', 'ステータス', '入所状況', 'status']),
     careLevel: colIndexCareLevel(headers),
-    disease: colIndex(headers, ['主たる疾患', '主疾患', '疾病', '診断名']),
+    disease: colIndex(headers, ['病名', '主たる疾患', '主疾患', '疾病', '診断名', '診断']),
     fallbackNote: colIndex(headers, ['コンディション', 'condition', 'メモ', '特記', '備考', 'コメント']),
     insurance: colIndexInsuranceKind(headers),
     medicalInsuranceTarget: colIndexMedicalInsuranceTarget(headers),
@@ -1695,17 +1710,19 @@ export async function fetchResidentsStatsByFacility(apiKey) {
 }
 
 /**
+ * @param {string} spreadsheetId
  * @param {string} apiKey
  * @returns {Promise<{ title: string; sheetId: number }[]>}
  */
-async function fetchSheetTabs(apiKey) {
-  const id = encodeURIComponent(CARELINK_RESIDENT_SPREADSHEET_ID);
+export async function fetchSpreadsheetTabs(spreadsheetId, apiKey) {
+  const id = encodeURIComponent(String(spreadsheetId ?? '').trim());
+  if (!id) throw new Error('スプレッドシート ID が空です');
   const url = `${SHEETS_API}/${id}?fields=sheets(properties(sheetId,title,hidden))&key=${encodeURIComponent(apiKey)}`;
   const { res, data } = await sheetsGetJsonWithRetry(url);
   if (!res.ok || data.error) {
     const msg = data.error?.message ?? 'スプレッドシートのメタデータ取得に失敗しました';
     throw new Error(
-      `${msg}（Sheets API が有効か、スプレッドシート ID が正しいか確認してください）`
+      `${msg}（Sheets API が有効か、スプレッドシート ID が正しいか、API キーに読取権限があるか確認してください）`
     );
   }
   const sheets = data.sheets ?? [];
@@ -1713,6 +1730,36 @@ async function fetchSheetTabs(apiKey) {
     .map((s) => s.properties)
     .filter((p) => p && !p.hidden)
     .map((p) => ({ title: p.title, sheetId: p.sheetId }));
+}
+
+/**
+ * @param {string} apiKey
+ * @returns {Promise<{ title: string; sheetId: number }[]>}
+ */
+async function fetchSheetTabs(apiKey) {
+  return fetchSpreadsheetTabs(CARELINK_RESIDENT_SPREADSHEET_ID, apiKey);
+}
+
+/**
+ * gid（URL の gid=）でタブを指定して値を取得
+ * @param {string} spreadsheetId
+ * @param {string} apiKey
+ * @param {number} sheetGid
+ * @param {string} [rangeA1WithinSheet]
+ */
+export async function fetchSpreadsheetValuesByGid(
+  spreadsheetId,
+  apiKey,
+  sheetGid,
+  rangeA1WithinSheet = 'A1:Z200'
+) {
+  const tabs = await fetchSpreadsheetTabs(spreadsheetId, apiKey);
+  const gidNum = Number(sheetGid);
+  const tab = tabs.find((t) => t.sheetId === gidNum);
+  if (!tab) {
+    throw new Error(`gid=${sheetGid} のタブが見つかりません（URL の #gid= を確認してください）`);
+  }
+  return fetchAnySheetValues(spreadsheetId, apiKey, tab.title, rangeA1WithinSheet);
 }
 
 /**

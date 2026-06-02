@@ -64,7 +64,18 @@ import {
 import { buildHourlyCareFromEvents, tokyoDateHourToIso, tokyoHourFromTs } from '../lib/hourlyCareGrid.js';
 import { bulkCareEventTs, parseMealAmountFieldsFromLog } from '../lib/bulkCareEventTs.js';
 import { defaultEnteralMenuFromResident } from '../lib/residentDetailSeed.js';
+import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
+import {
+  buildInjuryDiseaseLabelMapFromRows,
+  countInjuryDiseaseDataRows,
+  decodeInjuryDiseaseCsvFromBytes,
+  findInjuryDiseaseCsvLayout,
+  inferYmFromInjuryCsvFileName,
+  inferYmFromInjuryCsvRows,
+  matchInjuryDiseaseMapToResidents,
+} from '../lib/injuryDiseaseCsv.js';
 import { CareAutoBackupPanel } from '../components/CareAutoBackupPanel.jsx';
+import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
 import { parsePharmacyMedicationPdf } from '../lib/pharmacyMedicationPdf.js';
 import { normalizePatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { AccidentMonthlyAnalysisModal } from '../components/AccidentMonthlyAnalysisModal.jsx';
@@ -378,6 +389,103 @@ function parseCsvDateCellToYmd(raw, defaultYm) {
     return `${defaultYm}-${String(mShort[1]).padStart(2, '0')}-${String(mShort[2]).padStart(2, '0')}`;
   }
   return '';
+}
+
+/**
+ * CSVの日付・日時セルを ISO 文字列へ（排便日時・バイタル測定日など共用）
+ * @param {string} [cell]
+ * @param {string} [defaultYm] YYYY-MM（日のみ「28」等の解釈用）
+ */
+function parseCsvDateTimeCellToIso(cell, defaultYm = '') {
+  const t = String(cell ?? '').trim();
+  if (!t) return null;
+  const d = new Date(t.replace(/\//g, '-'));
+  if (!Number.isNaN(d.getTime()) && /\d{4}/.test(t)) return d.toISOString();
+  const m = /^(\d{4})[\/.\-年](\d{1,2})[\/.\-月](\d{1,2})[ T](\d{1,2}):(\d{2})/.exec(t.replace(/年|月|日/g, '/'));
+  if (m)
+    return new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5])
+    ).toISOString();
+  const m2 = /^(\d{1,2})[\/.\-](\d{1,2})[ T](\d{1,2}):(\d{2})/.exec(t);
+  if (m2) {
+    const ymd = parseCsvDateCellToYmd(`${m2[1]}/${m2[2]}`, defaultYm);
+    if (ymd) {
+      const [y, mo, day] = ymd.split('-').map(Number);
+      return new Date(y, mo - 1, day, Number(m2[3]), Number(m2[4])).toISOString();
+    }
+    const y = new Date().getFullYear();
+    return new Date(y, Number(m2[1]) - 1, Number(m2[2]), Number(m2[3]), Number(m2[4])).toISOString();
+  }
+  const ymdOnly = parseCsvDateCellToYmd(t, defaultYm);
+  if (ymdOnly) {
+    const [y, mo, day] = ymdOnly.split('-').map(Number);
+    return new Date(y, mo - 1, day, 12, 0, 0).toISOString();
+  }
+  const m3 = /^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/.exec(t);
+  if (m3)
+    return new Date(Number(m3[1]), Number(m3[2]) - 1, Number(m3[3]), 12, 0, 0).toISOString();
+  const m4 = /^(\d{1,2})[\/.\-](\d{1,2})$/.exec(t);
+  if (m4) {
+    const ymd = parseCsvDateCellToYmd(t, defaultYm);
+    if (ymd) {
+      const [y, mo, day] = ymd.split('-').map(Number);
+      return new Date(y, mo - 1, day, 12, 0, 0).toISOString();
+    }
+    const y = new Date().getFullYear();
+    return new Date(y, Number(m4[1]) - 1, Number(m4[2]), 12, 0, 0).toISOString();
+  }
+  return null;
+}
+
+/** @param {string[]} headers */
+function buildVitalsCsvDateFieldIndexes(headers) {
+  const h = (headers || []).map((x) => stripCsvBom(String(x ?? '')).trim());
+  const ix = (pred) => h.findIndex(pred);
+  const dateCol = ix((c) => {
+    if (/排便/u.test(c)) return false;
+    return (
+      /^日付$|^測定日$|^実施日$|^記録日$|^利用日$|^サービス提供日$|^提供日$|^年月日$|^測定日時$/u.test(
+        c
+      ) || /^バイタル.*日/u.test(c)
+    );
+  });
+  const startTime = ix((c) => /^開始時間$/u.test(c));
+  const measureTime = ix((c) => /測定.*(時刻|時間)|記録時刻/u.test(c));
+  return { dateCol, timeCol: measureTime >= 0 ? measureTime : startTime };
+}
+
+/**
+ * バイタルCSV行の測定日時（日付列＋時刻列、または開始時間のみ）
+ * @param {string} dateCell
+ * @param {string} timeCell
+ * @param {string} defaultYm YYYY-MM
+ */
+function parseVitalsCsvRowTimestamp(dateCell, timeCell, defaultYm) {
+  const dateStr = String(dateCell ?? '').trim();
+  const timeStr = String(timeCell ?? '').trim();
+  if (dateStr && /\d{1,2}:\d{2}/.test(dateStr)) {
+    const iso = parseCsvDateTimeCellToIso(dateStr, defaultYm);
+    if (iso) return iso;
+  }
+  const ymd = parseCsvDateCellToYmd(dateStr, defaultYm);
+  if (ymd) {
+    if (timeStr) {
+      const tm = /^(\d{1,2}):(\d{2})/.exec(timeStr);
+      if (tm) {
+        const [y, mo, d] = ymd.split('-').map(Number);
+        return new Date(y, mo - 1, d, Number(tm[1]), Number(tm[2])).toISOString();
+      }
+      const fromTime = parseCsvDateTimeCellToIso(timeStr, defaultYm);
+      if (fromTime) return fromTime;
+    }
+    const [y, mo, d] = ymd.split('-').map(Number);
+    return new Date(y, mo - 1, d, 12, 0, 0).toISOString();
+  }
+  return parseCsvDateTimeCellToIso(timeStr, defaultYm) || parseCsvDateTimeCellToIso(dateStr, defaultYm);
 }
 
 /**
@@ -826,6 +934,7 @@ export function RecordPage({
   const [nearMissOpen, setNearMissOpen] = useState(false);
   const [nearMissMonthlyOpen, setNearMissMonthlyOpen] = useState(false);
   const [nearMissAwarenessAdminOpen, setNearMissAwarenessAdminOpen] = useState(false);
+  const [homeVisitNoteOpen, setHomeVisitNoteOpen] = useState(false);
   const [emergencyDraft, setEmergencyDraft] = useState(emptyEmergencyDraft);
   const [dictatingField, setDictatingField] = useState('');
   const dictationRef = useRef(/** @type {SpeechRecognition | null} */ (null));
@@ -850,18 +959,23 @@ export function RecordPage({
     /** @type {Record<string, { temp: string; bpU: string; bpL: string; pulse: string; spo2: string; patrol: boolean; meal: boolean; excretion: boolean }>} */ ({})
   );
   const [kaipokeImportStatus, setKaipokeImportStatus] = useState(
-    /** @type {{ kind: 'vitals' | 'monthly' | 'dayservice' | 'medpdf'; ok: boolean; message: string; at: number; fileName: string } | null} */ (
+    /** @type {{ kind: 'vitals' | 'monthly' | 'dayservice' | 'medpdf' | 'injury'; ok: boolean; message: string; at: number; fileName: string } | null} */ (
       null
     )
   );
   const kaipokeCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const kaipokeMonthlyCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const kaipokeDayServiceCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
+  const injuryDiseaseCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const medicationPdfInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const [daySvcExternalFor, setDaySvcExternalFor] = useState(/** @type {Record<string, unknown> | null} */ (null));
   const [daySvcExternalDraft, setDaySvcExternalDraft] = useState(/** @type {Record<string, boolean>} */ ({}));
   /** カード「周囲事項」手入力の再描画用（localStorage 更新後にインクリメント） */
   const [surroundMemoRev, setSurroundMemoRev] = useState(0);
+  /** 個別申し送り・施設共通申し送りの再読込（App から戻ったとき等） */
+  const [roomNotesRev, setRoomNotesRev] = useState(0);
+  const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
+  const [facilityHandoverSaveFlash, setFacilityHandoverSaveFlash] = useState(false);
   const [surroundTextEditId, setSurroundTextEditId] = useState('');
   const [surroundDraftText, setSurroundDraftText] = useState('');
   const [surroundHandwritingId, setSurroundHandwritingId] = useState('');
@@ -1260,6 +1374,43 @@ export function RecordPage({
     const k = selectedDef?.linkKey ?? '';
     return k ? Report.getNursingDirectives(k) : [];
   }, [selectedDef, nursingRev]);
+
+  const facilityHandoverMeta = useMemo(() => {
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    return k ? Report.getFacilityHandoverMeta(k) : { text: '', updatedAt: '' };
+  }, [selectedDef, roomNotesRev]);
+
+  const individualHandoverList = useMemo(
+    () => Report.listIndividualHandoversForResidents(displayResidents),
+    [displayResidents, roomNotesRev]
+  );
+
+  const continuousHandoverText =
+    String(facilityHandoverMeta.text ?? '').trim() || String(board.handover ?? '').trim();
+
+  useEffect(() => {
+    setFacilityHandoverDraft(continuousHandoverText);
+  }, [continuousHandoverText, selectedDef?.linkKey]);
+
+  useEffect(() => {
+    const bump = () => setRoomNotesRev((n) => n + 1);
+    window.addEventListener('focus', bump);
+    window.addEventListener('carelink-handover-storage', bump);
+    return () => {
+      window.removeEventListener('focus', bump);
+      window.removeEventListener('carelink-handover-storage', bump);
+    };
+  }, []);
+
+  const saveFacilityHandoverFromList = useCallback(() => {
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    if (!k) return;
+    Report.setFacilityHandoverNote(k, facilityHandoverDraft);
+    setRoomNotesRev((n) => n + 1);
+    setFacilityHandoverSaveFlash(true);
+    window.setTimeout(() => setFacilityHandoverSaveFlash(false), 1500);
+  }, [selectedDef, facilityHandoverDraft]);
+
   const weeklyPlanDays = useMemo(() => {
     void tick;
     const k = selectedDef?.linkKey ?? '';
@@ -1305,7 +1456,7 @@ export function RecordPage({
         medicalAddress: String(prev.medicalAddress ?? '').trim(),
         dailyLife: narrative.dailyLife,
         nurseProblems: narrative.nurseProblems,
-        acuteChange: String(prev.acuteChange ?? '').trim(),
+        acuteChange: String(prev.acuteChange ?? '').trim() || Report.buildEmergencyAcuteChangeHint(resident),
         nurseContent: narrative.nurseContent,
         careNotes: narrative.careNotes,
         other: String(prev.other ?? '').trim(),
@@ -1324,7 +1475,7 @@ export function RecordPage({
         forceRefresh: Boolean(isManualRefresh),
       });
       if (seq !== loadSeqRef.current) return;
-      setAllResidents(residents);
+      setAllResidents(Report.applyInjuryDiseaseImportsToResidentList(residents));
       setFetchSourceMeta({
         source: String(source ?? ''),
         mode: String(mode ?? ''),
@@ -1597,7 +1748,7 @@ export function RecordPage({
       const extrasTrim = String(mealExtras ?? '').trim();
       const maForLog = [ma, extrasTrim].filter(Boolean).join(' ／ ').trim();
       const wm = String(waterMl ?? '').trim();
-      const med = medicationTaken === 'yes' || medicationTaken === 'no' ? medicationTaken : '';
+      const med = medicationTaken === 'yes' ? 'yes' : '';
       const mts = bulkCareEventTs(ymdLog, 'meal', { mealSlot: slot });
       Report.removeCareEventsByResidentAtMinute(id, mts, ['meal']);
       if (slot || maForLog || wm || med) {
@@ -2190,42 +2341,7 @@ export function RecordPage({
   const importKaipokeVitalsCsv = useCallback(
     (file) => {
       if (!file) return;
-      /** @param {string} [cell] */
-      const parseCellToStoolIso = (cell) => {
-        const t = String(cell ?? '').trim();
-        if (!t) return null;
-        const d = new Date(t.replace(/\//g, '-'));
-        if (!Number.isNaN(d.getTime())) return d.toISOString();
-        const m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})[ T](\d{1,2}):(\d{2})/.exec(t);
-        if (m)
-          return new Date(
-            Number(m[1]),
-            Number(m[2]) - 1,
-            Number(m[3]),
-            Number(m[4]),
-            Number(m[5])
-          ).toISOString();
-        const m2 = /^(\d{1,2})[\/\-](\d{1,2})[ T](\d{1,2}):(\d{2})/.exec(t);
-        if (m2) {
-          const y = new Date().getFullYear();
-          return new Date(
-            y,
-            Number(m2[1]) - 1,
-            Number(m2[2]),
-            Number(m2[3]),
-            Number(m2[4])
-          ).toISOString();
-        }
-        const m3 = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(t);
-        if (m3)
-          return new Date(Number(m3[1]), Number(m3[2]) - 1, Number(m3[3]), 12, 0, 0).toISOString();
-        const m4 = /^(\d{1,2})[\/\-](\d{1,2})$/.exec(t);
-        if (m4) {
-          const y = new Date().getFullYear();
-          return new Date(y, Number(m4[1]) - 1, Number(m4[2]), 12, 0, 0).toISOString();
-        }
-        return null;
-      };
+      const defaultYm = auditMonth;
       const reader = new FileReader();
       reader.onload = () => {
         const buf = reader.result;
@@ -2281,9 +2397,12 @@ export function RecordPage({
         }
         const { headerRow, nameCol: nameColIdx } = layout;
         const headers = (rows[headerRow] || []).map((x) => stripCsvBom(String(x ?? '')).trim());
+        const dateIdx = buildVitalsCsvDateFieldIndexes(headers);
         const idx = {
           name: nameColIdx,
           kana: headers.findIndex((h) => /利用者カナ|フリガナ|ふりがな|カナ/u.test(String(h ?? ''))),
+          dateCol: dateIdx.dateCol,
+          timeCol: dateIdx.timeCol,
           temp: headers.findIndex((h) => {
             const hn = String(h);
             if (/血圧|目標/i.test(hn)) return false;
@@ -2305,6 +2424,9 @@ export function RecordPage({
           return a != null ? stripCsvBom(String(a)) : '';
         };
         let applied = 0;
+        let skippedNoDate = 0;
+        /** @type {Set<string>} */
+        const affectedIds = new Set();
         const resolveResidentForCsvRow = (nameCell, kanaCell) => {
           const inCurrent = findResidentForVitalsCsvName(filteredResidents, nameCell);
           if (inCurrent) return inCurrent;
@@ -2330,29 +2452,53 @@ export function RecordPage({
           if (idx.weight >= 0) patch.weight = getCell(row, idx.weight);
           if (idx.urine >= 0) patch.urineNote = getCell(row, idx.urine);
           if (Object.keys(patch).length === 0) continue;
-          Report.setResidentVitalSnapshot(String(hit.id), patch);
+          const ts = parseVitalsCsvRowTimestamp(
+            getCell(row, idx.dateCol),
+            getCell(row, idx.timeCol),
+            defaultYm
+          );
+          if (!ts) {
+            skippedNoDate += 1;
+            continue;
+          }
+          const rid = String(hit.id);
+          Report.removeCareEventsByResidentAtMinute(rid, ts, ['vital_snapshot']);
           Report.logVitalSnapshot(
-            String(hit.id),
+            rid,
             String(hit.name ?? ''),
             String(hit.sourceSheetTitle ?? hit.facility ?? selectedSheetTitle),
-            patch
+            patch,
+            ts
           );
+          affectedIds.add(rid);
           if (idx.stool >= 0) {
-            const iso = parseCellToStoolIso(getCell(row, idx.stool));
-            if (iso) Report.setLastStoolIso(String(hit.id), iso);
+            const iso = parseCsvDateTimeCellToIso(getCell(row, idx.stool), defaultYm);
+            if (iso) Report.setLastStoolIso(rid, iso);
           }
           applied += 1;
         }
+        for (const id of affectedIds) {
+          Report.syncResidentVitalSnapshotFromLatestEvent(id);
+        }
         if (applied > 0) {
           setTick((n) => n + 1);
+          const dateHint =
+            idx.dateCol < 0 && idx.timeCol < 0
+              ? '（日付列が見つからず取り込めなかった行があります）'
+              : skippedNoDate > 0
+                ? `（日付不明 ${skippedNoDate} 行はスキップ）`
+                : idx.dateCol < 0
+                  ? `（開始時間等から日付を解釈。日のみの列は対象月 ${defaultYm}）`
+                  : '';
+          const msg = `${applied}件のバイタルを記録しました（${affectedIds.size}名）${dateHint}`;
           setKaipokeImportStatus({
             kind: 'vitals',
             ok: true,
-            message: `${applied}名のバイタルを利用者情報に反映しました。`,
+            message: msg,
             at: Date.now(),
             fileName: String(file.name ?? ''),
           });
-          alert(`${applied}名のバイタルを利用者情報に反映しました`);
+          alert(msg);
         } else {
           setKaipokeImportStatus({
             kind: 'vitals',
@@ -2378,7 +2524,165 @@ export function RecordPage({
       };
       reader.readAsArrayBuffer(file);
     },
-    [filteredResidents, allResidents, selectedSheetTitle]
+    [filteredResidents, allResidents, selectedSheetTitle, auditMonth]
+  );
+
+  const importInjuryDiseaseCsv = useCallback(
+    (file) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const buf = reader.result;
+        if (!(buf instanceof ArrayBuffer)) {
+          setKaipokeImportStatus({
+            kind: 'injury',
+            ok: false,
+            message: 'ファイルの読み込み形式が不正です。',
+            at: Date.now(),
+            fileName: String(file.name ?? ''),
+          });
+          alert('ファイルの読み込み形式が不正です。');
+          return;
+        }
+        const text = decodeInjuryDiseaseCsvFromBytes(buf);
+        const rows = parseVitalsImportDelimitedText(text);
+        if (rows.length < 1) {
+          setKaipokeImportStatus({
+            kind: 'injury',
+            ok: false,
+            message: '内容が空で取り込めませんでした。',
+            at: Date.now(),
+            fileName: String(file.name ?? ''),
+          });
+          alert('内容が空のため取り込めませんでした。');
+          return;
+        }
+        const injuryLayout = findInjuryDiseaseCsvLayout(rows);
+        if (!injuryLayout) {
+          setKaipokeImportStatus({
+            kind: 'injury',
+            ok: false,
+            message: '「利用者名」「傷病名」列のヘッダが見つかりませんでした。',
+            at: Date.now(),
+            fileName: String(file.name ?? ''),
+          });
+          alert(
+            '傷病一覧形式の CSV ではありません。「利用者名」「指示区分」「有効期間」「傷病名」の列があるファイルを選んでください。\n（Shift_JIS で保存された CSV は文字コードを自動判定します。Excel で開いて UTF-8 で再保存したファイルでも可）'
+          );
+          return;
+        }
+        const dataRowCount = countInjuryDiseaseDataRows(rows, injuryLayout);
+        if (dataRowCount < 1) {
+          setKaipokeImportStatus({
+            kind: 'injury',
+            ok: false,
+            message: `CSVにデータ行がありません（見出しのみ・約${buf.byteLength}バイト）。`,
+            at: Date.now(),
+            fileName: String(file.name ?? ''),
+          });
+          alert(
+            `この CSV には見出し行しか入っていません（約 ${buf.byteLength} バイト）。\n利用者名・傷病名の行が並んだファイルを、カイポケから「傷病一覧」を再度 CSV 出力してください。\n（参考: 5月分は約 13KB。今のファイルは中身が空の可能性が高いです）`
+          );
+          return;
+        }
+        const ymFromFile = inferYmFromInjuryCsvFileName(file.name);
+        const ymFromRows = inferYmFromInjuryCsvRows(rows);
+        let targetYm = auditMonth;
+        let labelMap = buildInjuryDiseaseLabelMapFromRows(rows, targetYm);
+        let ymNote = '';
+        if (labelMap.size < 1 && ymFromRows && ymFromRows !== auditMonth) {
+          targetYm = ymFromRows;
+          labelMap = buildInjuryDiseaseLabelMapFromRows(rows, targetYm);
+          ymNote = `（画面上部の対象月は ${auditMonth} でしたが、CSV の日付から ${targetYm} として取り込みました）`;
+        }
+        if (labelMap.size < 1 && ymFromFile && ymFromFile !== targetYm) {
+          targetYm = ymFromFile;
+          labelMap = buildInjuryDiseaseLabelMapFromRows(rows, targetYm);
+          ymNote = `（ファイル名の月から ${targetYm} として取り込みました）`;
+        }
+        if (labelMap.size < 1) {
+          const hint = ymFromRows || ymFromFile || '（CSV内の日付から判定できず）';
+          setKaipokeImportStatus({
+            kind: 'injury',
+            ok: false,
+            message: `対象月（${auditMonth}）に該当する傷病行がありませんでした。CSVの月の目安: ${hint}`,
+            at: Date.now(),
+            fileName: String(file.name ?? ''),
+          });
+          alert(
+            `対象月（${auditMonth}）と重なる有効期間の行がありません（データ行は ${dataRowCount} 件あり）。\n画面上部の「対象月」を CSV の月に合わせてください（例: 令和8年6月 → 2026-06）。\nCSV内の日付から推定した月: ${hint}`
+          );
+          return;
+        }
+        const scopeResidents = allResidents.length ? allResidents : filteredResidents;
+        const { updated, byId, matched, csvNames, unmatched } = matchInjuryDiseaseMapToResidents(
+          scopeResidents,
+          labelMap
+        );
+        const patch = Object.fromEntries(
+          Object.entries(byId).map(([id, row]) => [id, { label: row.label, ym: targetYm }])
+        );
+        Report.mergeInjuryDiseaseImportPatch(patch, targetYm);
+        if (targetYm !== auditMonth) setAuditMonth(targetYm);
+        setAllResidents((prev) => {
+          const base = prev.length ? prev : scopeResidents;
+          const patchedIds = new Set(Object.keys(byId));
+          return base.map((r) => {
+            const id = String(r.id ?? '');
+            if (!patchedIds.has(id)) return r;
+            const label = String(byId[id]?.label ?? '').trim();
+            if (!label) return r;
+            return { ...r, diseaseName: label, condition: label };
+          });
+        });
+        if (matched === 0) {
+          const getCell = (row, i) => (i >= 0 && row?.[i] != null ? String(row[i]).replace(/^\uFEFF/, '').trim() : '');
+          const sampleCsvNames = [];
+          for (let r = injuryLayout.headerRow + 1; r < rows.length; r++) {
+            const nm = getCell(rows[r], injuryLayout.nameCol);
+            if (!nm) continue;
+            if (!sampleCsvNames.includes(nm)) sampleCsvNames.push(nm);
+            if (sampleCsvNames.length >= 6) break;
+          }
+          const sampleRosterNames = scopeResidents.slice(0, 6).map((x) => String(x?.name ?? '').trim()).filter(Boolean);
+          const msg0 = `傷病一覧CSVは読み込めましたが、名簿一致が0名でした。施設タブが違う可能性があります。\n\nCSV例: ${
+            sampleCsvNames.join(' / ') || '（取得不可）'
+          }\n名簿例: ${sampleRosterNames.join(' / ') || '（取得不可）'}\n\n対処: ①正しい施設タブで実行 ②氏名表記（スペース・漢字）を合わせる`;
+          setKaipokeImportStatus({
+            kind: 'injury',
+            ok: false,
+            message: `名簿一致 0名。施設タブまたは氏名表記を確認してください。`,
+            at: Date.now(),
+            fileName: String(file.name ?? ''),
+          });
+          alert(msg0);
+          return;
+        }
+        const msg = `傷病一覧を反映しました。CSV ${csvNames}名 → 名簿一致 ${matched}名${
+          unmatched > 0 ? `（未一致 ${unmatched}名は名簿の氏名を確認）` : ''
+        }。対象月 ${targetYm} の「通常指示」を優先して病名を結合しています。${ymNote}`;
+        setKaipokeImportStatus({
+          kind: 'injury',
+          ok: matched > 0,
+          message: msg,
+          at: Date.now(),
+          fileName: String(file.name ?? ''),
+        });
+        alert(msg);
+      };
+      reader.onerror = () => {
+        setKaipokeImportStatus({
+          kind: 'injury',
+          ok: false,
+          message: 'CSV読み込みに失敗しました。',
+          at: Date.now(),
+          fileName: String(file.name ?? ''),
+        });
+        alert('CSV読み込みに失敗しました');
+      };
+      reader.readAsArrayBuffer(file);
+    },
+    [allResidents, filteredResidents, auditMonth]
   );
 
   const importKaipokeMonthlySupplementCsv = useCallback(
@@ -2841,6 +3145,16 @@ export function RecordPage({
             className="hidden"
             onChange={(e) => importKaipokeMonthlySupplementCsv(e.target.files?.[0] ?? null)}
           />
+          <input
+            ref={injuryDiseaseCsvInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              importInjuryDiseaseCsv(e.target.files?.[0] ?? null);
+              e.target.value = '';
+            }}
+          />
           {facilityDayServiceMode === 'on_site_csv' ? (
             <input
               ref={kaipokeDayServiceCsvInputRef}
@@ -2881,6 +3195,15 @@ export function RecordPage({
           >
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             月次用CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => injuryDiseaseCsvInputRef.current?.click()}
+            className={`${hdrBtn} border-emerald-800 bg-emerald-800 text-white hover:bg-emerald-700`}
+            title={`カイポケ等の「傷病一覧」CSV。対象月「${auditMonth}」と重なる行の傷病名を利用者ごとに結合し、カード・一覧表・個人画面の「病名」に反映します（通常指示を優先）。`}
+          >
+            <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
+            傷病一覧CSV
           </button>
           {facilityDayServiceMode === 'on_site_csv' ? (
             <button
@@ -2953,6 +3276,9 @@ export function RecordPage({
       <div className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 sm:text-xs">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-cyan-700">バイタルCSV: 利用者カードの「直近バイタル」に反映</span>
+          <span className="text-emerald-800">
+            傷病一覧CSV: 対象月 {auditMonth} の傷病名 → 各利用者の「病名」（名簿の氏名と照合・通常指示優先）
+          </span>
           <span className="text-fuchsia-700">
             月次用CSV: カイポケ訪問記録形式のみ → 月次ご報告（AI・印刷HTML）／対象月 {auditMonth}／保存済み{' '}
             {monthlyImportedSummary.residentCount}名・{monthlyImportedSummary.lineCount}行（訪看スケジュール用ではありません）
@@ -2978,11 +3304,13 @@ export function RecordPage({
               ? 'バイタルCSV'
               : kaipokeImportStatus.kind === 'monthly'
                 ? '月次用CSV'
-                : kaipokeImportStatus.kind === 'dayservice'
-                  ? 'デイ予定CSV'
-                  : kaipokeImportStatus.kind === 'medpdf'
-                    ? '薬局PDF'
-                    : '取込'}
+                : kaipokeImportStatus.kind === 'injury'
+                  ? '傷病一覧CSV'
+                  : kaipokeImportStatus.kind === 'dayservice'
+                    ? 'デイ予定CSV'
+                    : kaipokeImportStatus.kind === 'medpdf'
+                      ? '薬局PDF'
+                      : '取込'}
             ]:
             {' '}
             {kaipokeImportStatus.message}
@@ -3220,21 +3548,33 @@ export function RecordPage({
                   />
                 </div>
               </div>
-              <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border-2 border-indigo-200/90 bg-indigo-50/95 p-2.5 shadow-md sm:p-3">
+              <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border-2 border-indigo-300 bg-indigo-50/95 p-2.5 shadow-md sm:p-3">
                 <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-indigo-900">
                   <ClipboardList className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />
-                  <h2 className="text-base font-bold sm:text-lg">申し送り</h2>
+                  <h2 className="text-base font-black sm:text-lg">介護からの申し送り</h2>
                   <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-black tracking-wide text-white">
                     施設共通
                   </span>
                 </div>
                 <p className="mb-2 text-[11px] font-bold leading-snug text-indigo-900/90">
-                  <span className="text-indigo-950">{selectedDef?.tabLabel ?? '施設'}</span>
-                  で共有中。個別の出来事は本文の先頭に <strong>利用者名・居室</strong> を入れてください（例：「〇〇様（101）　19時転倒…」）。
+                  介護チームで全体共有する継続事項。個別分は下の「申し送り一覧」に出ます（現在: {individualHandoverList.length}件）。
                 </p>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-indigo-950 sm:text-base 2xl:text-lg">
-                  {board.handover}
-                </p>
+                <textarea
+                  value={facilityHandoverDraft}
+                  onChange={(e) => setFacilityHandoverDraft(e.target.value)}
+                  rows={4}
+                  placeholder="例：夜間見守り強化／移乗は2名介助／水分促し など"
+                  className="w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+                <button
+                  type="button"
+                  onClick={saveFacilityHandoverFromList}
+                  className={`mt-2 w-full rounded-xl py-2 text-sm font-black text-white shadow-md ${
+                    facilityHandoverSaveFlash ? 'bg-emerald-600' : 'bg-indigo-600 hover:bg-indigo-500'
+                  }`}
+                >
+                  {facilityHandoverSaveFlash ? '保存しました' : '介護申し送りを保存'}
+                </button>
               </div>
               <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border-2 border-teal-300/90 bg-teal-50/95 p-2.5 shadow-md sm:p-3">
                 <div className="mb-2 flex items-center gap-2 text-teal-900">
@@ -3261,6 +3601,108 @@ export function RecordPage({
                 </ul>
               </div>
               </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-indigo-300 bg-white p-2.5 shadow-md sm:p-4">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <ClipboardList className="h-6 w-6 shrink-0 text-indigo-700" />
+                <h2 className="text-base font-black text-indigo-950 sm:text-lg">申し送り一覧</h2>
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-black text-indigo-900">
+                  {selectedDef?.tabLabel ?? '施設'}
+                </span>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2 lg:items-start">
+                <div className="flex min-h-0 flex-col rounded-xl border-2 border-indigo-200 bg-indigo-50/80 p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-black text-indigo-950">継続の申し送り（介護・施設共通）</h3>
+                    {facilityHandoverMeta.updatedAt ? (
+                      <span className="text-[10px] font-bold text-indigo-700">
+                        更新 {new Date(facilityHandoverMeta.updatedAt).toLocaleString('ja-JP')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mb-2 text-[11px] font-bold leading-snug text-indigo-900/90">
+                    全利用者に共通する介護の継続事項。上段「介護からの申し送り」と同じ内容です。
+                  </p>
+                  <textarea
+                    value={facilityHandoverDraft}
+                    onChange={(e) => setFacilityHandoverDraft(e.target.value)}
+                    rows={6}
+                    placeholder="例：感染対策の継続／面会制限／フロア全体の見守り強化…"
+                    className="min-h-[7rem] w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveFacilityHandoverFromList}
+                    className={`mt-2 w-full rounded-xl py-2.5 text-sm font-black text-white shadow-md ${
+                      facilityHandoverSaveFlash ? 'bg-emerald-600' : 'bg-indigo-600 hover:bg-indigo-500'
+                    }`}
+                  >
+                    {facilityHandoverSaveFlash ? '保存しました' : '継続の申し送りを保存'}
+                  </button>
+                </div>
+
+                <div className="flex min-h-0 flex-col rounded-xl border-2 border-emerald-300 bg-emerald-50/50 p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-black text-emerald-950">
+                      個別の申し送り（利用者ごと）{' '}
+                      <span className="tabular-nums text-emerald-800">{individualHandoverList.length}件</span>
+                    </h3>
+                  </div>
+                  <p className="mb-2 text-[11px] font-bold leading-snug text-emerald-900/90">
+                    「行動メニュー → 個室メモ（申し送り・処置）」で登録した内容です。行を押すとその方の記録画面を開けます。
+                  </p>
+                  <div className="max-h-[min(420px,50vh)] overflow-auto rounded-lg border border-emerald-200 bg-white">
+                    {individualHandoverList.length === 0 ? (
+                      <p className="p-4 text-sm font-bold text-emerald-800">個別申し送りはまだありません。</p>
+                    ) : (
+                      <table className="w-full border-collapse text-left text-xs sm:text-sm">
+                        <thead className="sticky top-0 z-10 bg-emerald-100 text-[10px] font-black uppercase text-emerald-950 sm:text-xs">
+                          <tr>
+                            <th className="border-b border-emerald-200 px-2 py-1.5">居室</th>
+                            <th className="border-b border-emerald-200 px-2 py-1.5">氏名</th>
+                            <th className="border-b border-emerald-200 px-2 py-1.5">個別申し送り</th>
+                            <th className="border-b border-emerald-200 px-2 py-1.5">個別処置</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {individualHandoverList.map((row) => (
+                            <tr
+                              key={row.residentId}
+                              className="cursor-pointer border-b border-emerald-100 odd:bg-white even:bg-emerald-50/40 hover:bg-emerald-100/60"
+                              onClick={() => {
+                                const hit = displayResidents.find((r) => String(r.id) === row.residentId);
+                                if (hit && onSelectResident) onSelectResident(hit, displayResidents);
+                              }}
+                            >
+                              <td className="whitespace-nowrap px-2 py-2 font-mono font-bold text-slate-800">
+                                {row.room}
+                              </td>
+                              <td className="whitespace-nowrap px-2 py-2 font-bold text-slate-900">
+                                {residentNameWithoutSama(row.name)}
+                              </td>
+                              <td className="max-w-[14rem] px-2 py-2 font-bold leading-snug text-slate-800 sm:max-w-none">
+                                <span className="line-clamp-3 whitespace-pre-wrap">{row.handover || '—'}</span>
+                              </td>
+                              <td className="max-w-[10rem] px-2 py-2 font-bold leading-snug text-slate-700 sm:max-w-none">
+                                <span className="line-clamp-2 whitespace-pre-wrap">{row.treatment || '—'}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {continuousHandoverText ? (
+                <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/60 px-3 py-2">
+                  <p className="text-[10px] font-black text-indigo-800">継続の申し送り（掲示用プレビュー）</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm font-bold leading-relaxed text-indigo-950">
+                    {continuousHandoverText}
+                  </p>
+                </div>
+              ) : null}
             </div>
           </section>
 
@@ -3450,6 +3892,14 @@ export function RecordPage({
                       </div>
                       <button
                         type="button"
+                        onClick={() => setHomeVisitNoteOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border-2 border-teal-500 bg-teal-50 px-3 py-2 text-xs font-black text-teal-950 hover:bg-teal-100"
+                      >
+                        <Stethoscope className="h-4 w-4 shrink-0" aria-hidden />
+                        往診ノート
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setResidentInputView('cards')}
                         className={`rounded-xl border-2 px-3 py-2 text-xs font-black sm:text-sm ${
                           residentInputView === 'cards'
@@ -3541,7 +3991,7 @@ export function RecordPage({
                     const surroundLocalText = String(surroundMemo.text ?? '').trim();
                     const surroundLocalHw = String(surroundMemo.handwritingDataUrl ?? '').trim();
                     const surroundHasStaff = Boolean(surroundLocalText || surroundLocalHw);
-                    const sheetCondition = String(res.condition ?? '').trim();
+                    const sheetDisease = residentDiseaseLabel(res);
                     const sheetMeal = Number(res.mealCountThisMonth) || 0;
                     const mealTotal = sheetMeal + bill.mealLogged;
                     const mealBySlot = bill.mealLoggedBySlot ?? { 朝: 0, 昼: 0, 夜: 0 };
@@ -3550,6 +4000,30 @@ export function RecordPage({
                         selectedDef?.linkKey === '起' ||
                         selectedDef?.linkKey === '一宮') &&
                       String(res.homeDoctor ?? '').trim();
+                    const clinicRaw = String(res.homeDoctor ?? '').trim();
+                    const clinicBadge = (() => {
+                      if (!clinicRaw) return null;
+                      if (/田中/u.test(clinicRaw)) {
+                        return { label: `田中: ${clinicRaw}`, cls: 'border-blue-400 bg-blue-100 text-blue-900' };
+                      }
+                      if (/ひのとり/u.test(clinicRaw)) {
+                        return { label: `ひのとり: ${clinicRaw}`, cls: 'border-rose-400 bg-rose-100 text-rose-900' };
+                      }
+                      if (/北名古屋/u.test(clinicRaw)) {
+                        return { label: `北名古屋: ${clinicRaw}`, cls: 'border-amber-400 bg-amber-100 text-amber-900' };
+                      }
+                      return { label: clinicRaw, cls: 'border-slate-300 bg-slate-100 text-slate-800' };
+                    })();
+                    const clinicCardTone = (() => {
+                      if (!clinicRaw) return '';
+                      if (/田中/u.test(clinicRaw)) return 'border-blue-300 bg-blue-50/40';
+                      if (/ひのとり/u.test(clinicRaw)) return 'border-rose-300 bg-rose-50/40';
+                      if (/北名古屋/u.test(clinicRaw)) return 'border-amber-300 bg-amber-50/40';
+                      return 'border-slate-200 bg-white';
+                    })();
+                    const roomNotes = Report.getResidentRoomNotes(String(res.id));
+                    const roomHandover = String(roomNotes.handover ?? '').trim();
+                    const roomTreatment = String(roomNotes.treatment ?? '').trim();
                     return (
                       <div
                         key={String(res.id)}
@@ -3558,7 +4032,7 @@ export function RecordPage({
                             ? 'animate-carelink-blink border-red-800 bg-red-600 text-white'
                             : warn
                               ? 'border-amber-500 bg-amber-100 text-slate-900'
-                              : 'border-slate-200 bg-white text-slate-900'
+                              : `${clinicCardTone} text-slate-900`
                         }`}
                       >
                         <div
@@ -3633,6 +4107,11 @@ export function RecordPage({
                               >
                                 {String(res.room)}
                               </span>
+                              {clinicBadge ? (
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${clinicBadge.cls}`}>
+                                  {clinicBadge.label}
+                                </span>
+                              ) : null}
                               <div className="flex shrink-0 gap-1">
                                 {critical && <AlertCircle className="h-6 w-6 text-white" />}
                                 {warn && !critical && <Clock className="h-5 w-5 animate-pulse text-amber-700" />}
@@ -3715,13 +4194,13 @@ export function RecordPage({
                                     className="max-h-24 w-full rounded-md border border-slate-200 bg-white object-contain object-left"
                                   />
                                 ) : null}
-                                {sheetCondition ? (
+                                {sheetDisease ? (
                                   <p
                                     className={`border-t pt-1 text-[10px] font-bold leading-snug ${
                                       critical ? 'border-white/20 text-red-100/90' : 'border-slate-200 text-slate-500'
                                     }`}
                                   >
-                                    名簿: {sheetCondition}
+                                    名簿: {sheetDisease}
                                   </p>
                                 ) : null}
                               </div>
@@ -3731,10 +4210,28 @@ export function RecordPage({
                                   critical ? 'text-red-100' : 'text-slate-600'
                                 }`}
                               >
-                                {sheetCondition || '—'}
+                                {sheetDisease || '—'}
                               </p>
                             )}
                           </div>
+                          {(roomHandover || roomTreatment) ? (
+                            <div
+                              className={`mt-2 rounded-lg border-2 px-2 py-1.5 text-[10px] leading-snug sm:text-[11px] ${
+                                critical ? 'border-white/35 bg-black/20 text-red-50' : 'border-emerald-300 bg-emerald-50 text-emerald-950'
+                              }`}
+                            >
+                              {roomHandover ? (
+                                <p className="line-clamp-2 whitespace-pre-wrap">
+                                  <span className="font-black">個別申し送り:</span> {roomHandover}
+                                </p>
+                              ) : null}
+                              {roomTreatment ? (
+                                <p className={`line-clamp-2 whitespace-pre-wrap ${roomHandover ? 'mt-1' : ''}`}>
+                                  <span className="font-black">個別処置:</span> {roomTreatment}
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
                           {String(res.insuranceLabel ?? '').trim() ? (
                             <div
                               className={`mt-1 line-clamp-2 text-[11px] font-bold sm:text-xs ${
@@ -3753,6 +4250,13 @@ export function RecordPage({
                               在宅医: {String(res.homeDoctor)}
                             </div>
                           ) : null}
+                          <div
+                            className={`mt-1 line-clamp-2 text-[11px] font-bold sm:text-xs ${
+                              critical ? 'text-red-100/90' : 'text-slate-700'
+                            }`}
+                          >
+                            病名: {sheetDisease || '—'}
+                          </div>
                           {nursingOfficeUi &&
                             (String(res.insuranceCategory ?? '') === '医療保険特指示' ||
                               /特指示|特別指示/u.test(String(res.insuranceLabel ?? ''))) && (
@@ -4110,7 +4614,7 @@ export function RecordPage({
         if (!rid) return null;
         const res =
           displayResidents.find((r) => String(r.id) === rid) ?? allResidents.find((r) => String(r.id) === rid);
-        const sheetHint = String(res?.condition ?? '').trim();
+        const sheetHint = residentDiseaseLabel(res);
         return (
           <div
             className="fixed inset-0 z-[207] flex items-center justify-center bg-black/60 p-4"
@@ -4479,6 +4983,16 @@ export function RecordPage({
         facilityTabLabel={selectedDef?.tabLabel ?? ''}
         sheetsApiKey={SHEETS_KEY}
         geminiKey={GEMINI_KEY}
+      />
+      <HomeVisitNoteModal
+        open={homeVisitNoteOpen}
+        onClose={() => setHomeVisitNoteOpen(false)}
+        facilityLabel={selectedDef?.tabLabel ?? selectedSheetTitle}
+        facilitySheetTitle={selectedSheetTitle}
+        facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
+        sheetsApiKey={SHEETS_KEY}
+        residents={displayResidents}
+        nursingOfficeUi={nursingOfficeUi}
       />
     </div>
   );

@@ -1,5 +1,5 @@
 /**
- * 生活記録 careEvents の IndexedDB 永続化（localStorage 容量超過対策・5年保管）
+ * 生活記録 careEvents の IndexedDB 永続化（localStorage 容量超過対策・5年超も保持）
  */
 import { pruneCareEventsBeyondRetention } from './careRecordRetention.js';
 

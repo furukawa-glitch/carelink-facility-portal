@@ -1,4 +1,4 @@
-/** 介護・生活記録の法定保存期間（年） */
+/** 介護・生活記録の法定最低保存期間（年）。表示・監査用。自動削除には使わない。 */
 export const CARE_RECORD_RETENTION_YEARS = 5;
 
 export const CARE_RECORD_RETENTION_MS = CARE_RECORD_RETENTION_YEARS * 365.25 * 24 * 60 * 60 * 1000;
@@ -14,19 +14,13 @@ export function isCareRecordWithinRetention(ts) {
 }
 
 /**
- * 保存義務期間（5年）を超えたイベントのみ除外
+ * 不正行のみ除外。5年超の記録は自動削除しない（データ内に保持）。
  * @param {unknown[]} list
  * @returns {unknown[]}
  */
 export function pruneCareEventsBeyondRetention(list) {
   if (!Array.isArray(list)) return [];
-  const cutoff = Date.now() - CARE_RECORD_RETENTION_MS;
-  return list.filter((e) => {
-    if (e == null || typeof e !== 'object') return false;
-    const t = new Date(e.ts).getTime();
-    if (!Number.isFinite(t)) return true;
-    return t >= cutoff;
-  });
+  return list.filter((e) => e != null && typeof e === 'object');
 }
 
 /**

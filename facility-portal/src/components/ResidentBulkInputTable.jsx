@@ -12,9 +12,11 @@ import {
   mapVoiceCareExtractToBulkRowPatch,
 } from '../lib/careQuickCareFields.js';
 import { HOURS_24 } from '../lib/hourlyCareGrid.js';
+import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
 import { PATROL_SLOT_HOURS, joinPatrolDateTimeLocal, splitPatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { VoiceCareInput } from './VoiceCareInput.jsx';
 import { VitalHandwritingModal } from './VitalHandwritingModal.jsx';
+import * as Report from '../services/ReportService.js';
 
 const DEFAULT_ROW = {
   temp: '',
@@ -47,6 +49,26 @@ const DEFAULT_ROW = {
 };
 
 const HOURLY_STOOL_DELIM = '\t';
+
+function fmtMeasuredAtJa(isoLike) {
+  const t = new Date(String(isoLike ?? ''));
+  if (!Number.isFinite(t.getTime())) return '';
+  return t.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtVitalFrontLabelFromMeta(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const parts = [
+    String(m.temp ?? '').trim() ? `${String(m.temp).trim()}℃` : '',
+    String(m.bpUpper ?? '').trim() || String(m.bpLower ?? '').trim()
+      ? `${String(m.bpUpper ?? '').trim() || '-'} / ${String(m.bpLower ?? '').trim() || '-'}`
+      : '',
+    String(m.pulse ?? '').trim() ? `P${String(m.pulse).trim()}` : '',
+    String(m.spo2 ?? '').trim() ? `SpO2 ${String(m.spo2).trim()}` : '',
+    String(m.weight ?? '').trim() ? `${String(m.weight).trim()}kg` : '',
+  ].filter(Boolean);
+  return parts.join(' ・ ');
+}
 
 function splitHourStoolCell(value) {
   const parsed = parseHourlyStoolCellValue(value);
@@ -197,38 +219,31 @@ export function ResidentBulkInputTable({
           >
             巡視し忘れ分を一括ON
           </button>
-          <button
-            type="button"
-            onClick={() => keepTableScrollPosition(saveBulkAllWithInput)}
-            className="rounded-xl border-2 border-emerald-600 bg-emerald-50 px-4 py-2.5 text-sm font-black text-emerald-900 hover:bg-emerald-100"
-          >
-            入力した行をまとめて保存
-          </button>
-          <button
-            type="button"
-            onClick={() => keepTableScrollPosition(saveBulkVitalsOnly)}
-            className="rounded-xl border-2 border-rose-500 bg-rose-50 px-4 py-2.5 text-sm font-black text-rose-900 hover:bg-rose-100"
-          >
-            バイタルのみ一括保存
-          </button>
         </div>
       </div>
       <div className="sticky bottom-2 z-20 mb-2 flex justify-end">
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border-2 border-emerald-300 bg-white/95 px-2 py-2 shadow-lg backdrop-blur-sm">
-          <button
-            type="button"
-            onClick={() => keepTableScrollPosition(saveBulkAllWithInput)}
-            className="rounded-xl border-2 border-emerald-600 bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 sm:text-sm"
-          >
-            一括保存（全入力）
-          </button>
-          <button
-            type="button"
-            onClick={() => keepTableScrollPosition(saveBulkVitalsOnly)}
-            className="rounded-xl border-2 border-rose-500 bg-rose-50 px-3 py-2 text-xs font-black text-rose-900 hover:bg-rose-100 sm:text-sm"
-          >
-            一括保存（バイタルのみ）
-          </button>
+        <div className="flex flex-col gap-1 rounded-xl border-2 border-emerald-300 bg-white/95 px-2 py-2 shadow-lg backdrop-blur-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => keepTableScrollPosition(saveBulkAllWithInput)}
+              className="rounded-xl border-2 border-emerald-600 bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 sm:text-sm"
+              title="入力がある行だけ、バイタル・食事・排泄・巡視などをまとめて保存"
+            >
+              一括保存（入力ありのみ）
+            </button>
+            <button
+              type="button"
+              onClick={() => keepTableScrollPosition(saveBulkVitalsOnly)}
+              className="rounded-xl border-2 border-rose-500 bg-rose-50 px-3 py-2 text-xs font-black text-rose-900 hover:bg-rose-100 sm:text-sm"
+              title="バイタル列（体温/血圧/脈拍/SpO2/体重/手書きメモ）だけ保存。巡視・食事・排泄は触りません"
+            >
+              一括保存（バイタルのみ）
+            </button>
+          </div>
+          <p className="px-1 text-[10px] font-bold leading-snug text-slate-500">
+            全入力=入力がある行だけ保存／バイタルのみ=バイタル列だけ保存
+          </p>
         </div>
       </div>
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
@@ -318,6 +333,9 @@ export function ResidentBulkInputTable({
                 氏名
               </th>
               <th className="border border-slate-200 px-0.5 py-1">部屋</th>
+              <th className="border border-slate-200 bg-emerald-50/70 px-0.5 py-1 whitespace-nowrap text-emerald-900" title="名簿の病名・主疾患列">
+                病名
+              </th>
               <th className="border border-slate-200 bg-rose-50/70 px-0.5 py-1 whitespace-nowrap text-rose-900">最新バイタル</th>
               <th className="border border-slate-200 bg-orange-50/70 px-0.5 py-1 whitespace-nowrap text-orange-900">食事</th>
               <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
@@ -360,13 +378,18 @@ export function ResidentBulkInputTable({
               >
                 誘導
               </th>
-              <th className="border border-slate-200 px-0.5 py-1">排便量</th>
               <th className="border border-slate-200 px-0.5 py-1">性状</th>
+              <th className="border border-slate-200 px-0.5 py-1">排便量</th>
               <th className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950" title="上の「朝・昼・夜」が保存時に入ります">
                 主食<span className="block text-[9px] font-bold normal-case">（区分は上）</span>
               </th>
               <th className="border border-slate-200 px-0.5 py-1">副食</th>
-              <th className="border border-slate-200 bg-violet-50 px-0.5 py-1 whitespace-nowrap text-violet-950" title="経口栄養（例: エンシュア）摂取割合">
+              <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
+              <th className="border border-slate-200 bg-violet-50/70 px-0.5 py-1 whitespace-nowrap text-violet-900">内服</th>
+              <th
+                className="border border-slate-200 bg-violet-50 px-0.5 py-1 whitespace-nowrap text-violet-950"
+                title="経口栄養（例: エンシュア）摂取割合"
+              >
                 エンシュア等
               </th>
               <th
@@ -375,13 +398,12 @@ export function ResidentBulkInputTable({
               >
                 経管メニュー<span className="block text-[9px] font-bold normal-case">自由記入</span>
               </th>
-              <th className="border border-slate-200 bg-amber-50 px-0.5 py-1 whitespace-nowrap text-amber-950"
+              <th
+                className="border border-slate-200 bg-amber-50 px-0.5 py-1 whitespace-nowrap text-amber-950"
                 title="間食・補助食・おやつなど。食事メモに連結して保存されます"
               >
                 間食・補助<span className="block text-[9px] font-bold normal-case">パン・バナナ等</span>
               </th>
-              <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
-              <th className="border border-slate-200 bg-violet-50/70 px-0.5 py-1 whitespace-nowrap text-violet-900">内服</th>
               <th
                 className="border border-slate-200 bg-orange-50/60 px-0.5 py-1 text-center text-orange-950"
                 title="保存で食事メモに計上する目安（1回を上限）。水分だけのときは食事回数には含まず、水分扱いになります"
@@ -395,6 +417,7 @@ export function ResidentBulkInputTable({
             {filteredResidents.map((res) => {
               const id = String(res.id);
               const nm = residentNameWithoutSama(res.name);
+              const diseaseLabel = residentDiseaseLabel(res);
               const row = { ...DEFAULT_ROW, ...bulkDraft[id] };
               const pa = splitPatrolDateTimeLocal(row.patrolAt);
               const mealKind = getQuickCareMealEventKind(row, bulkGlobalMealSlot);
@@ -407,7 +430,10 @@ export function ResidentBulkInputTable({
               const stoolCount =
                 hs.filter((v) => String(v ?? '').trim() !== '').length +
                 (String(row.stoolVolume ?? '').trim() || String(row.stoolCharacter ?? '').trim() ? 1 : 0);
-              const vitalFrontLabel = [
+              const latestVital = Report.getLatestVitalMetaForResident(id);
+              const vitalSavedLabel = fmtVitalFrontLabelFromMeta(latestVital.meta);
+              const vitalMeasuredAt = fmtMeasuredAtJa(latestVital.measuredAt);
+              const vitalDraftLabel = [
                 String(row.temp ?? '').trim() ? `${String(row.temp).trim()}℃` : '',
                 String(row.bpU ?? '').trim() || String(row.bpL ?? '').trim()
                   ? `${String(row.bpU ?? '').trim() || '-'} / ${String(row.bpL ?? '').trim() || '-'}`
@@ -417,6 +443,7 @@ export function ResidentBulkInputTable({
               ]
                 .filter(Boolean)
                 .join(' ・ ');
+              const vitalFrontLabel = vitalDraftLabel || vitalSavedLabel;
               const mealSlotLabel = String(row.mealSlot ?? '').trim() || String(bulkGlobalMealSlot ?? '').trim();
               const mealMainLabel = [
                 String(row.mealStaple ?? '').trim() ? `主${String(row.mealStaple).trim()}` : '',
@@ -479,8 +506,19 @@ export function ResidentBulkInputTable({
                     {nm}
                   </td>
                   <td className="border border-slate-200 px-1 py-1 text-center font-mono">{String(res.room ?? '')}</td>
+                  <td
+                    className="max-w-[8rem] border border-slate-200 bg-emerald-50/40 px-1 py-1 text-[10px] font-bold leading-snug text-emerald-950 sm:text-xs"
+                    title={diseaseLabel || '名簿に病名なし'}
+                  >
+                    <span className="line-clamp-3">{diseaseLabel || '—'}</span>
+                  </td>
                   <td className="border border-slate-200 bg-rose-50/50 px-1 py-1 text-[10px] font-bold text-rose-900 sm:text-xs">
-                    {vitalFrontLabel || '—'}
+                    <div className="leading-snug">
+                      <div className="line-clamp-2">{vitalFrontLabel || '—'}</div>
+                      {vitalMeasuredAt ? (
+                        <div className="mt-0.5 text-[9px] font-black text-rose-700/90">{vitalMeasuredAt}</div>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="border border-slate-200 bg-orange-50/50 px-1 py-1 text-[10px] font-bold text-orange-900 sm:text-xs">
                     <div className="space-y-0.5 leading-snug">
@@ -772,12 +810,12 @@ export function ResidentBulkInputTable({
                   </td>
                   <td className="border border-slate-200 p-0">
                     <select
-                      value={row.stoolVolume}
-                      onChange={(e) => patchBulkRow(id, { stoolVolume: e.target.value })}
-                      className="w-full min-w-[2.75rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 排便量`}
+                      value={row.stoolCharacter}
+                      onChange={(e) => patchBulkRow(id, { stoolCharacter: e.target.value })}
+                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
+                      aria-label={`${nm} 排便性状`}
                     >
-                      {STOOL_VOLUME_OPTIONS.map((opt) => (
+                      {STOOL_CHARACTER_OPTIONS.map((opt) => (
                         <option key={opt || 'empty'} value={opt}>
                           {opt || '—'}
                         </option>
@@ -786,12 +824,12 @@ export function ResidentBulkInputTable({
                   </td>
                   <td className="border border-slate-200 p-0">
                     <select
-                      value={row.stoolCharacter}
-                      onChange={(e) => patchBulkRow(id, { stoolCharacter: e.target.value })}
-                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 排便性状`}
+                      value={row.stoolVolume}
+                      onChange={(e) => patchBulkRow(id, { stoolVolume: e.target.value })}
+                      className="w-full min-w-[2.75rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
+                      aria-label={`${nm} 排便量`}
                     >
-                      {STOOL_CHARACTER_OPTIONS.map((opt) => (
+                      {STOOL_VOLUME_OPTIONS.map((opt) => (
                         <option key={opt || 'empty'} value={opt}>
                           {opt || '—'}
                         </option>
@@ -826,6 +864,30 @@ export function ResidentBulkInputTable({
                       ))}
                     </select>
                   </td>
+                  <td className="border border-slate-200 bg-sky-50/40 p-0">
+                    <select
+                      value={String(row.waterMl ?? '')}
+                      onChange={(e) => patchBulkRow(id, { waterMl: e.target.value })}
+                      className="w-full min-w-[3rem] bg-white px-1 py-1.5 font-mono text-sm font-bold sm:text-base"
+                      aria-label={`${nm} 水分量`}
+                    >
+                      {WATER_ML_50_OPTIONS.map((opt) => (
+                        <option key={opt.value || 'w-empty'} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="border border-slate-200 bg-violet-50/40 px-0.5 py-0 text-center">
+                    <input
+                      type="checkbox"
+                      checked={row.medicationTaken === 'yes'}
+                      onChange={(e) => patchBulkRow(id, { medicationTaken: e.target.checked ? 'yes' : '' })}
+                      className="h-5 w-5 accent-violet-700 sm:h-5 sm:w-5"
+                      title="内服（飲了）"
+                      aria-label={`${nm} 内服`}
+                    />
+                  </td>
                   <td className="border border-slate-200 bg-violet-50/50 p-0">
                     <select
                       value={String(row.ensurePortion ?? '')}
@@ -857,32 +919,6 @@ export function ResidentBulkInputTable({
                       className="w-full min-w-[7rem] bg-transparent px-1 py-1.5 text-xs font-bold text-amber-950 placeholder:font-normal placeholder:text-amber-600/80 sm:min-w-[9rem] sm:text-sm"
                       aria-label={`${nm} 間食・補助食メモ`}
                     />
-                  </td>
-                  <td className="border border-slate-200 bg-sky-50/40 p-0">
-                    <select
-                      value={String(row.waterMl ?? '')}
-                      onChange={(e) => patchBulkRow(id, { waterMl: e.target.value })}
-                      className="w-full min-w-[3rem] bg-white px-1 py-1.5 font-mono text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 水分量`}
-                    >
-                      {WATER_ML_50_OPTIONS.map((opt) => (
-                        <option key={opt.value || 'w-empty'} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="border border-slate-200 bg-violet-50/40 p-0">
-                    <select
-                      value={row.medicationTaken}
-                      onChange={(e) => patchBulkRow(id, { medicationTaken: e.target.value })}
-                      className="w-full min-w-[3.5rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 内服`}
-                    >
-                      <option value="">—</option>
-                      <option value="yes">飲了</option>
-                      <option value="no">未服</option>
-                    </select>
                   </td>
                   <td className="border border-slate-200 bg-orange-50/30 px-1 py-0.5 text-center font-mono text-sm sm:text-base">
                     {mealKind === 'meal' ? (

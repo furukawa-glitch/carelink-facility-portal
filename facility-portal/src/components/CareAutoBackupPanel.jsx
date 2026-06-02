@@ -179,7 +179,7 @@ export function CareAutoBackupPanel({
       {!adminUnlocked ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
           <p className="text-[10px] font-bold leading-snug text-slate-600">
-            生活記録は<strong> 毎日23:59</strong>に自動保存されます（法定{CARE_RECORD_RETENTION_YEARS}年・ブラウザ内＋SSD）。
+            生活記録は<strong> 毎日23:59</strong>に自動保存されます（法定{CARE_RECORD_RETENTION_YEARS}年以上も保持・自動削除なし・ブラウザ内＋SSD）。
             {lastAuto ? (
               <span className="ml-1 text-slate-500">
                 最終バックアップ: {lastAuto.backupYmd} {lastAuto.timeLabel}
@@ -243,7 +243,7 @@ export function CareAutoBackupPanel({
       <p className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-bold leading-snug text-amber-900">
         <strong className="text-amber-950">GitHub には記録は保存されません</strong>（プログラムのソースのみ）。
         生活記録は<strong> ①ブラウザ内 ②接続SSD</strong>の2か所＋毎日
-        <strong> 23:59 自動バックアップ</strong>（法定{CARE_RECORD_RETENTION_YEARS}年）。
+        <strong> 23:59 自動バックアップ</strong>（{CARE_RECORD_RETENTION_YEARS}年超も保持・自動削除なし）。
         現在 <strong>{retentionSummary.total.toLocaleString()} 件</strong>
         {retentionSummary.oldestYmd ? `（最古 ${retentionSummary.oldestYmd}）` : ''}。
       </p>

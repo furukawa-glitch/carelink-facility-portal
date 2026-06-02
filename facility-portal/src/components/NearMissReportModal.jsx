@@ -337,9 +337,9 @@ export function NearMissReportModal({ open, onClose, geminiKey, facilityLabel, r
         reporterDept: patch.reporterDept || p.reporterDept,
         residentName: patch.residentName ?? p.residentName,
         occurPlace: patch.occurPlace ?? p.occurPlace,
-        occurAmPm: patch.occurAmPm ?? p.occurAmPm,
-        occurHour: patch.occurHour != null ? String(patch.occurHour) : p.occurHour,
-        occurMinute: patch.occurMinute != null ? String(patch.occurMinute) : p.occurMinute,
+        occurAmPm: '',
+        occurHour: '',
+        occurMinute: '',
         occurYear: patch.occurYear != null ? String(patch.occurYear) : p.occurYear,
         occurMonth: patch.occurMonth != null ? String(patch.occurMonth) : p.occurMonth,
         occurDay: patch.occurDay != null ? String(patch.occurDay) : p.occurDay,
@@ -450,6 +450,9 @@ export function NearMissReportModal({ open, onClose, geminiKey, facilityLabel, r
 
         <p className="mb-3 text-sm text-slate-600">
           かんたん入力は「利用者名」「スタッフ名」「音声メモ」だけで使えます。AI が残りの欄を自動作成し、右のプレビューに反映します。
+          <span className="mt-1 block text-xs text-slate-500">
+            「発生時間」欄には時刻は入れません（メモに時刻があっても本文にだけ記載）。発生日だけ必要なときは詳細入力で指定できます。
+          </span>
         </p>
 
         <div className="mb-4 grid gap-4 lg:grid-cols-2">
@@ -563,7 +566,7 @@ export function NearMissReportModal({ open, onClose, geminiKey, facilityLabel, r
                 value={draft.bulletMemo}
                 onChange={(e) => setDraft((p) => ({ ...p, bulletMemo: e.target.value }))}
                 rows={5}
-                placeholder="例：・3/10 14時 デイホール&#10;・田中様、移乗時にバランスを崩す&#10;・スタッフ 山田・佐藤で支えて着席&#10;・ホームに報告済み、見守り強化を共有"
+                placeholder="例：・デイホールで移乗時にバランスを崩す&#10;・田中様、スタッフ 山田・佐藤で支えて着席&#10;・ホームに報告済み、見守り強化を共有"
                 className="w-full rounded-lg border border-teal-300 bg-white px-2 py-2 text-sm font-bold"
               />
               {voiceListening && (
@@ -651,9 +654,9 @@ export function NearMissReportModal({ open, onClose, geminiKey, facilityLabel, r
               </label>
             </div>
 
-            <div className="grid gap-2 sm:grid-cols-6">
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span className="text-xs font-bold text-slate-600">発生日（年）</span>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-bold text-slate-600">発生日（年・任意）</span>
                 <input
                   value={draft.occurYear}
                   onChange={(e) => setDraft((p) => ({ ...p, occurYear: e.target.value }))}
@@ -677,35 +680,10 @@ export function NearMissReportModal({ open, onClose, geminiKey, facilityLabel, r
                   className="rounded-lg border border-slate-300 px-2 py-2 text-sm font-bold"
                 />
               </label>
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span className="text-xs font-bold text-slate-600">午前 / 午後</span>
-                <select
-                  value={draft.occurAmPm}
-                  onChange={(e) => setDraft((p) => ({ ...p, occurAmPm: e.target.value }))}
-                  className="rounded-lg border border-slate-300 px-2 py-2 text-sm font-bold"
-                >
-                  <option value="">—</option>
-                  <option value="午前">午前</option>
-                  <option value="午後">午後</option>
-                </select>
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-bold text-slate-600">時</span>
-                <input
-                  value={draft.occurHour}
-                  onChange={(e) => setDraft((p) => ({ ...p, occurHour: e.target.value }))}
-                  className="rounded-lg border border-slate-300 px-2 py-2 text-sm font-bold"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-bold text-slate-600">分</span>
-                <input
-                  value={draft.occurMinute}
-                  onChange={(e) => setDraft((p) => ({ ...p, occurMinute: e.target.value }))}
-                  className="rounded-lg border border-slate-300 px-2 py-2 text-sm font-bold"
-                />
-              </label>
             </div>
+            <p className="text-[11px] text-slate-500">
+              帳票の「発生時間」欄は発生日のみ表示します。何時頃かはメモ・状況の本文に書いてください。
+            </p>
 
             <div>
               <div className="mb-1 text-xs font-bold text-slate-600">【区分】</div>

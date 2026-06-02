@@ -1,6 +1,6 @@
 /**
  * CareLink OS — 監査ログ・異常検知・救急サマリー・月次出力・AIアドバイス補助
- * 永続化: localStorage + IndexedDB（生活記録は法定5年保存。5年超のみ自動削除）
+ * 永続化: localStorage + IndexedDB（生活記録は5年超も含め自動削除しない）
  */
 
 import { nowJapanIsoString } from '../utils/japanIsoTime.js';
@@ -77,6 +77,8 @@ const LS = {
   facilityNotice: 'carelink_os_facility_notice_v1',
   /** 施設ごとの申し送り掲示（パノラマ・一覧の掲示板と同期） */
   facilityHandover: 'carelink_os_facility_handover_v1',
+  /** 利用者ごとの個別申し送り・処置メモ（施設共通掲示とは別） */
+  residentRoomNotes: 'carelink_os_resident_room_notes_v1',
   /** 利用者ごとに保存した情報提供書PDFのAI抽出結果（メタ＋JSON） */
   infoProvisionExtract: 'carelink_os_info_provision_extract_v1',
   /** カイポケ等CSVから取り込んだ月次用の短文行 { [ym]: { [residentId]: string[] } } */
@@ -87,6 +89,8 @@ const LS = {
   residentSurroundMemo: 'carelink_os_resident_surround_memo_v1',
   /** 利用者×日のデイ予定（併設デイ＝CSV、外部通所＝手入力） */
   dayServiceSchedule: 'carelink_os_day_service_v1',
+  /** 傷病一覧CSVから取り込んだ病名 { [residentId]: { label, ym, importedAt } } */
+  injuryDiseaseByResident: 'carelink_os_injury_disease_by_resident_v1',
 };
 
 const MAX_ACCIDENT_REPORTS = 2000;
@@ -477,8 +481,34 @@ export function getResidentVitalSnapshot(residentId) {
 export function setResidentVitalSnapshot(residentId, patch) {
   const all = readJson(LS.vitals, {});
   const prev = all[String(residentId)] ?? {};
-  all[String(residentId)] = { ...prev, ...patch, updatedAt: new Date().toISOString() };
+  const explicitAt = String(patch?.updatedAt ?? '').trim();
+  all[String(residentId)] = {
+    ...prev,
+    ...patch,
+    updatedAt: explicitAt || new Date().toISOString(),
+  };
   writeJson(LS.vitals, all);
+}
+
+/** 記録ログの最新 vital_snapshot を名簿スナップショットへ反映 */
+export function syncResidentVitalSnapshotFromLatestEvent(residentId) {
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return;
+  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  let latest = null;
+  for (const e of getAllCareEvents()) {
+    if (String(e?.residentId ?? '').trim() !== rid) continue;
+    if (e?.type !== 'vital_snapshot') continue;
+    if (!e.meta || typeof e.meta !== 'object') continue;
+    const t = new Date(e.ts).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (!latest || t >= new Date(latest.ts).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts: String(e.ts) };
+    }
+  }
+  if (latest) {
+    setResidentVitalSnapshot(rid, { ...latest.meta, updatedAt: latest.ts });
+  }
 }
 
 const VISIT_NURSING_YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -812,11 +842,55 @@ export function removeNursingDirective(linkKey, directiveId, tsFallback = '') {
 
 /** @param {string} linkKey */
 export function getFacilityHandoverNote(linkKey) {
+  return getFacilityHandoverMeta(linkKey).text;
+}
+
+/** @param {string} linkKey */
+export function getFacilityHandoverMeta(linkKey) {
   const k = String(linkKey ?? '').trim();
-  if (!k) return '';
+  if (!k) return { text: '', updatedAt: '' };
   const all = readJson(LS.facilityHandover, {});
-  const row = all[k];
-  return String(row?.text ?? '').trim();
+  const row = all[k] && typeof all[k] === 'object' ? all[k] : {};
+  return {
+    text: String(row.text ?? '').trim(),
+    updatedAt: String(row.updatedAt ?? '').trim(),
+  };
+}
+
+/**
+ * 個別申し送り・処置メモがある利用者だけを一覧用に返す
+ * @param {Record<string, unknown>[]} residents
+ */
+export function listIndividualHandoversForResidents(residents) {
+  const store = readJson(LS.residentRoomNotes, {});
+  /** @type {{ residentId: string; name: string; room: string; handover: string; treatment: string; updatedAt: string }[]} */
+  const out = [];
+  for (const res of residents || []) {
+    const id = String(res?.id ?? '').trim();
+    if (!id) continue;
+    const row = store[id] && typeof store[id] === 'object' ? store[id] : {};
+    const handover = String(row.handover ?? '').trim();
+    const treatment = String(row.treatment ?? '').trim();
+    if (!handover && !treatment) continue;
+    out.push({
+      residentId: id,
+      name: String(res.name ?? '').trim(),
+      room: String(res.room ?? '').trim() || '—',
+      handover,
+      treatment,
+      updatedAt: String(row.updatedAt ?? '').trim(),
+    });
+  }
+  out.sort((a, b) => {
+    const roomKey = (r) => {
+      const n = parseInt(String(r).replace(/\D/g, ''), 10);
+      return Number.isFinite(n) ? String(n).padStart(6, '0') : String(r);
+    };
+    const c = roomKey(a.room).localeCompare(roomKey(b.room), 'ja', { numeric: true });
+    if (c !== 0) return c;
+    return a.name.localeCompare(b.name, 'ja');
+  });
+  return out;
 }
 
 /**
@@ -830,6 +904,9 @@ export function setFacilityHandoverNote(linkKey, text) {
   const all = readJson(LS.facilityHandover, {});
   all[k] = { text: String(text ?? '').trim(), updatedAt: new Date().toISOString() };
   writeJson(LS.facilityHandover, all);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('carelink-handover-storage'));
+  }
   return true;
 }
 
@@ -853,6 +930,47 @@ export function setFacilityNotice(linkKey, text) {
   const all = readJson(LS.facilityNotice, {});
   all[k] = { text: String(text ?? '').trim(), updatedAt: new Date().toISOString() };
   writeJson(LS.facilityNotice, all);
+  return true;
+}
+
+/**
+ * 利用者ごとの個別申し送り・処置メモ（個室単位）。
+ * 施設共通の「看護指示」「申し送り」とは分離して保存する。
+ * @param {string} residentId
+ */
+export function getResidentRoomNotes(residentId) {
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return { handover: '', treatment: '', updatedAt: '' };
+  const all = readJson(LS.residentRoomNotes, {});
+  const row = all[rid] && typeof all[rid] === 'object' ? all[rid] : {};
+  return {
+    handover: String(row.handover ?? '').trim(),
+    treatment: String(row.treatment ?? '').trim(),
+    updatedAt: String(row.updatedAt ?? '').trim(),
+  };
+}
+
+/**
+ * 利用者ごとの個別申し送り・処置メモ（個室単位）を保存
+ * @param {string} residentId
+ * @param {{ handover?: string; treatment?: string }} patch
+ */
+export function setResidentRoomNotes(residentId, patch) {
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return false;
+  const all = readJson(LS.residentRoomNotes, {});
+  const prev = all[rid] && typeof all[rid] === 'object' ? all[rid] : {};
+  all[rid] = {
+    ...prev,
+    ...(patch && typeof patch === 'object' ? patch : {}),
+    handover: String(patch?.handover ?? prev.handover ?? '').trim(),
+    treatment: String(patch?.treatment ?? prev.treatment ?? '').trim(),
+    updatedAt: new Date().toISOString(),
+  };
+  writeJson(LS.residentRoomNotes, all);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('carelink-handover-storage'));
+  }
   return true;
 }
 
@@ -1040,6 +1158,7 @@ export function logCareEvent(payload) {
   list.push(row);
   persistCareEventsList(list);
   void idbAppendCareEvent(row);
+  void import('../lib/careEventsSupabaseSync.js').then((m) => m.queueCareEventsCloudSync(row));
   return row;
 }
 
@@ -1160,6 +1279,63 @@ export function getLatestVitalSnapshotMetaForResidentDay(residentId, ymd) {
     if (e.meta && typeof e.meta === 'object') last = /** @type {Record<string, unknown>} */ (e.meta);
   }
   return last;
+}
+
+/**
+ * 利用者の最新バイタル（スナップショットキャッシュ → 記録ログの最終 vital_snapshot）
+ * @param {string} residentId
+ * @returns {{ meta: Record<string, unknown> | null; measuredAt: string }}
+ */
+export function getLatestVitalMetaForResident(residentId) {
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return { meta: null, measuredAt: '' };
+  const snap = getResidentVitalSnapshot(rid);
+  if (snap && vitalSnapshotRowHasData(snap)) {
+    return { meta: snap, measuredAt: String(snap.updatedAt ?? '').trim() };
+  }
+  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  let latest = null;
+  for (const e of getAllCareEvents()) {
+    if (String(e?.residentId ?? '').trim() !== rid) continue;
+    if (e?.type !== 'vital_snapshot') continue;
+    if (!e.meta || typeof e.meta !== 'object') continue;
+    const t = new Date(e.ts).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (!latest || t >= new Date(latest.ts).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts: String(e.ts) };
+    }
+  }
+  if (latest) return { meta: latest.meta, measuredAt: latest.ts };
+  return { meta: null, measuredAt: '' };
+}
+
+/**
+ * 指定期間内の最新バイタル（週次往診ノート向け）。期間内になければ全体最新へフォールバック。
+ * @param {string} residentId
+ * @param {string} startYmd YYYY-MM-DD
+ * @param {string} endYmd YYYY-MM-DD
+ */
+export function getLatestVitalMetaForResidentInRange(residentId, startYmd, endYmd) {
+  const rid = String(residentId ?? '').trim();
+  const start = new Date(`${String(startYmd ?? '').trim()}T00:00:00`).getTime();
+  const end = new Date(`${String(endYmd ?? '').trim()}T23:59:59.999`).getTime();
+  if (!rid || !Number.isFinite(start) || !Number.isFinite(end)) {
+    return getLatestVitalMetaForResident(rid);
+  }
+  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  let latest = null;
+  for (const e of getAllCareEvents()) {
+    if (String(e?.residentId ?? '').trim() !== rid) continue;
+    if (e?.type !== 'vital_snapshot') continue;
+    if (!e.meta || typeof e.meta !== 'object') continue;
+    const t = new Date(e.ts).getTime();
+    if (!Number.isFinite(t) || t < start || t > end) continue;
+    if (!latest || t >= new Date(latest.ts).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts: String(e.ts) };
+    }
+  }
+  if (latest) return { meta: latest.meta, measuredAt: latest.ts };
+  return getLatestVitalMetaForResident(rid);
 }
 
 /**
@@ -2362,6 +2538,46 @@ export function buildEmergencySummaryNarrativeFromRecords(resident, facilityShee
 }
 
 /**
+ * 救急搬送サマリー「急変の内容」欄の初期文候補。
+ * 日々の記録ログ＋当月のCSV取込行（カイポケ等）を短く要約して返す。
+ * @param {Record<string, unknown>} resident
+ */
+export function buildEmergencyAcuteChangeHint(resident) {
+  const id = String(resident?.id ?? '').trim();
+  if (!id) return '';
+  const now = Date.now();
+  const dayAgo = now - 24 * 3600000;
+  const recent = getAllCareEvents()
+    .filter((e) => String(e?.residentId ?? '').trim() === id)
+    .filter((e) => {
+      const t = new Date(e.ts).getTime();
+      return Number.isFinite(t) && t >= dayAgo;
+    })
+    .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+    .slice(0, 8);
+  const eventLines = recent.map((e) => `・${formatCareEventOneLine(e)}`);
+
+  const ym = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const imported = getResidentMonthlyReportImportLines(id, ym).slice(0, 6);
+
+  if (!eventLines.length && !imported.length) return '';
+  const lines = [];
+  if (eventLines.length) {
+    lines.push('【直近24時間の記録】');
+    lines.push(...eventLines);
+  }
+  if (imported.length) {
+    if (lines.length) lines.push('');
+    lines.push('【当月の取込記録（カイポケCSV等）】');
+    imported.forEach((t) => lines.push(`・${t}`));
+  }
+  return lines.join('\n').trim();
+}
+
+/**
  * 月次家族向け報告用AIプロンプトに埋め込むテキスト（同一ブラウザの記録）
  * @param {Record<string, unknown>} resident
  * @param {string} yearMonth YYYY-MM
@@ -2528,6 +2744,55 @@ export function setResidentMedicationProfile(residentId, profile) {
     importedAt: String(profile.importedAt ?? nowJapanIsoString()).trim() || nowJapanIsoString(),
   };
   writeJson(LS.residentMedicationProfile, all);
+}
+
+/** @returns {Record<string, { label: string; ym?: string; importedAt?: string }>} */
+function readInjuryDiseaseByResidentStore() {
+  const raw = readJson(LS.injuryDiseaseByResident, {});
+  return raw && typeof raw === 'object' ? /** @type {Record<string, { label: string; ym?: string; importedAt?: string }>} */ (raw) : {};
+}
+
+/**
+ * 傷病一覧CSV取り込み分の病名（名簿・I列より優先して表示）
+ * @param {string} residentId
+ */
+export function getImportedInjuryDiseaseLabel(residentId) {
+  const id = String(residentId ?? '').trim();
+  if (!id) return '';
+  const row = readInjuryDiseaseByResidentStore()[id];
+  return String(row?.label ?? '').trim();
+}
+
+/**
+ * @param {Record<string, { label: string; ym?: string }>} patch
+ * @param {string} [ym]
+ */
+export function mergeInjuryDiseaseImportPatch(patch, ym = '') {
+  const all = readInjuryDiseaseByResidentStore();
+  const now = nowJapanIsoString();
+  const targetYm = String(ym ?? '').trim();
+  for (const [id, row] of Object.entries(patch || {})) {
+    const rid = String(id ?? '').trim();
+    const label = String(row?.label ?? '').trim();
+    if (!rid || !label) continue;
+    all[rid] = { label, ym: targetYm || String(row?.ym ?? '').trim(), importedAt: now };
+  }
+  writeJson(LS.injuryDiseaseByResident, all);
+}
+
+/**
+ * 保存済み傷病一覧を名簿行にマージ（名簿再読込後も病名を維持）
+ * @param {Record<string, unknown>[]} residents
+ */
+export function applyInjuryDiseaseImportsToResidentList(residents) {
+  const store = readInjuryDiseaseByResidentStore();
+  if (!Object.keys(store).length) return residents;
+  return (residents || []).map((res) => {
+    const id = String(res?.id ?? '').trim();
+    const label = String(store[id]?.label ?? '').trim();
+    if (!label) return res;
+    return { ...res, diseaseName: label, condition: label };
+  });
 }
 
 /**
@@ -3573,6 +3838,15 @@ function isGeminiQuotaMessage(msg) {
  * @param {number} tm
  * @param {number} td
  */
+/** ヒヤリ報告の「発生時間」欄用。時刻（午前午後・時分）は帳票に出さない */
+export function clearNearMissOccurrenceClock(draft) {
+  const d = draft && typeof draft === 'object' ? { ...draft } : {};
+  d.occurAmPm = '';
+  d.occurHour = '';
+  d.occurMinute = '';
+  return d;
+}
+
 function buildNearMissFallbackDraft(memo, ty, tm, td) {
   const lines = String(memo ?? '')
     .split(/\r?\n/)
@@ -3630,10 +3904,8 @@ export async function fetchNearMissReportFromBullets(apiKey, memo, facilityLabel
 - reporterDept: string（所属事業所・部署）
 - residentName: string
 - occurPlace: string
-- occurAmPm: "午前" | "午後" | "" のいずれか
-- occurHour: string（時、数字のみ推奨）
-- occurMinute: string（分）
-- occurYear, occurMonth, occurDay: number | null（発生日・西暦。メモにない場合はnull）
+- occurAmPm, occurHour, occurMinute: 常に空文字（時刻は帳票の「発生時間」欄に入れない。メモに時刻があっても situationContent の本文にだけ書く）
+- occurYear, occurMonth, occurDay: number | null（発生日・西暦。メモに明確な日付がある場合のみ。なければ null）
 - submitYear, submitMonth, submitDay: number（提出日。メモにない場合は本日: ${ty}年${tm}月${td}日）
 - situationContent: string（セクション1【状況】＝「内容」）
 - afterReportContent: string（セクション1【対応】＝報告後のフォロー・共有内容）
@@ -3680,14 +3952,11 @@ ${String(memo || '').trim() || '（なし）'}`;
     return Number.isFinite(n) ? n : fallback;
   };
 
-  return {
+  return clearNearMissOccurrenceClock({
     reporterName: String(parsed.reporterName ?? ''),
     reporterDept: String(parsed.reporterDept ?? ''),
     residentName: String(parsed.residentName ?? ''),
     occurPlace: String(parsed.occurPlace ?? ''),
-    occurAmPm: String(parsed.occurAmPm ?? ''),
-    occurHour: String(parsed.occurHour ?? ''),
-    occurMinute: String(parsed.occurMinute ?? ''),
     occurYear: parsed.occurYear != null ? num(parsed.occurYear, null) : null,
     occurMonth: parsed.occurMonth != null ? num(parsed.occurMonth, null) : null,
     occurDay: parsed.occurDay != null ? num(parsed.occurDay, null) : null,
@@ -3699,7 +3968,7 @@ ${String(memo || '').trim() || '（なし）'}`;
     causeAndMeasures: String(parsed.causeAndMeasures ?? ''),
     categories: cats,
     categoryOther: String(parsed.categoryOther ?? ''),
-  };
+  });
 }
 
 /**
@@ -3710,6 +3979,9 @@ export function saveNearMissReport(p) {
   const facilityLabel = String(p?.facilityLabel ?? '').trim();
   const department = String(p?.department ?? '').trim();
   if (!facilityLabel || !department) return null;
+  const draft = clearNearMissOccurrenceClock(
+    p?.draft && typeof p.draft === 'object' ? /** @type {Record<string, unknown>} */ (p.draft) : {}
+  );
   const list = getNearMissReports();
   const entry = {
     id: newNearMissReportId(),
@@ -3717,7 +3989,7 @@ export function saveNearMissReport(p) {
     facilityLabel,
     department,
     residentId: String(p?.residentId ?? '').trim(),
-    draft: { ...(p?.draft && typeof p.draft === 'object' ? p.draft : {}) },
+    draft,
   };
   list.unshift(entry);
   writeJson(LS.nearMissReports, list.slice(0, MAX_NEAR_MISS_REPORTS));
@@ -4423,4 +4695,105 @@ export function downloadSummaryHtml(filename, html) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+function hmFromIso(ts) {
+  const t = new Date(String(ts ?? ''));
+  if (!Number.isFinite(t.getTime())) return '';
+  return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+}
+
+function simpleEventLabel(e) {
+  const m = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+  const note = String(m.note ?? '').trim();
+  if (note) return note;
+  if (e?.type === 'vital_snapshot') return `バイタル ${formatVitalMetaLine(m)}`;
+  if (e?.type === 'meal') {
+    const slot = String(m.mealSlot ?? '').trim();
+    const amt = String(m.mealAmount ?? '').trim();
+    const wm = String(m.waterMl ?? '').trim();
+    const med = m.medicationTaken === 'yes' ? '内服' : '';
+    return ['食事', slot, amt, wm ? `水分${wm}ml` : '', med].filter(Boolean).join(' ');
+  }
+  if (e?.type === 'fluid_intake') {
+    const wm = String(m.waterMl ?? '').trim();
+    return wm ? `水分 ${wm}ml` : '水分';
+  }
+  if (e?.type === 'enteral') return `経管 ${String(m.note ?? '').trim() || ''}`.trim();
+  if (e?.type === 'excretion') {
+    const u = String(m.urineVolume ?? '').trim();
+    const sv = String(m.stoolVolume ?? '').trim();
+    const sc = String(m.stoolCharacter ?? '').trim();
+    const parts = ['排泄', u ? `尿${u}` : '', sv ? `便量${sv}` : '', sc ? `性状${sc}` : ''].filter(Boolean);
+    return parts.join(' ');
+  }
+  if (e?.type === 'patrol') return '巡視';
+  return String(CARE_EVENT_TYPE_JA[e?.type] ?? e?.type ?? '記録');
+}
+
+/**
+ * 利用者の経過レポート（直近7日）を印刷HTMLで生成（PDF保存はブラウザ印刷）
+ * @param {Record<string, unknown>} resident
+ */
+export function buildResidentProgressPdfHtml(resident) {
+  const id = String(resident?.id ?? '').trim();
+  const name = String(resident?.name ?? '').trim() || '—';
+  const room = String(resident?.room ?? '').trim() || '—';
+  const title = `${name} 様 経過レポート（直近7日）`;
+  if (!id) {
+    return `<!doctype html><html lang="ja"><head><meta charset="UTF-8"/><title>${escapeHtml(
+      title
+    )}</title></head><body><h1>${escapeHtml(title)}</h1><p>利用者IDが不明です。</p></body></html>`;
+  }
+
+  const buckets = getWeekCalendarBuckets(id, new Date());
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  start.setHours(0, 0, 0, 0);
+  const events = getAllCareEvents()
+    .filter((e) => String(e?.residentId ?? '').trim() === id)
+    .filter((e) => {
+      const t = new Date(e.ts).getTime();
+      return Number.isFinite(t) && t >= start.getTime();
+    })
+    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+  /** @type {Record<string, { ts: string; label: string }[]>} */
+  const byDay = {};
+  for (const e of events) {
+    const day = tokyoYmdFromTs(String(e.ts));
+    if (!day) continue;
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push({ ts: String(e.ts), label: simpleEventLabel(e) });
+  }
+
+  const dayBlocks = buckets
+    .map((b) => {
+      const list = byDay[b.date] ?? [];
+      const lines = list
+        .map((x) => `<li><span class="t">${escapeHtml(hmFromIso(x.ts) || '—')}</span>${escapeHtml(x.label)}</li>`)
+        .join('');
+      return `<section class="day"><h2>${escapeHtml(b.date)}（巡視${b.patrol} 食事${b.meal} 経管${b.enteral} 排泄${b.excretion}）</h2><ul>${
+        lines || '<li class="muted">記録なし</li>'
+      }</ul></section>`;
+    })
+    .join('');
+
+  return `<!doctype html><html lang="ja"><head><meta charset="UTF-8"/><title>${escapeHtml(title)}</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Hiragino Kaku Gothic ProN',Meiryo,sans-serif;padding:16px;color:#111827;}
+  h1{font-size:18px;margin:0 0 10px;}
+  .meta{font-size:12px;color:#475569;margin-bottom:12px}
+  .day{border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin:10px 0}
+  .day h2{font-size:14px;margin:0 0 8px;color:#0f172a}
+  ul{margin:0;padding-left:16px}
+  li{margin:4px 0;line-height:1.35}
+  .t{display:inline-block;min-width:52px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#0f766e;font-weight:700}
+  .muted{color:#64748b}
+  @media print{.no-print{display:none}}
+</style></head><body>
+<h1>${escapeHtml(title)}</h1>
+<div class="meta">居室 ${escapeHtml(room)} ／ 出力 ${escapeHtml(new Date().toLocaleString('ja-JP'))}（ブラウザの印刷でPDF保存できます）</div>
+${dayBlocks}
+</body></html>`;
 }

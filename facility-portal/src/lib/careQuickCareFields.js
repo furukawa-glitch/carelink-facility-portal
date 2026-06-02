@@ -54,7 +54,7 @@ export function getQuickCareMealEventKind(row, globalMealSlot = '') {
   const extras = String(row?.mealExtras ?? '').trim();
   const ma = composed || String(row?.mealAmount ?? '').trim() || ensureLine || extras;
   const wm = String(row?.waterMl ?? '').trim();
-  const med = row?.medicationTaken === 'yes' || row?.medicationTaken === 'no' ? row.medicationTaken : '';
+  const med = row?.medicationTaken === 'yes' ? row.medicationTaken : '';
   const waterOnly = Boolean(wm && !ma && !med && !meal);
   if (waterOnly) return 'fluid_intake';
   if (mealSlot || ma || wm || med) return 'meal';

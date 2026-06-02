@@ -139,6 +139,17 @@ export async function runCareBackupToAllTargets(facilityLabel = '', trigger = 'm
     stats,
   };
   appendAutoLog(entry);
+
+  void import('./careEventsSupabaseSync.js').then((m) =>
+    m.uploadCareDailySnapshotCloud({
+      snapshotYmd: ymd,
+      facilityLabel: String(facilityLabel ?? ''),
+      trigger,
+      eventCount: stats.careEvents ?? 0,
+      payload,
+    })
+  );
+
   return entry;
 }
 

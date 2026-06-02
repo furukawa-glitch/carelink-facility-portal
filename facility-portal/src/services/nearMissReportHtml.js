@@ -56,28 +56,18 @@ function formatSubmitDateSpan(draft) {
   return `令和　${escapeHtml(String(reiwaNum))}　年　${escapeHtml(String(m).padStart(2, '0'))}　月　${escapeHtml(String(d).padStart(2, '0'))}　日`;
 }
 
-/** 発生日＋発生時間を1セルに（テンプレの「発生時間」欄。日付は任意） */
+/** 発生日のみ（テンプレの「発生時間」欄。時刻は入れない運用） */
 function formatOccurDateTimeCell(draft) {
   const y = parseYmdPart(draft.occurYear);
   const mo = parseYmdPart(draft.occurMonth);
   const d = parseYmdPart(draft.occurDay);
-  let datePart = '';
   if (y && mo && d) {
     const dt = new Date(y, mo - 1, d);
     if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) {
-      datePart = `${escapeHtml(String(y))}年${escapeHtml(String(mo))}月${escapeHtml(String(d))}日　`;
+      return `${escapeHtml(String(y))}年${escapeHtml(String(mo))}月${escapeHtml(String(d))}日`;
     }
   }
-  const ap = String(draft.occurAmPm ?? '').trim();
-  const h = String(draft.occurHour ?? '').trim();
-  const mi = String(draft.occurMinute ?? '').trim();
-  const hasTime = Boolean(ap || h || mi);
-  if (!datePart && !hasTime) return '特になし';
-  const apPart = ap || '午前 ・ 午後';
-  const timePart = hasTime
-    ? `${escapeHtml(apPart)}　${escapeHtml(h || '　')}　時　${escapeHtml(mi || '　')}　分頃`
-    : '';
-  return `${datePart}${timePart}`.trim();
+  return '特になし';
 }
 
 function categoryChecked(selected, label) {

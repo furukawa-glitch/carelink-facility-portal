@@ -51,6 +51,7 @@ import { FacilityStatsPage } from './pages/FacilityStatsPage.jsx';
 import { CARELINK_FACILITIES } from './config/carelinkFacilities.js';
 import { fetchResidentsFromSheet } from './services/GoogleSheetService.js';
 import { vitalStateFromSaved, careStateFromTodayEvents } from './lib/residentDetailSeed.js';
+import { residentDiseaseLabel } from './lib/residentDiseaseLabel.js';
 import { WATER_ML_50_OPTIONS } from './lib/careQuickCareFields.js';
 import { WeeklyFlowSheet } from './components/WeeklyFlowSheet.jsx';
 
@@ -708,6 +709,17 @@ function residentDisplayName(nameRaw) {
   return s || '—';
 }
 
+/** @param {{ resident?: Record<string, unknown> | null; className?: string }} props */
+function ResidentDiseaseLine({ resident, className = '' }) {
+  const disease = residentDiseaseLabel(resident);
+  if (!disease) return null;
+  return (
+    <p className={className || 'mt-1 line-clamp-2 text-center text-xs font-bold text-slate-600'}>
+      病名: <span className="text-slate-800">{disease}</span>
+    </p>
+  );
+}
+
 function NursingDirectivesPanoramaView({
   selectedResident,
   facilityLinkKey,
@@ -739,6 +751,7 @@ function NursingDirectivesPanoramaView({
         <p className="text-center text-2xl font-bold text-slate-900">
           {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
         </p>
+        <ResidentDiseaseLine resident={selectedResident} />
         <p className="mt-2 text-center text-xs leading-snug text-slate-500">
           施設単位で掲示されます（一覧表「本日の重要周知（看護指示）」と同じ保存先）
         </p>
@@ -910,6 +923,74 @@ function FacilityHandoverPanoramaView({
   );
 }
 
+function ResidentRoomNotesView({
+  selectedResident,
+  handoverDraft,
+  setHandoverDraft,
+  treatmentDraft,
+  setTreatmentDraft,
+  saveStatus,
+  onBack,
+  onSave,
+}) {
+  const resName = residentDisplayName(selectedResident?.name);
+  const room = String(selectedResident?.room ?? '').trim();
+  return (
+    <div className="min-h-screen bg-slate-50 pb-32 font-sans font-bold">
+      <header className="sticky top-0 z-20 border-b border-slate-100 bg-white p-6 font-bold">
+        <div className="mb-4 flex items-center justify-between">
+          <button type="button" onClick={onBack} className="flex items-center gap-1 text-sm text-blue-600">
+            <ChevronLeft size={18} /> 戻る
+          </button>
+          <h2 className="text-lg font-bold">個室メモ（申し送り・処置）</h2>
+          <div className="w-10" />
+        </div>
+        <p className="text-center text-xl font-black text-slate-900">
+          {resName} <span className="font-bold">様</span> {room ? <span className="text-sm text-slate-500">（{room}）</span> : null}
+        </p>
+        <ResidentDiseaseLine resident={selectedResident} />
+        <p className="mt-2 text-center text-xs leading-snug text-slate-500">
+          ここは利用者個別のメモです。施設共通の「看護処置・指示」「申し送り」には反映されません。
+        </p>
+      </header>
+      <main className="mx-auto max-w-xl space-y-4 p-6">
+        <div>
+          <p className="mb-1 text-sm font-black text-indigo-900">個別申し送り（介護向け）</p>
+          <textarea
+            value={handoverDraft}
+            onChange={(e) => setHandoverDraft(e.target.value)}
+            rows={7}
+            placeholder="例：夜間トイレ誘導 2回目声かけ必須／家族連絡済み"
+            className="w-full rounded-[1.5rem] border-2 border-indigo-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-indigo-200"
+          />
+        </div>
+        <div>
+          <p className="mb-1 text-sm font-black text-rose-900">個別処置メモ（看護・ケア）</p>
+          <textarea
+            value={treatmentDraft}
+            onChange={(e) => setTreatmentDraft(e.target.value)}
+            rows={7}
+            placeholder="例：創部ガーゼ交換 1日2回／軟膏塗布後に発赤確認"
+            className="w-full rounded-[1.5rem] border-2 border-rose-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={onSave}
+          className="w-full rounded-[2rem] bg-emerald-600 py-4 text-lg text-white shadow-xl"
+        >
+          個室メモを保存
+        </button>
+      </main>
+      {saveStatus ? (
+        <div className="fixed top-12 left-1/2 z-[100] -translate-x-1/2 rounded-full bg-green-500 px-8 py-3 font-bold text-white shadow-2xl">
+          {saveStatus}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const App = () => {
   const [view, setView] = useState('portal');
   const requirePortalAuth = Boolean(VITE_FACILITY_PORTAL_PASSWORD);
@@ -984,6 +1065,8 @@ const App = () => {
   const [panoramaNursingRev, setPanoramaNursingRev] = useState(0);
   const [facilityNoticeDraft, setFacilityNoticeDraft] = useState('');
   const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
+  const [roomHandoverDraft, setRoomHandoverDraft] = useState('');
+  const [roomTreatmentDraft, setRoomTreatmentDraft] = useState('');
 
   const [selectedPortalSheetTitle, setSelectedPortalSheetTitle] = useState(CARELINK_FACILITIES[0]?.sheetTitle ?? '');
   /** 施設ポータル：事業所名・利用者名の絞り込み */
@@ -1220,6 +1303,64 @@ const App = () => {
     }, 1000);
   };
 
+  const buildPatrolEventNote = useCallback((status, actions, freeNote) => {
+    const statusPart = String(status ?? '').trim();
+    const actionList = Array.isArray(actions) ? actions.filter((a) => String(a ?? '').trim()) : [];
+    const actionPart = actionList.join('、');
+    const notePart = String(freeNote ?? '').trim();
+    let summary = '';
+    if (statusPart && actionPart) summary = `${statusPart}：${actionPart}`;
+    else if (statusPart) summary = statusPart;
+    else if (actionPart) summary = actionPart;
+    if (summary && notePart) return `${summary}／${notePart}`;
+    if (notePart) return notePart;
+    return summary || '巡視記録';
+  }, []);
+
+  const savePatrolRecord = useCallback(() => {
+    if (!selectedResident) return;
+    const facSheet = String(
+      selectedResident.sourceSheetTitle || selectedResident.facility || selectedPortalSheetTitle || ''
+    ).trim();
+    const id = String(selectedResident.id ?? '').trim();
+    if (!id) return;
+    const name = String(selectedResident.name ?? '');
+    const ts = new Date().toISOString();
+    const note = buildPatrolEventNote(patrolStatus, patrolActions, patrolNote);
+    Report.logCareEvent({
+      type: 'patrol',
+      ts,
+      residentId: id,
+      residentName: name,
+      facilitySheetTitle: facSheet,
+      meta: {
+        status: String(patrolStatus ?? '').trim(),
+        actions: [...patrolActions],
+        note,
+      },
+    });
+    const lastPatrolLabel = new Date(ts).toLocaleString('ja-JP', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    setSelectedResident((prev) => (prev ? { ...prev, lastPatrol: lastPatrolLabel } : prev));
+    setResidents((prev) =>
+      prev.map((r) => (String(r.id ?? '') === id ? { ...r, lastPatrol: lastPatrolLabel } : r))
+    );
+    setPatrolNote('');
+    setPatrolActions([]);
+    handleSave('巡視記録を保存しました');
+  }, [
+    selectedResident,
+    selectedPortalSheetTitle,
+    patrolStatus,
+    patrolActions,
+    patrolNote,
+    buildPatrolEventNote,
+  ]);
+
   const togglePatrolAction = (action) => {
     setPatrolActions((prev) =>
       prev.includes(action) ? prev.filter((a) => a !== action) : [...prev, action]
@@ -1265,6 +1406,20 @@ const App = () => {
     Report.setFacilityNotice(lk, facilityNoticeDraft);
     Report.setFacilityHandoverNote(lk, facilityHandoverDraft);
     setSaveStatus('周知事項・申し送りを保存しました');
+    setTimeout(() => setSaveStatus(''), 1600);
+  };
+
+  const saveResidentRoomNotes = () => {
+    const rid = String(selectedResident?.id ?? '').trim();
+    if (!rid) {
+      alert('利用者を選択してください。');
+      return;
+    }
+    Report.setResidentRoomNotes(rid, {
+      handover: roomHandoverDraft,
+      treatment: roomTreatmentDraft,
+    });
+    setSaveStatus('個室メモ（申し送り・処置）を保存しました');
     setTimeout(() => setSaveStatus(''), 1600);
   };
 
@@ -1465,31 +1620,19 @@ const App = () => {
           <h2 className="text-3xl text-slate-800 tracking-tight font-bold">
             {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
           </h2>
+          <ResidentDiseaseLine resident={selectedResident} />
         </div>
+        <p className="rounded-2xl border-2 border-slate-200 bg-slate-50 px-4 py-3 text-center text-xs font-bold leading-relaxed text-slate-600">
+          巡視・バイタル・食事・排泄は<strong className="text-slate-800">入居者一覧の一覧表</strong>から入力してください（このメニューにはありません）。
+        </p>
         <div className="grid gap-4 font-bold">
-          <button
-            type="button"
-            onClick={() => setView('patrol')}
-            className="group p-6 bg-slate-900 text-white rounded-[2rem] flex flex-col items-center gap-2 shadow-xl active:scale-95 transition-all font-bold"
-          >
-            <ShieldAlert size={28} className="text-amber-400" />
-            <span className="text-xl tracking-tight italic font-bold">巡視・安否確認記録</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setView('detail')}
-            className="group p-6 bg-blue-600 text-white rounded-[2rem] flex flex-col items-center gap-2 shadow-xl active:scale-95 transition-all font-bold"
-          >
-            <Utensils size={28} />
-            <span className="text-xl tracking-tight italic font-bold">生活・バイタル・排泄</span>
-          </button>
           <button
             type="button"
             onClick={() => setView('nursing_directives')}
             className="group flex flex-col items-center gap-2 rounded-[2rem] bg-rose-600 p-6 text-white shadow-xl transition-all active:scale-95 font-bold"
           >
             <Stethoscope size={28} />
-            <span className="text-xl font-bold italic tracking-tight">看護処置・指示</span>
+            <span className="text-xl font-bold italic tracking-tight">看護処置・指示（施設共通）</span>
           </button>
           <button
             type="button"
@@ -1505,10 +1648,23 @@ const App = () => {
             className="group flex flex-col items-center gap-2 rounded-[2rem] bg-indigo-600 p-6 text-white shadow-xl transition-all active:scale-95 font-bold"
           >
             <ClipboardList size={28} />
-            <span className="text-xl font-bold italic tracking-tight">申し送り</span>
+            <span className="text-xl font-bold italic tracking-tight">申し送り（施設共通）</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const roomNotes = Report.getResidentRoomNotes(String(selectedResident?.id ?? ''));
+              setRoomHandoverDraft(String(roomNotes.handover ?? ''));
+              setRoomTreatmentDraft(String(roomNotes.treatment ?? ''));
+              setView('resident_room_notes');
+            }}
+            className="group flex flex-col items-center gap-2 rounded-[2rem] bg-emerald-600 p-6 text-white shadow-xl transition-all active:scale-95 font-bold"
+          >
+            <ClipboardList size={28} />
+            <span className="text-xl font-bold italic tracking-tight">個室メモ（申し送り・処置）</span>
           </button>
           <p className="text-center text-[11px] font-bold leading-snug text-slate-500">
-            次の4つは必要なときだけ。一覧のカードからは外しています。
+            次の5つは必要なときだけ。
           </p>
           <button
             type="button"
@@ -1573,6 +1729,7 @@ const App = () => {
           <h3 className="text-2xl text-slate-900 font-bold">
             {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
           </h3>
+          <ResidentDiseaseLine resident={selectedResident} />
           <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">
             Last Patrol: {selectedResident?.lastPatrol}
           </p>
@@ -1631,7 +1788,7 @@ const App = () => {
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
+        <div className="relative z-10 bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
           <span className="text-[10px] text-slate-400 uppercase font-bold mb-4 block text-center">
             特記事項・申し送り
           </span>
@@ -1639,14 +1796,15 @@ const App = () => {
             value={patrolNote}
             onChange={(e) => setPatrolNote(e.target.value)}
             placeholder="異常なし、あるいは気になる点があれば入力してください"
-            className="w-full h-24 bg-slate-50 border-none rounded-2xl p-4 text-sm outline-none focus:ring-2 focus:ring-blue-100"
+            rows={4}
+            className="pointer-events-auto w-full min-h-[6rem] resize-y bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-normal text-slate-900 outline-none focus:ring-2 focus:ring-blue-100"
           />
         </div>
 
         <div className="fixed bottom-0 left-0 right-0 p-6 bg-white/80 backdrop-blur-md border-t border-slate-100 z-30">
           <button
             type="button"
-            onClick={() => handleSave('巡視記録を保存しました')}
+            onClick={savePatrolRecord}
             className="w-full max-w-xl mx-auto block py-5 bg-slate-900 text-white font-bold rounded-[2rem] shadow-xl text-lg active:scale-95 transition-all"
           >
             巡視完了として保存
@@ -1733,6 +1891,10 @@ const App = () => {
         )}
         <button
           type="button"
+          onClick={() => {
+            if (!selectedResident) return;
+            Report.openPrintableSummary(Report.buildResidentProgressPdfHtml(selectedResident));
+          }}
           className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2"
         >
           <Download size={18} /> PDF出力
@@ -1761,6 +1923,7 @@ const App = () => {
           <h2 className="text-2xl text-slate-900 tracking-tight font-bold font-bold">
             {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
           </h2>
+          <ResidentDiseaseLine resident={selectedResident} className="mt-1 line-clamp-2 text-xs font-bold text-slate-600" />
           <div className="flex gap-2 mt-2 font-bold font-bold items-center flex-wrap">
             <button
               type="button"
@@ -2289,6 +2452,19 @@ const App = () => {
             saveStatus={saveStatus}
             onBack={() => setView('action_selection')}
             onSave={saveFacilityHandoverPanorama}
+          />
+        );
+      case 'resident_room_notes':
+        return (
+          <ResidentRoomNotesView
+            selectedResident={selectedResident}
+            handoverDraft={roomHandoverDraft}
+            setHandoverDraft={setRoomHandoverDraft}
+            treatmentDraft={roomTreatmentDraft}
+            setTreatmentDraft={setRoomTreatmentDraft}
+            saveStatus={saveStatus}
+            onBack={() => setView('action_selection')}
+            onSave={saveResidentRoomNotes}
           />
         );
       case 'monthly_report_manager':

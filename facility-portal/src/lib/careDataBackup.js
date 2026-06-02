@@ -92,7 +92,7 @@ export function buildCareDataBackupPayload() {
       app: 'carelink-facility-portal',
       retentionPolicy: {
         years: CARE_RECORD_RETENTION_YEARS,
-        description: `生活記録は${CARE_RECORD_RETENTION_YEARS}年間保存（法定保存期間）。それ以前の記録のみ自動削除対象。`,
+        description: `生活記録は法定${CARE_RECORD_RETENTION_YEARS}年以上の保管を想定。5年超も自動削除せずデータ内に保持。`,
       },
       store,
     },
