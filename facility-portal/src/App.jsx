@@ -2011,20 +2011,23 @@ const App = () => {
                     ];
                     return (
                       <div className="rounded bg-white p-2">
-                        <svg viewBox="0 0 640 220" className="h-56 w-full">
-                          {[0, 1, 2, 3, 4].map((g) => {
-                            const y = 16 + g * 47;
-                            return <line key={g} x1="24" y1={y} x2="616" y2={y} stroke="#e5e7eb" strokeWidth="1" />;
-                          })}
-                          {seriesDefs.map((series) => {
+                        <svg viewBox="0 0 640 260" className="h-64 w-full">
+                          {seriesDefs.map((series, bandIdx) => {
+                            const bandTop = 12 + bandIdx * 62;
+                            const bandHeight = 54;
                             const values = recent.map((r) => r[series.key]).filter((v) => Number.isFinite(v));
-                            const points = linePointPairsFromValues(values, 592, 188, 8);
-                            const pointStr = points.map((p) => `${p.x + 24},${p.y + 16}`).join(' ');
+                            const points = linePointPairsFromValues(values, 548, bandHeight, 6);
+                            const pointStr = points.map((p) => `${p.x + 84},${p.y + bandTop}`).join(' ');
                             return (
                               <g key={series.key}>
+                                <rect x="80" y={bandTop - 2} width="552" height={bandHeight + 4} fill="#f8fafc" rx="6" />
+                                <line x1="80" y1={bandTop + bandHeight / 2} x2="632" y2={bandTop + bandHeight / 2} stroke="#e2e8f0" strokeWidth="1" />
+                                <text x="16" y={bandTop + bandHeight / 2 + 4} fontSize="11" fontWeight="700" fill="#334155">
+                                  {series.label}
+                                </text>
                                 <polyline fill="none" stroke={series.stroke} strokeWidth="2.5" points={pointStr} />
                                 {points.map((p, idx) => (
-                                  <circle key={`${series.key}-${idx}`} cx={p.x + 24} cy={p.y + 16} r="2.6" fill={series.stroke} />
+                                  <circle key={`${series.key}-${idx}`} cx={p.x + 84} cy={p.y + bandTop} r="2.4" fill={series.stroke} />
                                 ))}
                               </g>
                             );
