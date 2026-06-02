@@ -5,6 +5,7 @@
 
 const SYNC_DEBOUNCE_MS = 8_000;
 const MAX_BATCH = 200;
+const DEFAULT_PULL_LIMIT = 1500;
 
 /** @type {Map<string, Record<string, unknown>>} */
 const pendingById = new Map();
@@ -101,4 +102,21 @@ export async function uploadCareDailySnapshotCloud(snap) {
 
 export function isCareCloudSyncConfigured() {
   return isCloudSyncEnabled() && Boolean(syncSecret()) && Boolean(organizationId());
+}
+
+/**
+ * クラウドからイベントを取得してローカルにマージ。
+ * @param {{ sinceTs?: string; limit?: number }} [opts]
+ */
+export async function pullCareEventsCloudSync(opts = {}) {
+  if (!isCloudSyncEnabled()) return { ok: true, pulled: 0, merged: 0, skipped: true };
+  const sinceTs = String(opts?.sinceTs ?? '').trim();
+  const limitRaw = Number(opts?.limit ?? DEFAULT_PULL_LIMIT);
+  const limit = Math.max(100, Math.min(5000, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : DEFAULT_PULL_LIMIT));
+  const result = await postCareSync({ action: 'pull_events', sinceTs, limit });
+  const events = Array.isArray(result?.events) ? result.events : [];
+  if (!events.length) return { ok: true, pulled: 0, merged: 0 };
+  const report = await import('../services/ReportService.js');
+  const merged = Number(report.mergeCareEventsFromCloud(events) ?? 0);
+  return { ok: true, pulled: events.length, merged };
 }

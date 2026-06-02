@@ -1633,6 +1633,35 @@ export function RecordPage({
     }
   }, [clock, displayResidents, selectedSheetTitle]);
 
+  useEffect(() => {
+    let alive = true;
+    const pullOnce = async () => {
+      try {
+        const mod = await import('../lib/careEventsSupabaseSync.js');
+        const result = await mod.pullCareEventsCloudSync();
+        if (!alive) return;
+        if (Number(result?.merged ?? 0) > 0) setTick((n) => n + 1);
+      } catch {
+        // クラウド未設定・一時失敗時は黙って継続（ローカル運用を阻害しない）
+      }
+    };
+    void pullOnce();
+    const id = window.setInterval(() => {
+      void pullOnce();
+    }, 20_000);
+    const onFocus = () => {
+      void pullOnce();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, []);
+
   const openDaySvcExternalEditor = useCallback((res) => {
     const rid = String(res?.id ?? '').trim();
     if (!rid) return;
@@ -2706,7 +2735,7 @@ export function RecordPage({
           return;
         }
         const scopeResidents = allResidents.length ? allResidents : filteredResidents;
-        const { updated, byId, matched, csvNames, unmatched } = matchInjuryDiseaseMapToResidents(
+        const { updated, byId, matched, csvNames, unmatched, unmatchedNameKeys } = matchInjuryDiseaseMapToResidents(
           scopeResidents,
           labelMap
         );
@@ -2749,8 +2778,15 @@ export function RecordPage({
           alert(msg0);
           return;
         }
+        const unmatchedPreview = (Array.isArray(unmatchedNameKeys) ? unmatchedNameKeys : []).slice(0, 8);
+        const unmatchedText =
+          unmatched > 0
+            ? `（未一致 ${unmatched}名）\n未一致の例: ${unmatchedPreview.join(' / ') || '（取得不可）'}${
+                unmatched > unmatchedPreview.length ? ' …' : ''
+              }`
+            : '';
         const msg = `傷病一覧を反映しました。CSV ${csvNames}名 → 名簿一致 ${matched}名${
-          unmatched > 0 ? `（未一致 ${unmatched}名は名簿の氏名を確認）` : ''
+          unmatchedText ? `\n${unmatchedText}` : ''
         }。対象月 ${targetYm} の「通常指示」を優先して病名を結合しています。${ymNote}`;
         setKaipokeImportStatus({
           kind: 'injury',

@@ -68,6 +68,28 @@ async function supabaseRest(url, serviceKey, path, method, body) {
   }
 }
 
+/**
+ * @param {string} url
+ * @param {string} serviceKey
+ * @param {string} path
+ */
+async function supabaseSelectJson(url, serviceKey, path) {
+  const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
+    method: 'GET',
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Supabase ${path}: ${res.status} ${text.slice(0, 400)}`);
+  }
+  const json = await res.json().catch(() => []);
+  return Array.isArray(json) ? json : [];
+}
+
 /** @param {Record<string, unknown>} e */
 function mapCareEventRow(organizationId, e) {
   const clientId = String(e.id ?? e.client_event_id ?? '').trim();
@@ -158,6 +180,25 @@ export default async function handler(req, res) {
         [row]
       );
       sendJson(res, 200, { ok: true, snapshot: ymd });
+      return;
+    }
+
+    if (action === 'pull_events') {
+      const sinceTs = String(payload.sinceTs ?? '').trim();
+      const parsedSince = sinceTs ? new Date(sinceTs) : null;
+      const limitRaw = Number(payload.limit ?? 1500);
+      const limit = Math.max(100, Math.min(5000, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 1500));
+      const sinceIso = parsedSince && Number.isFinite(parsedSince.getTime()) ? parsedSince.toISOString() : '';
+      const whereSince = sinceIso ? `&event_ts=gt.${encodeURIComponent(sinceIso)}` : '';
+      const rows = await supabaseSelectJson(
+        supabaseUrl,
+        serviceKey,
+        `care_events?organization_id=eq.${organizationId}${whereSince}&select=payload,event_ts&order=event_ts.desc&limit=${limit}`
+      );
+      const events = rows
+        .map((r) => (r && typeof r.payload === 'object' ? r.payload : null))
+        .filter(Boolean);
+      sendJson(res, 200, { ok: true, events, count: events.length });
       return;
     }
 

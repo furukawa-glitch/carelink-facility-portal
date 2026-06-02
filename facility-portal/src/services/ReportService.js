@@ -1168,6 +1168,19 @@ export function reloadCareEventsFromStorage() {
   return careEventsCache.length;
 }
 
+/**
+ * クラウドから取得したイベントをローカルへマージ。
+ * @param {unknown[]} cloudEvents
+ * @returns {number} 新規追加/更新後の件数増分
+ */
+export function mergeCareEventsFromCloud(cloudEvents) {
+  const local = getAllCareEvents();
+  const merged = mergeCareEventsById(local, Array.isArray(cloudEvents) ? cloudEvents : []);
+  const delta = Math.max(0, merged.length - local.length);
+  persistCareEventsList(merged);
+  return delta;
+}
+
 export function getCareRecordRetentionSummary() {
   return careEventsRetentionSummary(getAllCareEvents());
 }
