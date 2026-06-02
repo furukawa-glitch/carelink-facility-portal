@@ -775,6 +775,12 @@ function NursingDirectivesPanoramaView({
                     <div className="min-w-0">
                       <span className="mr-2 text-xs font-bold text-rose-600">{d.by}</span>
                       {d.text}
+                      {String(d.targetResidentName ?? '').trim() ? (
+                        <div className="mt-1 text-[10px] font-bold text-rose-700">
+                          対象: {String(d.targetResidentName).trim()}
+                          {String(d.targetResidentRoom ?? '').trim() ? `（${String(d.targetResidentRoom).trim()}号室）` : ''}
+                        </div>
+                      ) : null}
                       {d.startDate || d.endDate ? (
                         <div className="mt-1 text-[10px] font-bold text-rose-700">
                           表示: {d.startDate || '—'} 〜 {d.endDate || '未設定'}
@@ -1377,6 +1383,9 @@ const App = () => {
       Report.addNursingDirective(lk, panoramaNursingDraft, '看護', {
         startDate: panoramaNursingStart,
         endDate: panoramaNursingEnd,
+        targetResidentId: String(selectedResident?.id ?? ''),
+        targetResidentName: residentDisplayName(selectedResident?.name),
+        targetResidentRoom: String(selectedResident?.room ?? ''),
       })
     ) {
       setPanoramaNursingDraft('');

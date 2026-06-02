@@ -77,6 +77,8 @@ const LS = {
   facilityNotice: 'carelink_os_facility_notice_v1',
   /** 施設ごとの申し送り掲示（パノラマ・一覧の掲示板と同期） */
   facilityHandover: 'carelink_os_facility_handover_v1',
+  /** 施設ごとの単発申し送り（削除可能な追記メモ） */
+  facilityHandoverItems: 'carelink_os_facility_handover_items_v1',
   /** 利用者ごとの個別申し送り・処置メモ（施設共通掲示とは別） */
   residentRoomNotes: 'carelink_os_resident_room_notes_v1',
   /** 利用者ごとに保存した情報提供書PDFのAI抽出結果（メタ＋JSON） */
@@ -816,6 +818,9 @@ export function addNursingDirective(linkKey, text, by = '看護', opts = {}) {
     text: t,
     ts: new Date().toISOString(),
     by,
+    targetResidentId: String(opts?.targetResidentId ?? '').trim(),
+    targetResidentName: String(opts?.targetResidentName ?? '').trim(),
+    targetResidentRoom: String(opts?.targetResidentRoom ?? '').trim(),
     startDate: /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : '',
     endDate: /^\d{4}-\d{2}-\d{2}$/.test(endDate) ? endDate : '',
   });
@@ -925,6 +930,86 @@ export function setFacilityHandoverNote(linkKey, text, opts = {}) {
   return true;
 }
 
+/**
+ * 施設共通の単発申し送り（追記メモ）一覧
+ * @param {string} linkKey
+ * @returns {{ id: string; text: string; createdAt: string }[]}
+ */
+export function getFacilityHandoverItems(linkKey) {
+  const k = String(linkKey ?? '').trim();
+  if (!k) return [];
+  const all = readJson(LS.facilityHandoverItems, {});
+  const list = Array.isArray(all[k]) ? all[k] : [];
+  return list
+    .map((row) => ({
+      id: String(row?.id ?? '').trim(),
+      text: String(row?.text ?? '').trim(),
+      createdAt: String(row?.createdAt ?? '').trim(),
+    }))
+    .filter((row) => row.id && row.text)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+/**
+ * 施設共通の単発申し送り（追記メモ）を追加
+ * @param {string} linkKey
+ * @param {string} text
+ */
+export function addFacilityHandoverItem(linkKey, text, opts = {}) {
+  const k = String(linkKey ?? '').trim();
+  const t = String(text ?? '').trim();
+  if (!k || !t) return false;
+  const all = readJson(LS.facilityHandoverItems, {});
+  const list = Array.isArray(all[k]) ? all[k] : [];
+  const createdAt = String(opts?.createdAt ?? '').trim() || new Date().toISOString();
+  const id = String(opts?.id ?? '').trim() || `fh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const next = [{ id, text: t, createdAt }, ...list.filter((x) => String(x?.id ?? '').trim() !== id)];
+  all[k] = next;
+  writeJson(LS.facilityHandoverItems, all);
+  dispatchHandoverStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    logCareEvent({
+      type: 'facility_handover_item_add',
+      residentId: '',
+      residentName: '',
+      facilitySheetTitle: k,
+      ts: createdAt,
+      meta: { linkKey: k, id, text: t, createdAt },
+    });
+  }
+  return true;
+}
+
+/**
+ * 施設共通の単発申し送り（追記メモ）を削除
+ * @param {string} linkKey
+ * @param {string} itemId
+ */
+export function removeFacilityHandoverItem(linkKey, itemId, opts = {}) {
+  const k = String(linkKey ?? '').trim();
+  const id = String(itemId ?? '').trim();
+  if (!k || !id) return false;
+  const all = readJson(LS.facilityHandoverItems, {});
+  const list = Array.isArray(all[k]) ? all[k] : [];
+  const next = list.filter((row) => String(row?.id ?? '').trim() !== id);
+  if (next.length === list.length) return false;
+  all[k] = next;
+  writeJson(LS.facilityHandoverItems, all);
+  dispatchHandoverStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    const removedAt = new Date().toISOString();
+    logCareEvent({
+      type: 'facility_handover_item_remove',
+      residentId: '',
+      residentName: '',
+      facilitySheetTitle: k,
+      ts: removedAt,
+      meta: { linkKey: k, id, removedAt },
+    });
+  }
+  return true;
+}
+
 /** @param {string} linkKey */
 export function getFacilityNotice(linkKey) {
   const k = String(linkKey ?? '').trim();
@@ -1007,6 +1092,7 @@ function applyHandoverStoresFromEvents(events) {
   const list = Array.isArray(events) ? events : [];
   if (!list.length) return 0;
   const facilityStore = readJson(LS.facilityHandover, {});
+  const facilityItemStore = readJson(LS.facilityHandoverItems, {});
   const roomStore = readJson(LS.residentRoomNotes, {});
   let changed = 0;
   for (const e of list) {
@@ -1041,10 +1127,34 @@ function applyHandoverStoresFromEvents(events) {
         updatedAt: ts || new Date().toISOString(),
       };
       changed++;
+      continue;
+    }
+    if (typ === 'facility_handover_item_add') {
+      const linkKey = String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+      const id = String(meta.id ?? '').trim();
+      const text = String(meta.text ?? '').trim();
+      const createdAt = String(meta.createdAt ?? e?.ts ?? '').trim() || new Date().toISOString();
+      if (!linkKey || !id || !text) continue;
+      const list = Array.isArray(facilityItemStore[linkKey]) ? facilityItemStore[linkKey] : [];
+      const next = [{ id, text, createdAt }, ...list.filter((row) => String(row?.id ?? '').trim() !== id)];
+      facilityItemStore[linkKey] = next;
+      changed++;
+      continue;
+    }
+    if (typ === 'facility_handover_item_remove') {
+      const linkKey = String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+      const id = String(meta.id ?? '').trim();
+      if (!linkKey || !id) continue;
+      const list = Array.isArray(facilityItemStore[linkKey]) ? facilityItemStore[linkKey] : [];
+      const next = list.filter((row) => String(row?.id ?? '').trim() !== id);
+      if (next.length === list.length) continue;
+      facilityItemStore[linkKey] = next;
+      changed++;
     }
   }
   if (changed > 0) {
     writeJson(LS.facilityHandover, facilityStore);
+    writeJson(LS.facilityHandoverItems, facilityItemStore);
     writeJson(LS.residentRoomNotes, roomStore);
     dispatchHandoverStorageEvent();
   }

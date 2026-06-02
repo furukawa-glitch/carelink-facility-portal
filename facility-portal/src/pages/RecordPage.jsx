@@ -1003,6 +1003,7 @@ export function RecordPage({
   /** 個別申し送り・施設共通申し送りの再読込（App から戻ったとき等） */
   const [roomNotesRev, setRoomNotesRev] = useState(0);
   const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
+  const [facilityHandoverItemDraft, setFacilityHandoverItemDraft] = useState('');
   const [facilityHandoverSaveFlash, setFacilityHandoverSaveFlash] = useState(false);
   const [surroundTextEditId, setSurroundTextEditId] = useState('');
   const [surroundDraftText, setSurroundDraftText] = useState('');
@@ -1419,6 +1420,10 @@ export function RecordPage({
     () => Report.listIndividualHandoversForResidents(displayResidents),
     [displayResidents, roomNotesRev]
   );
+  const facilityHandoverItems = useMemo(() => {
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    return k ? Report.getFacilityHandoverItems(k) : [];
+  }, [selectedDef, roomNotesRev]);
 
   const continuousHandoverText =
     String(facilityHandoverMeta.text ?? '').trim() || String(board.handover ?? '').trim();
@@ -1445,6 +1450,25 @@ export function RecordPage({
     setFacilityHandoverSaveFlash(true);
     window.setTimeout(() => setFacilityHandoverSaveFlash(false), 1500);
   }, [selectedDef, facilityHandoverDraft]);
+
+  const addFacilityHandoverItem = useCallback(() => {
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    const text = String(facilityHandoverItemDraft ?? '').trim();
+    if (!k || !text) return;
+    Report.addFacilityHandoverItem(k, text);
+    setFacilityHandoverItemDraft('');
+    setRoomNotesRev((n) => n + 1);
+  }, [selectedDef, facilityHandoverItemDraft]);
+
+  const removeFacilityHandoverItem = useCallback(
+    (itemId) => {
+      const k = String(selectedDef?.linkKey ?? '').trim();
+      if (!k) return;
+      Report.removeFacilityHandoverItem(k, itemId);
+      setRoomNotesRev((n) => n + 1);
+    },
+    [selectedDef]
+  );
 
   const weeklyPlanDays = useMemo(() => {
     void tick;
@@ -3625,6 +3649,12 @@ export function RecordPage({
                           <div className="min-w-0">
                             <span className="mr-2 text-sm font-bold text-rose-500">{d.by}</span>
                             {d.text}
+                            {String(d.targetResidentName ?? '').trim() ? (
+                              <div className="mt-1 text-[11px] font-bold text-rose-700">
+                                対象: {String(d.targetResidentName).trim()}
+                                {String(d.targetResidentRoom ?? '').trim() ? `（${String(d.targetResidentRoom).trim()}号室）` : ''}
+                              </div>
+                            ) : null}
                             {(d.startDate || d.endDate) ? (
                               <div className="mt-1 text-[11px] font-bold text-rose-700">
                                 表示期間: {d.startDate || '今日'} 〜 {d.endDate || '未設定'}
@@ -3683,9 +3713,10 @@ export function RecordPage({
                     施設共通
                   </span>
                 </div>
-                <p className="mb-2 text-[11px] font-bold leading-snug text-indigo-900/90">
-                  介護チームで全体共有する継続事項。個別分は下の「申し送り一覧」に出ます（現在: {individualHandoverList.length}件）。
-                </p>
+                  <p className="mb-2 text-[11px] font-bold leading-snug text-indigo-900/90">
+                    介護チームで全体共有する継続事項（施設内連絡）を記載します。利用者個別の内容は「行動メニュー → 個室メモ」へ。
+                    個別分は下の一覧に出ます（現在: {individualHandoverList.length}件）。
+                  </p>
                 <textarea
                   value={facilityHandoverDraft}
                   onChange={(e) => setFacilityHandoverDraft(e.target.value)}
@@ -3702,6 +3733,23 @@ export function RecordPage({
                 >
                   {facilityHandoverSaveFlash ? '保存しました' : '介護申し送りを保存'}
                 </button>
+                <div className="mt-3 rounded-xl border-2 border-indigo-200 bg-white p-2.5">
+                  <p className="mb-1 text-[11px] font-black text-indigo-900">単発の申し送りを追加（不要時は下で削除）</p>
+                  <textarea
+                    value={facilityHandoverItemDraft}
+                    onChange={(e) => setFacilityHandoverItemDraft(e.target.value)}
+                    rows={2}
+                    placeholder="例：本日分のみ 夕食前に血圧再測定"
+                    className="w-full rounded-lg border border-indigo-200 bg-white px-2 py-1.5 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  <button
+                    type="button"
+                    onClick={addFacilityHandoverItem}
+                    className="mt-2 w-full rounded-lg bg-indigo-500 py-1.5 text-xs font-black text-white hover:bg-indigo-400"
+                  >
+                    単発申し送りを追加
+                  </button>
+                </div>
               </div>
               <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border-2 border-teal-300/90 bg-teal-50/95 p-2.5 shadow-md sm:p-3">
                 <div className="mb-2 flex items-center gap-2 text-teal-900">
@@ -3761,6 +3809,35 @@ export function RecordPage({
                   <p className="mt-2 text-[11px] font-bold text-indigo-700">
                     この欄は表示専用です。編集・保存は上段「介護からの申し送り」から行ってください。
                   </p>
+                  <div className="mt-3 rounded-lg border border-indigo-200 bg-white p-2">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-black text-indigo-900">単発の申し送り（手動削除）</p>
+                      <span className="text-[10px] font-bold text-indigo-700">{facilityHandoverItems.length}件</span>
+                    </div>
+                    {facilityHandoverItems.length === 0 ? (
+                      <p className="text-[11px] font-bold text-slate-500">単発申し送りはありません。</p>
+                    ) : (
+                      <ul className="max-h-40 space-y-1 overflow-auto pr-1">
+                        {facilityHandoverItems.map((item) => (
+                          <li key={item.id} className="rounded border border-indigo-100 bg-indigo-50/50 p-1.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-xs font-bold leading-snug text-slate-800">{item.text}</p>
+                              <button
+                                type="button"
+                                onClick={() => removeFacilityHandoverItem(item.id)}
+                                className="shrink-0 rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-black text-rose-700 hover:bg-rose-100"
+                              >
+                                削除
+                              </button>
+                            </div>
+                            <p className="mt-0.5 text-[10px] font-bold text-indigo-700">
+                              {item.createdAt ? new Date(item.createdAt).toLocaleString('ja-JP') : ''}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex min-h-0 flex-col rounded-xl border-2 border-emerald-300 bg-emerald-50/50 p-3">
