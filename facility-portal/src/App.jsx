@@ -95,12 +95,28 @@ function ymdLabelFromIso(isoLike) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function hmLabelFromIso(isoLike) {
+  const d = new Date(String(isoLike ?? ''));
+  if (!Number.isFinite(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function linePointsFromValues(values, width = 280, height = 96, pad = 10) {
   const valid = values.map((v) => Number(v)).filter((n) => Number.isFinite(n));
   if (!valid.length) return '';
   const min = Math.min(...valid);
   const max = Math.max(...valid);
-  const span = max - min || 1;
+  if (max === min) {
+    const y = height / 2;
+    const step = valid.length > 1 ? (width - pad * 2) / (valid.length - 1) : 0;
+    return valid
+      .map((_, idx) => {
+        const px = pad + step * idx;
+        return `${px},${y}`;
+      })
+      .join(' ');
+  }
+  const span = max - min;
   const step = valid.length > 1 ? (width - pad * 2) / (valid.length - 1) : 0;
   return valid
     .map((val, idx) => {
@@ -109,6 +125,24 @@ function linePointsFromValues(values, width = 280, height = 96, pad = 10) {
       return `${px},${py}`;
     })
     .join(' ');
+}
+
+function linePointPairsFromValues(values, width = 280, height = 96, pad = 10) {
+  const valid = values.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+  if (!valid.length) return [];
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const step = valid.length > 1 ? (width - pad * 2) / (valid.length - 1) : 0;
+  if (max === min) {
+    const y = height / 2;
+    return valid.map((v, idx) => ({ x: pad + step * idx, y, v }));
+  }
+  const span = max - min;
+  return valid.map((v, idx) => ({
+    x: pad + step * idx,
+    y: pad + ((max - v) / span) * (height - pad * 2),
+    v,
+  }));
 }
 
 /**
@@ -1965,59 +1999,77 @@ const App = () => {
               <p className="text-sm font-bold text-slate-500">直近1週間のバイタル記録がありません。</p>
             ) : (
               <>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {[
-                    { key: 'temp', label: '体温(℃)', cls: 'text-rose-700', stroke: '#e11d48' },
-                    { key: 'bpU', label: '血圧上', cls: 'text-indigo-700', stroke: '#4f46e5' },
-                    { key: 'bpL', label: '血圧下', cls: 'text-sky-700', stroke: '#0284c7' },
-                    { key: 'pulse', label: '脈拍', cls: 'text-emerald-700', stroke: '#059669' },
-                  ].map((series) => {
-                    const values = vitalTrendRows.map((r) => r[series.key]).filter((v) => Number.isFinite(v));
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="mb-2 text-xs font-black text-slate-700">折れ線推移（体温・血圧・脈拍）</p>
+                  {(() => {
+                    const recent = vitalTrendRows.slice(-10);
+                    const seriesDefs = [
+                      { key: 'temp', stroke: '#e11d48', label: '体温' },
+                      { key: 'bpU', stroke: '#4f46e5', label: '血圧上' },
+                      { key: 'bpL', stroke: '#0284c7', label: '血圧下' },
+                      { key: 'pulse', stroke: '#059669', label: '脈拍' },
+                    ];
                     return (
-                      <div key={series.key} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        <p className={`mb-2 text-xs font-black ${series.cls}`}>{series.label}</p>
-                        {values.length > 0 ? (
-                          <svg viewBox="0 0 280 96" className="h-24 w-full rounded bg-white">
-                            <polyline
-                              fill="none"
-                              stroke={series.stroke}
-                              strokeWidth="2.5"
-                              points={linePointsFromValues(values, 280, 96, 10)}
-                            />
-                          </svg>
-                        ) : (
-                          <p className="text-[11px] font-bold text-slate-400">データなし</p>
-                        )}
+                      <div className="rounded bg-white p-2">
+                        <svg viewBox="0 0 640 220" className="h-56 w-full">
+                          {[0, 1, 2, 3, 4].map((g) => {
+                            const y = 16 + g * 47;
+                            return <line key={g} x1="24" y1={y} x2="616" y2={y} stroke="#e5e7eb" strokeWidth="1" />;
+                          })}
+                          {seriesDefs.map((series) => {
+                            const values = recent.map((r) => r[series.key]).filter((v) => Number.isFinite(v));
+                            const points = linePointPairsFromValues(values, 592, 188, 8);
+                            const pointStr = points.map((p) => `${p.x + 24},${p.y + 16}`).join(' ');
+                            return (
+                              <g key={series.key}>
+                                <polyline fill="none" stroke={series.stroke} strokeWidth="2.5" points={pointStr} />
+                                {points.map((p, idx) => (
+                                  <circle key={`${series.key}-${idx}`} cx={p.x + 24} cy={p.y + 16} r="2.6" fill={series.stroke} />
+                                ))}
+                              </g>
+                            );
+                          })}
+                        </svg>
+                        <div className="mt-2 flex flex-wrap gap-3 text-[11px] font-black">
+                          {seriesDefs.map((s) => (
+                            <span key={s.key} className="inline-flex items-center gap-1 text-slate-700">
+                              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: s.stroke }} />
+                              {s.label}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     );
-                  })}
+                  })()}
                 </div>
                 <div className="overflow-auto rounded-xl border border-slate-200">
-                  <table className="w-full border-collapse text-left text-xs">
+                  <table className="w-full min-w-[760px] border-collapse text-left text-xs">
                     <thead className="bg-slate-100 text-slate-700">
                       <tr>
-                        <th className="border-b border-slate-200 px-2 py-1">日時</th>
-                        <th className="border-b border-slate-200 px-2 py-1">体温</th>
-                        <th className="border-b border-slate-200 px-2 py-1">血圧上</th>
-                        <th className="border-b border-slate-200 px-2 py-1">血圧下</th>
-                        <th className="border-b border-slate-200 px-2 py-1">脈拍</th>
+                        <th className="border-b border-slate-200 px-2 py-1">項目</th>
+                        {vitalTrendRows.slice(-10).map((row) => (
+                          <th key={`h-${row.ts}`} className="border-b border-slate-200 px-2 py-1 whitespace-nowrap">
+                            {ymdLabelFromIso(row.ts)} {hmLabelFromIso(row.ts)}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {vitalTrendRows
-                        .slice()
-                        .reverse()
-                        .map((row) => (
-                          <tr key={row.ts} className="odd:bg-white even:bg-slate-50">
-                            <td className="border-b border-slate-100 px-2 py-1.5 font-bold text-slate-700">
-                              {ymdLabelFromIso(row.ts)} {new Date(row.ts).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                      {[
+                        { key: 'temp', label: '体温(℃)' },
+                        { key: 'bpU', label: '血圧上' },
+                        { key: 'bpL', label: '血圧下' },
+                        { key: 'pulse', label: '脈拍' },
+                      ].map((series) => (
+                        <tr key={series.key} className="odd:bg-white even:bg-slate-50">
+                          <td className="border-b border-slate-100 px-2 py-1.5 font-black text-slate-700">{series.label}</td>
+                          {vitalTrendRows.slice(-10).map((row) => (
+                            <td key={`${series.key}-${row.ts}`} className="border-b border-slate-100 px-2 py-1.5 tabular-nums">
+                              {Number.isFinite(row[series.key]) ? row[series.key] : '—'}
                             </td>
-                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.temp) ? row.temp : '—'}</td>
-                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.bpU) ? row.bpU : '—'}</td>
-                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.bpL) ? row.bpL : '—'}</td>
-                            <td className="border-b border-slate-100 px-2 py-1.5">{Number.isFinite(row.pulse) ? row.pulse : '—'}</td>
-                          </tr>
-                        ))}
+                          ))}
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
