@@ -496,20 +496,21 @@ export function setResidentVitalSnapshot(residentId, patch) {
 export function syncResidentVitalSnapshotFromLatestEvent(residentId) {
   const rid = String(residentId ?? '').trim();
   if (!rid) return;
-  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getAllCareEvents()) {
     if (String(e?.residentId ?? '').trim() !== rid) continue;
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
-    const t = new Date(e.ts).getTime();
-    if (!Number.isFinite(t)) continue;
-    if (!latest || t >= new Date(latest.ts).getTime()) {
-      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts: String(e.ts) };
+    const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
+    if (!measuredAt) continue;
+    const t = new Date(measuredAt).getTime();
+    if (!latest || t >= new Date(latest.measuredAt).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), measuredAt };
     }
   }
   if (latest) {
-    setResidentVitalSnapshot(rid, { ...latest.meta, updatedAt: latest.ts });
+    setResidentVitalSnapshot(rid, { ...latest.meta, updatedAt: latest.measuredAt });
   }
 }
 
@@ -1631,6 +1632,27 @@ export function getCareEventsForResidentMonth(residentId, yearMonth) {
     .sort((a, b) => new Date(a.ts) - new Date(b.ts));
 }
 
+/** vital_snapshot の表示・集計用測定時刻（訪問日時を優先） */
+function resolveVitalMeasuredAt(meta, eventTs) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  for (const key of ['visitAt', 'measuredAt', 'visitStartAt', 'visitStart']) {
+    const raw = String(m[key] ?? '').trim();
+    if (!raw) continue;
+    const t = new Date(raw).getTime();
+    if (Number.isFinite(t)) return new Date(raw).toISOString();
+  }
+  const ts = String(eventTs ?? '').trim();
+  const t = new Date(ts).getTime();
+  return Number.isFinite(t) ? ts : '';
+}
+
+function careEventTsForResidentDay(e) {
+  if (e?.type === 'vital_snapshot') {
+    return resolveVitalMeasuredAt(e.meta, e.ts) || String(e.ts ?? '');
+  }
+  return String(e?.ts ?? '');
+}
+
 /**
  * 利用者×暦日（ローカル日付）のケアイベント
  * @param {string} residentId
@@ -1643,11 +1665,12 @@ export function getCareEventsForResidentDay(residentId, ymd) {
   return getAllCareEvents()
     .filter((e) => {
       if (String(e.residentId) !== rid) return false;
-      const t = new Date(e.ts);
+      const tsForDay = careEventTsForResidentDay(e);
+      const t = new Date(tsForDay);
       if (!Number.isFinite(t.getTime())) return false;
-      return tokyoYmdFromTs(e.ts) === day;
+      return tokyoYmdFromTs(tsForDay) === day;
     })
-    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    .sort((a, b) => new Date(careEventTsForResidentDay(a)) - new Date(careEventTsForResidentDay(b)));
 }
 
 /**
@@ -1657,14 +1680,7 @@ export function getCareEventsForResidentDay(residentId, ymd) {
  * @returns {Record<string, unknown> | null}
  */
 export function getLatestVitalSnapshotMetaForResidentDay(residentId, ymd) {
-  const events = getCareEventsForResidentDay(residentId, ymd);
-  /** @type {Record<string, unknown> | null} */
-  let last = null;
-  for (const e of events) {
-    if (e?.type !== 'vital_snapshot') continue;
-    if (e.meta && typeof e.meta === 'object') last = /** @type {Record<string, unknown>} */ (e.meta);
-  }
-  return last;
+  return getLatestVitalMetaForResidentDay(residentId, ymd).meta;
 }
 
 /**
@@ -1677,20 +1693,20 @@ export function getLatestVitalMetaForResidentDay(residentId, ymd) {
   const rid = String(residentId ?? '').trim();
   const day = String(ymd ?? '').trim();
   if (!rid || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return { meta: null, measuredAt: '' };
-  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getCareEventsForResidentDay(rid, day)) {
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
-    const ts = String(e.ts ?? '').trim();
-    const t = new Date(ts).getTime();
-    if (!Number.isFinite(t)) continue;
-    if (!latest || t >= new Date(latest.ts).getTime()) {
-      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts };
+    const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
+    if (!measuredAt) continue;
+    const t = new Date(measuredAt).getTime();
+    if (!latest || t >= new Date(latest.measuredAt).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), measuredAt };
     }
   }
   if (!latest) return { meta: null, measuredAt: '' };
-  return { meta: latest.meta, measuredAt: latest.ts };
+  return { meta: latest.meta, measuredAt: latest.measuredAt };
 }
 
 /**
@@ -1703,21 +1719,24 @@ export function getLatestVitalMetaForResident(residentId) {
   if (!rid) return { meta: null, measuredAt: '' };
   const snap = getResidentVitalSnapshot(rid);
   if (snap && vitalSnapshotRowHasData(snap)) {
-    return { meta: snap, measuredAt: String(snap.updatedAt ?? '').trim() };
+    const measuredAt =
+      resolveVitalMeasuredAt(snap, snap.updatedAt) || String(snap.updatedAt ?? '').trim();
+    return { meta: snap, measuredAt };
   }
-  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getAllCareEvents()) {
     if (String(e?.residentId ?? '').trim() !== rid) continue;
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
-    const t = new Date(e.ts).getTime();
-    if (!Number.isFinite(t)) continue;
-    if (!latest || t >= new Date(latest.ts).getTime()) {
-      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts: String(e.ts) };
+    const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
+    if (!measuredAt) continue;
+    const t = new Date(measuredAt).getTime();
+    if (!latest || t >= new Date(latest.measuredAt).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), measuredAt };
     }
   }
-  if (latest) return { meta: latest.meta, measuredAt: latest.ts };
+  if (latest) return { meta: latest.meta, measuredAt: latest.measuredAt };
   return { meta: null, measuredAt: '' };
 }
 
@@ -1734,19 +1753,21 @@ export function getLatestVitalMetaForResidentInRange(residentId, startYmd, endYm
   if (!rid || !Number.isFinite(start) || !Number.isFinite(end)) {
     return getLatestVitalMetaForResident(rid);
   }
-  /** @type {{ meta: Record<string, unknown>; ts: string } | null} */
+  /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getAllCareEvents()) {
     if (String(e?.residentId ?? '').trim() !== rid) continue;
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
-    const t = new Date(e.ts).getTime();
+    const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
+    if (!measuredAt) continue;
+    const t = new Date(measuredAt).getTime();
     if (!Number.isFinite(t) || t < start || t > end) continue;
-    if (!latest || t >= new Date(latest.ts).getTime()) {
-      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), ts: String(e.ts) };
+    if (!latest || t >= new Date(latest.measuredAt).getTime()) {
+      latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), measuredAt };
     }
   }
-  if (latest) return { meta: latest.meta, measuredAt: latest.ts };
+  if (latest) return { meta: latest.meta, measuredAt: latest.measuredAt };
   return getLatestVitalMetaForResident(rid);
 }
 

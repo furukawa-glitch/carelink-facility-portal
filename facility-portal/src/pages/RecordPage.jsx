@@ -469,34 +469,56 @@ function parseCsvDateTimeCellToIso(cell, defaultYm = '') {
   return null;
 }
 
+/** @param {string | null | undefined} iso */
+function finalizeVitalsCsvTimestamp(iso) {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? new Date(iso).toISOString() : null;
+}
+
 /** @param {string[]} headers */
 function buildVitalsCsvDateFieldIndexes(headers) {
   const h = (headers || []).map((x) => stripCsvBom(String(x ?? '')).trim());
   const ix = (pred) => h.findIndex(pred);
+  const datetimeCol = ix((c) => {
+    if (/排便|終了/u.test(c)) return false;
+    return (
+      /^訪問日時$|^訪問開始日時$|^開始日時$|^提供開始日時$|^実施日時$|^サービス開始日時$|^測定日時$/u.test(
+        c
+      ) || /^訪問.*日時$/u.test(c)
+    );
+  });
   const dateCol = ix((c) => {
     if (/排便/u.test(c)) return false;
     return (
-      /^日付$|^測定日$|^実施日$|^記録日$|^利用日$|^サービス提供日$|^提供日$|^年月日$|^測定日時$/u.test(
+      /^日付$|^測定日$|^実施日$|^記録日$|^利用日$|^サービス提供日$|^提供日$|^年月日$|^訪問日$/u.test(
         c
       ) || /^バイタル.*日/u.test(c)
     );
   });
-  const startTime = ix((c) => /^開始時間$/u.test(c));
-  const measureTime = ix((c) => /測定.*(時刻|時間)|記録時刻/u.test(c));
-  return { dateCol, timeCol: measureTime >= 0 ? measureTime : startTime };
+  const visitStart = ix((c) => /^訪問開始$|^開始時間$|^提供開始$|^サービス開始$/u.test(c));
+  const measureTime = ix((c) => /測定.*(時刻|時間)|記録時刻|^時刻$/u.test(c));
+  const timeCol = measureTime >= 0 ? measureTime : visitStart >= 0 ? visitStart : -1;
+  return { dateCol, timeCol, datetimeCol };
 }
 
 /**
- * バイタルCSV行の測定日時（日付列＋時刻列、または開始時間のみ）
+ * バイタルCSV行の測定日時（訪問日時列、日付＋開始時間、または開始時間のみ）
  * @param {string} dateCell
  * @param {string} timeCell
  * @param {string} defaultYm YYYY-MM
+ * @param {string} [datetimeCell]
  */
-function parseVitalsCsvRowTimestamp(dateCell, timeCell, defaultYm) {
+function parseVitalsCsvRowTimestamp(dateCell, timeCell, defaultYm, datetimeCell = '') {
+  const datetimeStr = String(datetimeCell ?? '').trim();
+  if (datetimeStr) {
+    const fromCombined = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(datetimeStr, defaultYm));
+    if (fromCombined) return fromCombined;
+  }
   const dateStr = String(dateCell ?? '').trim();
   const timeStr = String(timeCell ?? '').trim();
   if (dateStr && /\d{1,2}:\d{2}/.test(dateStr)) {
-    const iso = parseCsvDateTimeCellToIso(dateStr, defaultYm);
+    const iso = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(dateStr, defaultYm));
     if (iso) return iso;
   }
   const ymd = parseCsvDateCellToYmd(dateStr, defaultYm);
@@ -505,15 +527,35 @@ function parseVitalsCsvRowTimestamp(dateCell, timeCell, defaultYm) {
       const tm = /^(\d{1,2}):(\d{2})/.exec(timeStr);
       if (tm) {
         const [y, mo, d] = ymd.split('-').map(Number);
-        return new Date(y, mo - 1, d, Number(tm[1]), Number(tm[2])).toISOString();
+        return finalizeVitalsCsvTimestamp(
+          new Date(y, mo - 1, d, Number(tm[1]), Number(tm[2])).toISOString()
+        );
       }
-      const fromTime = parseCsvDateTimeCellToIso(timeStr, defaultYm);
+      const tmJa = /^(\d{1,2})時(\d{1,2})分?/.exec(timeStr);
+      if (tmJa) {
+        const [y, mo, d] = ymd.split('-').map(Number);
+        return finalizeVitalsCsvTimestamp(
+          new Date(y, mo - 1, d, Number(tmJa[1]), Number(tmJa[2])).toISOString()
+        );
+      }
+      const serial = Number(timeStr);
+      if (Number.isFinite(serial) && serial >= 0 && serial < 1) {
+        const mins = Math.round(serial * 24 * 60);
+        const [y, mo, d] = ymd.split('-').map(Number);
+        return finalizeVitalsCsvTimestamp(
+          new Date(y, mo - 1, d, Math.floor(mins / 60), mins % 60).toISOString()
+        );
+      }
+      const fromTime = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(timeStr, defaultYm));
       if (fromTime) return fromTime;
     }
     const [y, mo, d] = ymd.split('-').map(Number);
-    return new Date(y, mo - 1, d, 12, 0, 0).toISOString();
+    return finalizeVitalsCsvTimestamp(new Date(y, mo - 1, d, 12, 0, 0).toISOString());
   }
-  return parseCsvDateTimeCellToIso(timeStr, defaultYm) || parseCsvDateTimeCellToIso(dateStr, defaultYm);
+  return (
+    finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(timeStr, defaultYm)) ||
+    finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(dateStr, defaultYm))
+  );
 }
 
 /**
@@ -2593,6 +2635,7 @@ export function RecordPage({
           kana: headers.findIndex((h) => /利用者カナ|フリガナ|ふりがな|カナ/u.test(String(h ?? ''))),
           dateCol: dateIdx.dateCol,
           timeCol: dateIdx.timeCol,
+          datetimeCol: dateIdx.datetimeCol,
           temp: headers.findIndex((h) => {
             const hn = String(h);
             if (/血圧|目標/i.test(hn)) return false;
@@ -2645,7 +2688,8 @@ export function RecordPage({
           const ts = parseVitalsCsvRowTimestamp(
             getCell(row, idx.dateCol),
             getCell(row, idx.timeCol),
-            defaultYm
+            defaultYm,
+            idx.datetimeCol >= 0 ? getCell(row, idx.datetimeCol) : ''
           );
           if (!ts) {
             skippedNoDate += 1;
@@ -2657,7 +2701,7 @@ export function RecordPage({
             rid,
             String(hit.name ?? ''),
             String(hit.sourceSheetTitle ?? hit.facility ?? selectedSheetTitle),
-            patch,
+            { ...patch, visitAt: ts, measuredAt: ts },
             ts
           );
           affectedIds.add(rid);
@@ -2673,11 +2717,11 @@ export function RecordPage({
         if (applied > 0) {
           setTick((n) => n + 1);
           const dateHint =
-            idx.dateCol < 0 && idx.timeCol < 0
+            idx.dateCol < 0 && idx.timeCol < 0 && idx.datetimeCol < 0
               ? '（日付列が見つからず取り込めなかった行があります）'
               : skippedNoDate > 0
                 ? `（日付不明 ${skippedNoDate} 行はスキップ）`
-                : idx.dateCol < 0
+                : idx.dateCol < 0 && idx.datetimeCol < 0
                   ? `（開始時間等から日付を解釈。日のみの列は対象月 ${defaultYm}）`
                   : '';
           const msg = `${applied}件のバイタルを記録しました（${affectedIds.size}名）${dateHint}`;
