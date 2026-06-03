@@ -54,6 +54,7 @@ import { vitalStateFromSaved, careStateFromTodayEvents } from './lib/residentDet
 import { residentDiseaseLabel } from './lib/residentDiseaseLabel.js';
 import { WATER_ML_50_OPTIONS } from './lib/careQuickCareFields.js';
 import { WeeklyFlowSheet } from './components/WeeklyFlowSheet.jsx';
+import { startCareEventsRealtimeSync } from './lib/careEventsRealtimeSync.js';
 
 /** 施設向けの画面ロック。未設定のときはロックなし。設定時は全画面の前にパスワード必須。 */
 const VITE_FACILITY_PORTAL_PASSWORD = String(
@@ -865,9 +866,12 @@ function NursingDirectivesPanoramaView({
                 <input
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  placeholder="例: 褥瘡ケア／インスリン確認"
+                  placeholder={`例: ${residentDisplayName(selectedResident?.name) || '山田太郎'}様（${String(selectedResident?.room ?? '101').trim() || '101'}）　褥瘡ケア／インスリン確認`}
                   className="mt-1 w-full rounded-xl border-2 border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
                 />
+                <p className="mt-1 text-[10px] font-bold leading-snug text-slate-500">
+                  掲示すると先頭に<strong className="text-slate-700">利用者名・居室</strong>が自動で付きます（一覧表の看護指示にも同じ表示）。
+                </p>
               </label>
               <div className="flex flex-wrap gap-4">
                 <label className="text-xs font-bold text-slate-600">
@@ -1092,6 +1096,8 @@ const App = () => {
   });
   const [todayYmd, setTodayYmd] = useState(() => localYmd());
   const vitalsDayRef = useRef(localYmd());
+  /** detail 画面で入力中はクラウド同期によるフォーム上書きを抑止 */
+  const detailEditDirtyRef = useRef(false);
   const [alertThresholdDraft, setAlertThresholdDraft] = useState({
     tempCMinFever: String(Report.VITAL_THRESHOLDS.tempCMinFever),
     bpSystolicHigh: String(Report.VITAL_THRESHOLDS.bpSystolicHigh),
@@ -1152,6 +1158,15 @@ const App = () => {
       setTodayYmd((prev) => (prev === ymd ? prev : ymd));
     }, 30000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    return startCareEventsRealtimeSync((result) => {
+      if (Number(result?.merged ?? 0) > 0 || Number(result?.pulled ?? 0) > 0) {
+        setCareSyncRev((n) => n + 1);
+        setPanoramaNursingRev((n) => n + 1);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -1303,8 +1318,16 @@ const App = () => {
   useEffect(() => {
     if (!selectedResident) return;
     if (view !== 'detail' && view !== 'action_selection') return;
+    detailEditDirtyRef.current = false;
     applyResidentDetailState(selectedResident, recordDate);
   }, [recordDate, selectedResident, view, applyResidentDetailState]);
+
+  useEffect(() => {
+    if (!selectedResident) return;
+    if (view !== 'detail' && view !== 'action_selection') return;
+    if (view === 'detail' && detailEditDirtyRef.current) return;
+    applyResidentDetailState(selectedResident, recordDate);
+  }, [careSyncRev, selectedResident, recordDate, view, applyResidentDetailState]);
 
   const handleResidentClick = useCallback(
     (res, navList) => {
@@ -1390,6 +1413,7 @@ const App = () => {
   }, [selectedResident, alertThresholdDraft]);
 
   const handleSave = (msg = '記録を保存しました') => {
+    detailEditDirtyRef.current = false;
     setSaveStatus(msg);
     setTimeout(() => {
       setSaveStatus('');
@@ -1678,7 +1702,7 @@ const App = () => {
     }
   }, [selectedResident, recordDate, recordTime]);
 
-  const ActionSelection = () => (
+  const renderActionSelection = () => (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans font-bold">
       <div className="w-full max-w-md bg-white p-10 rounded-[4rem] shadow-2xl border border-slate-100 text-center font-bold">
         <button
@@ -1763,6 +1787,7 @@ const App = () => {
           <button
             type="button"
             onClick={() => {
+              detailEditDirtyRef.current = false;
               setActiveDetailTab('vital');
               setView('detail');
             }}
@@ -1819,7 +1844,7 @@ const App = () => {
     </div>
   );
 
-  const PatrolView = () => (
+  const renderPatrolView = () => (
     <div className="min-h-screen bg-slate-50 font-sans font-bold pb-32">
       <header className="p-6 bg-white border-b border-slate-100 sticky top-0 z-20 font-bold">
         <div className="flex items-center justify-between mb-4">
@@ -1922,7 +1947,7 @@ const App = () => {
     </div>
   );
 
-  const HistoryDetailed = () => (
+  const renderHistoryDetailed = () => (
     <div className="min-h-screen bg-slate-50 font-sans font-bold pb-12">
       <header className="p-6 bg-white border-b border-slate-100 sticky top-0 z-20 flex justify-between items-center font-bold">
         <button
@@ -2094,7 +2119,7 @@ const App = () => {
     </div>
   );
 
-  const Detail = () => (
+  const renderDetail = () => (
     <div className="min-h-screen bg-slate-50 font-sans font-bold pb-32">
       <header className="p-6 bg-white border-b border-slate-100 sticky top-0 z-20 font-bold">
         <div className="flex items-center justify-between mb-4 font-bold">
@@ -2248,7 +2273,10 @@ const App = () => {
                       type="text"
                       inputMode={v.s === '0.1' ? 'decimal' : 'numeric'}
                       value={vitals[v.key]}
-                      onChange={(e) => setVitals((prev) => ({ ...prev, [v.key]: e.target.value }))}
+                      onChange={(e) => {
+                        detailEditDirtyRef.current = true;
+                        setVitals((prev) => ({ ...prev, [v.key]: e.target.value }));
+                      }}
                       className="w-full text-right text-3xl font-bold text-slate-800 bg-transparent outline-none font-bold"
                     />
                     <span className="text-xs text-slate-400 font-bold">{v.u}</span>
@@ -2282,7 +2310,10 @@ const App = () => {
                       type="text"
                       inputMode={k === 'tempCMinFever' ? 'decimal' : 'numeric'}
                       value={alertThresholdDraft[k] ?? ''}
-                      onChange={(e) => setAlertThresholdDraft((prev) => ({ ...prev, [k]: e.target.value }))}
+                      onChange={(e) => {
+                        detailEditDirtyRef.current = true;
+                        setAlertThresholdDraft((prev) => ({ ...prev, [k]: e.target.value }));
+                      }}
                       className="rounded-lg border border-violet-200 bg-white px-2 py-1.5 text-sm font-bold text-slate-900"
                     />
                   </label>
@@ -2607,13 +2638,13 @@ const App = () => {
           />
         );
       case 'action_selection':
-        return <ActionSelection />;
+        return renderActionSelection();
       case 'detail':
-        return <Detail />;
+        return renderDetail();
       case 'patrol':
-        return <PatrolView />;
+        return renderPatrolView();
       case 'history_detailed':
-        return <HistoryDetailed />;
+        return renderHistoryDetailed();
       case 'nursing_directives':
         return (
           <NursingDirectivesPanoramaView

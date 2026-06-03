@@ -276,6 +276,7 @@ export function matchInjuryDiseaseMapToResidents(residents, nameKeyToLabel) {
   /** @type {Record<string, { label: string; nameKey: string }>} */
   const byId = {};
   let matched = 0;
+  const matchedCsvKeys = new Set();
   const csvEntries = [...nameKeyToLabel.entries()];
   const csvLoose = csvEntries.map(([k, v]) => ({ key: k, loose: loosePersonNameKey(k), label: String(v ?? '') }));
   const updated = (residents || []).map((res) => {
@@ -321,10 +322,14 @@ export function matchInjuryDiseaseMapToResidents(residents, nameKeyToLabel) {
     }
     if (!label || !id) return res;
     matched++;
+    if (matchedKey) matchedCsvKeys.add(matchedKey);
     byId[id] = { label, nameKey: matchedKey || keys[0] || '' };
     return { ...res, diseaseName: label, condition: label };
   });
   const csvNames = nameKeyToLabel.size;
   const unmatched = Math.max(0, csvNames - matched);
-  return { updated, byId, matched, csvNames, unmatched };
+  const unmatchedNameKeys = csvEntries
+    .map(([key]) => String(key))
+    .filter((key) => key && !matchedCsvKeys.has(key));
+  return { updated, byId, matched, csvNames, unmatched, unmatchedNameKeys };
 }

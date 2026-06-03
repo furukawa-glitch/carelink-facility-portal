@@ -151,6 +151,7 @@ export function ResidentBulkInputTable({
 }) {
   const [voiceTarget, setVoiceTarget] = React.useState({ id: '', name: '' });
   const [handTarget, setHandTarget] = React.useState({ id: '', name: '' });
+  const [savedFlashById, setSavedFlashById] = React.useState(/** @type {Record<string, boolean>} */ ({}));
   const urineVolumeOptions = React.useMemo(
     () => [{ value: '', label: '—' }, ...WATER_ML_50_OPTIONS.filter((o) => o.value !== '')],
     []
@@ -173,6 +174,17 @@ export function ResidentBulkInputTable({
       tableScrollRef.current.scrollTop = prevTop;
       tableScrollRef.current.scrollLeft = prevLeft;
     });
+  }, []);
+  const flashSaved = React.useCallback((id) => {
+    const rid = String(id ?? '').trim();
+    if (!rid) return;
+    setSavedFlashById((prev) => ({ ...prev, [rid]: true }));
+    window.setTimeout(() => {
+      setSavedFlashById((prev) => {
+        if (!prev[rid]) return prev;
+        return { ...prev, [rid]: false };
+      });
+    }, 1200);
   }, []);
   const scrollToMealInputs = React.useCallback(() => {
     const scroller = tableScrollRef.current;
@@ -961,10 +973,17 @@ export function ResidentBulkInputTable({
                     <button
                       type="button"
                       disabled={!bulkRowHasInput(row)}
-                      onClick={() => keepTableScrollPosition(() => saveBulkRow(res))}
-                      className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-black text-white disabled:opacity-40 sm:text-base"
+                      onClick={() =>
+                        keepTableScrollPosition(() => {
+                          saveBulkRow(res);
+                          flashSaved(id);
+                        })
+                      }
+                      className={`rounded px-3 py-1.5 text-sm font-black text-white disabled:opacity-40 sm:text-base ${
+                        savedFlashById[id] ? 'bg-emerald-400 ring-2 ring-emerald-300' : 'bg-emerald-600'
+                      }`}
                     >
-                      保存
+                      {savedFlashById[id] ? '保存済み' : '保存'}
                     </button>
                   </td>
                 </tr>

@@ -738,6 +738,12 @@ function currentYmd() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function formatYmdJa(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? ''));
+  if (!m) return String(ymd ?? '');
+  return `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日`;
+}
+
 /** @param {unknown} value */
 function toEventIsoOrNow(value) {
   const s = String(value ?? '').trim();
@@ -928,7 +934,11 @@ export function RecordPage({
   useEffect(() => {
     const bump = () => setTick((n) => n + 1);
     window.addEventListener('carelink-staff-profile', bump);
-    return () => window.removeEventListener('carelink-staff-profile', bump);
+    window.addEventListener('carelink-care-events-sync', bump);
+    return () => {
+      window.removeEventListener('carelink-staff-profile', bump);
+      window.removeEventListener('carelink-care-events-sync', bump);
+    };
   }, []);
 
   const [nursingDraft, setNursingDraft] = useState('');
@@ -1005,6 +1015,7 @@ export function RecordPage({
   const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
   const [facilityHandoverItemDraft, setFacilityHandoverItemDraft] = useState('');
   const [facilityHandoverSaveFlash, setFacilityHandoverSaveFlash] = useState(false);
+  const [handoverViewYmd, setHandoverViewYmd] = useState(() => currentYmd());
   const [surroundTextEditId, setSurroundTextEditId] = useState('');
   const [surroundDraftText, setSurroundDraftText] = useState('');
   const [surroundHandwritingId, setSurroundHandwritingId] = useState('');
@@ -1425,6 +1436,39 @@ export function RecordPage({
     return k ? Report.getFacilityHandoverItems(k) : [];
   }, [selectedDef, roomNotesRev]);
 
+  const handoverViewIsToday = handoverViewYmd === currentYmd();
+
+  const facilityHandoverSnapshot = useMemo(() => {
+    void tick;
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    if (!k || handoverViewIsToday) return null;
+    return Report.getFacilityHandoverSnapshotForDate(k, handoverViewYmd);
+  }, [selectedDef, handoverViewYmd, handoverViewIsToday, roomNotesRev, tick]);
+
+  const handoverHistoryDates = useMemo(() => {
+    void tick;
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    return k ? Report.listFacilityHandoverHistoryDates(k, 14) : [];
+  }, [selectedDef, roomNotesRev, tick]);
+
+  const displayHandoverContinuousText = handoverViewIsToday
+    ? String(facilityHandoverMeta.text ?? '')
+    : String(facilityHandoverSnapshot?.continuous?.text ?? '');
+
+  const displayHandoverContinuousAt = handoverViewIsToday
+    ? facilityHandoverMeta.updatedAt
+    : String(facilityHandoverSnapshot?.continuous?.updatedAt ?? '');
+
+  const displayHandoverItems = handoverViewIsToday
+    ? facilityHandoverItems
+    : facilityHandoverSnapshot?.oneOffItems ?? [];
+
+  const displayIndividualHandovers = useMemo(() => {
+    void tick;
+    if (handoverViewIsToday) return individualHandoverList;
+    return Report.listIndividualHandoversSnapshotForDate(displayResidents, handoverViewYmd);
+  }, [handoverViewIsToday, individualHandoverList, displayResidents, handoverViewYmd, tick, roomNotesRev]);
+
   const continuousHandoverText =
     String(facilityHandoverMeta.text ?? '').trim() || String(board.handover ?? '').trim();
 
@@ -1436,9 +1480,11 @@ export function RecordPage({
     const bump = () => setRoomNotesRev((n) => n + 1);
     window.addEventListener('focus', bump);
     window.addEventListener('carelink-handover-storage', bump);
+    window.addEventListener('carelink-care-events-sync', bump);
     return () => {
       window.removeEventListener('focus', bump);
       window.removeEventListener('carelink-handover-storage', bump);
+      window.removeEventListener('carelink-care-events-sync', bump);
     };
   }, []);
 
@@ -1672,7 +1718,7 @@ export function RecordPage({
     void pullOnce();
     const id = window.setInterval(() => {
       void pullOnce();
-    }, 20_000);
+    }, 90_000);
     const onFocus = () => {
       void pullOnce();
     };
@@ -3779,56 +3825,138 @@ export function RecordPage({
             </div>
 
             <div className="rounded-2xl border-2 border-indigo-300 bg-white p-2.5 shadow-md sm:p-4">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <ClipboardList className="h-6 w-6 shrink-0 text-indigo-700" />
-                <h2 className="text-base font-black text-indigo-950 sm:text-lg">申し送り一覧</h2>
-                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-black text-indigo-900">
-                  {selectedDef?.tabLabel ?? '施設'}
-                </span>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ClipboardList className="h-6 w-6 shrink-0 text-indigo-700" />
+                  <h2 className="text-base font-black text-indigo-950 sm:text-lg">申し送り一覧</h2>
+                  <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-black text-indigo-900">
+                    {selectedDef?.tabLabel ?? '施設'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+                  <label className="flex items-center gap-1.5 text-[11px] font-black text-indigo-900">
+                    <CalendarDays className="h-4 w-4 shrink-0" />
+                    表示日
+                    <input
+                      type="date"
+                      value={handoverViewYmd}
+                      max={currentYmd()}
+                      onChange={(e) => setHandoverViewYmd(e.target.value || currentYmd())}
+                      className="rounded-lg border border-indigo-300 bg-white px-2 py-1 text-sm font-bold text-slate-900"
+                    />
+                  </label>
+                  {!handoverViewIsToday ? (
+                    <button
+                      type="button"
+                      onClick={() => setHandoverViewYmd(currentYmd())}
+                      className="rounded-lg border border-indigo-400 bg-indigo-600 px-2.5 py-1 text-[11px] font-black text-white hover:bg-indigo-500"
+                    >
+                      今日に戻る
+                    </button>
+                  ) : null}
+                </div>
               </div>
+              {!handoverViewIsToday ? (
+                <div className="mb-3 rounded-xl border-2 border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-snug text-amber-950">
+                  <span className="font-black">{formatYmdJa(handoverViewYmd)}</span> 時点の申し送りを表示しています（閲覧のみ）。
+                  {facilityHandoverSnapshot?.hasData
+                    ? ' 保存履歴から復元しています。'
+                    : ' この日の保存履歴は見つかりませんでした（その日に保存がなかったか、別PCのみの記録の可能性があります）。'}
+                  編集は上段の「介護からの申し送り」から行い、反映は今日の内容になります。
+                </div>
+              ) : null}
+              {handoverHistoryDates.length > 1 ? (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-black text-indigo-800">履歴:</span>
+                  {handoverHistoryDates.map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setHandoverViewYmd(d)}
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                        d === handoverViewYmd
+                          ? 'bg-indigo-600 text-white'
+                          : 'border border-indigo-200 bg-indigo-50 text-indigo-900 hover:bg-indigo-100'
+                      }`}
+                    >
+                      {d === currentYmd() ? '今日' : formatYmdJa(d).replace(/^\d+年/, '')}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="grid gap-3 lg:grid-cols-2 lg:items-start">
                 <div className="flex min-h-0 flex-col rounded-xl border-2 border-indigo-200 bg-indigo-50/80 p-3">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-sm font-black text-indigo-950">継続の申し送り（介護・施設共通）</h3>
-                    {facilityHandoverMeta.updatedAt ? (
+                    {displayHandoverContinuousAt ? (
                       <span className="text-[10px] font-bold text-indigo-700">
-                        更新 {new Date(facilityHandoverMeta.updatedAt).toLocaleString('ja-JP')}
+                        {handoverViewIsToday ? '更新' : '時点'} {new Date(displayHandoverContinuousAt).toLocaleString('ja-JP')}
                       </span>
                     ) : null}
                   </div>
                   <p className="mb-2 text-[11px] font-bold leading-snug text-indigo-900/90">
-                    全利用者に共通する介護の継続事項。上段「介護からの申し送り」と同じ内容です。
+                    全利用者に共通する介護の継続事項。
+                    {handoverViewIsToday
+                      ? ' 上段「介護からの申し送り」と同じ内容です。'
+                      : ` ${formatYmdJa(handoverViewYmd)} の終わり時点の内容です。`}
                   </p>
+                  {!handoverViewIsToday && (facilityHandoverSnapshot?.dayChanges?.length ?? 0) > 1 ? (
+                    <div className="mb-2 rounded-lg border border-indigo-200 bg-white p-2">
+                      <p className="text-[10px] font-black text-indigo-800">
+                        この日は {facilityHandoverSnapshot.dayChanges.length} 回更新されています（最終版を表示）
+                      </p>
+                      <ul className="mt-1 max-h-24 space-y-1 overflow-auto text-[10px] font-bold text-indigo-900">
+                        {facilityHandoverSnapshot.dayChanges.map((row, i) => (
+                          <li key={`${row.ts}-${i}`} className="border-b border-indigo-50 pb-1">
+                            {new Date(row.updatedAt || row.ts).toLocaleTimeString('ja-JP', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            ：{row.text.slice(0, 80)}
+                            {row.text.length > 80 ? '…' : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                   <textarea
-                    value={String(facilityHandoverMeta.text ?? '')}
+                    value={displayHandoverContinuousText}
                     readOnly
                     rows={6}
-                    placeholder="上段で保存した介護申し送りがここに表示されます"
+                    placeholder={
+                      handoverViewIsToday
+                        ? '上段で保存した介護申し送りがここに表示されます'
+                        : 'この日の継続申し送りの保存履歴はありません'
+                    }
                     className="min-h-[7rem] w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900"
                   />
-                  <p className="mt-2 text-[11px] font-bold text-indigo-700">
-                    この欄は表示専用です。編集・保存は上段「介護からの申し送り」から行ってください。
-                  </p>
+                  {handoverViewIsToday ? (
+                    <p className="mt-2 text-[11px] font-bold text-indigo-700">
+                      この欄は表示専用です。編集・保存は上段「介護からの申し送り」から行ってください。
+                    </p>
+                  ) : null}
                   <div className="mt-3 rounded-lg border border-indigo-200 bg-white p-2">
                     <div className="mb-1 flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-black text-indigo-900">単発の申し送り（手動削除）</p>
-                      <span className="text-[10px] font-bold text-indigo-700">{facilityHandoverItems.length}件</span>
+                      <p className="text-[11px] font-black text-indigo-900">単発の申し送り{handoverViewIsToday ? '（手動削除）' : ''}</p>
+                      <span className="text-[10px] font-bold text-indigo-700">{displayHandoverItems.length}件</span>
                     </div>
-                    {facilityHandoverItems.length === 0 ? (
+                    {displayHandoverItems.length === 0 ? (
                       <p className="text-[11px] font-bold text-slate-500">単発申し送りはありません。</p>
                     ) : (
                       <ul className="max-h-40 space-y-1 overflow-auto pr-1">
-                        {facilityHandoverItems.map((item) => (
+                        {displayHandoverItems.map((item) => (
                           <li key={item.id} className="rounded border border-indigo-100 bg-indigo-50/50 p-1.5">
                             <div className="flex items-start justify-between gap-2">
                               <p className="text-xs font-bold leading-snug text-slate-800">{item.text}</p>
-                              <button
-                                type="button"
-                                onClick={() => removeFacilityHandoverItem(item.id)}
-                                className="shrink-0 rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-black text-rose-700 hover:bg-rose-100"
-                              >
-                                削除
-                              </button>
+                              {handoverViewIsToday ? (
+                                <button
+                                  type="button"
+                                  onClick={() => removeFacilityHandoverItem(item.id)}
+                                  className="shrink-0 rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-black text-rose-700 hover:bg-rose-100"
+                                >
+                                  削除
+                                </button>
+                              ) : null}
                             </div>
                             <p className="mt-0.5 text-[10px] font-bold text-indigo-700">
                               {item.createdAt ? new Date(item.createdAt).toLocaleString('ja-JP') : ''}
@@ -3844,14 +3972,16 @@ export function RecordPage({
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-sm font-black text-emerald-950">
                       個別の申し送り（利用者ごと）{' '}
-                      <span className="tabular-nums text-emerald-800">{individualHandoverList.length}件</span>
+                      <span className="tabular-nums text-emerald-800">{displayIndividualHandovers.length}件</span>
                     </h3>
                   </div>
                   <p className="mb-2 text-[11px] font-bold leading-snug text-emerald-900/90">
-                    「行動メニュー → 個室メモ（申し送り・処置）」で登録した内容です。行を押すとその方の記録画面を開けます。
+                    {handoverViewIsToday
+                      ? '「行動メニュー → 個室メモ（申し送り・処置）」で登録した内容です。行を押すとその方の記録画面を開けます。'
+                      : `${formatYmdJa(handoverViewYmd)} 時点の個室メモです（閲覧のみ）。`}
                   </p>
                   <div className="max-h-[min(420px,50vh)] overflow-auto rounded-lg border border-emerald-200 bg-white">
-                    {individualHandoverList.length === 0 ? (
+                    {displayIndividualHandovers.length === 0 ? (
                       <p className="p-4 text-sm font-bold text-emerald-800">個別申し送りはまだありません。</p>
                     ) : (
                       <table className="w-full border-collapse text-left text-xs sm:text-sm">
@@ -3864,11 +3994,14 @@ export function RecordPage({
                           </tr>
                         </thead>
                         <tbody>
-                          {individualHandoverList.map((row) => (
+                          {displayIndividualHandovers.map((row) => (
                             <tr
                               key={row.residentId}
-                              className="cursor-pointer border-b border-emerald-100 odd:bg-white even:bg-emerald-50/40 hover:bg-emerald-100/60"
+                              className={`border-b border-emerald-100 odd:bg-white even:bg-emerald-50/40 ${
+                                handoverViewIsToday ? 'cursor-pointer hover:bg-emerald-100/60' : ''
+                              }`}
                               onClick={() => {
+                                if (!handoverViewIsToday) return;
                                 const hit = displayResidents.find((r) => String(r.id) === row.residentId);
                                 if (hit && onSelectResident) onSelectResident(hit, displayResidents);
                               }}
@@ -3893,11 +4026,14 @@ export function RecordPage({
                   </div>
                 </div>
               </div>
-              {continuousHandoverText ? (
+              {displayHandoverContinuousText ? (
                 <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50/60 px-3 py-2">
-                  <p className="text-[10px] font-black text-indigo-800">継続の申し送り（掲示用プレビュー）</p>
+                  <p className="text-[10px] font-black text-indigo-800">
+                    継続の申し送り（掲示用プレビュー）
+                    {!handoverViewIsToday ? ` — ${formatYmdJa(handoverViewYmd)} 時点` : ''}
+                  </p>
                   <p className="mt-1 whitespace-pre-wrap text-sm font-bold leading-relaxed text-indigo-950">
-                    {continuousHandoverText}
+                    {displayHandoverContinuousText}
                   </p>
                 </div>
               ) : null}

@@ -806,8 +806,27 @@ export function getNursingDirectives(linkKey) {
   });
 }
 
-export function addNursingDirective(linkKey, text, by = '看護', opts = {}) {
+/** @param {string} text @param {{ targetResidentName?: string; targetResidentRoom?: string }} opts */
+function formatNursingDirectiveText(text, opts = {}) {
   const t = String(text ?? '').trim();
+  const name = String(opts?.targetResidentName ?? '')
+    .replace(/様\s*$/u, '')
+    .trim();
+  const room = String(opts?.targetResidentRoom ?? '').trim();
+  if (!t || !name) return t;
+  const nameMark = `${name}様`;
+  if (t.startsWith(nameMark) || t.includes(nameMark)) return t;
+  const prefix = room ? `${nameMark}（${room}）　` : `${nameMark}　`;
+  return `${prefix}${t}`;
+}
+
+export function addNursingDirective(linkKey, text, by = '看護', opts = {}) {
+  const targetResidentName = String(opts?.targetResidentName ?? '').trim();
+  const targetResidentRoom = String(opts?.targetResidentRoom ?? '').trim();
+  const t = formatNursingDirectiveText(text, {
+    targetResidentName,
+    targetResidentRoom,
+  });
   if (!t || !linkKey) return false;
   const all = readJson(LS.nursing, {});
   const list = Array.isArray(all[linkKey]) ? all[linkKey] : [];
@@ -819,8 +838,8 @@ export function addNursingDirective(linkKey, text, by = '看護', opts = {}) {
     ts: new Date().toISOString(),
     by,
     targetResidentId: String(opts?.targetResidentId ?? '').trim(),
-    targetResidentName: String(opts?.targetResidentName ?? '').trim(),
-    targetResidentRoom: String(opts?.targetResidentRoom ?? '').trim(),
+    targetResidentName,
+    targetResidentRoom,
     startDate: /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : '',
     endDate: /^\d{4}-\d{2}-\d{2}$/.test(endDate) ? endDate : '',
   });
@@ -1008,6 +1027,171 @@ export function removeFacilityHandoverItem(linkKey, itemId, opts = {}) {
     });
   }
   return true;
+}
+
+const HANDOVER_EVENT_TYPES = Object.freeze([
+  'facility_handover',
+  'facility_handover_item_add',
+  'facility_handover_item_remove',
+]);
+
+/** @param {Record<string, unknown>} e */
+function facilityHandoverLinkKey(e) {
+  const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+  return String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+}
+
+/** @param {string} a @param {string} b */
+function ymdLe(a, b) {
+  return String(a ?? '').trim() <= String(b ?? '').trim();
+}
+
+/**
+ * 指定日（JST）時点の施設申し送りを生活記録ログから復元
+ * @param {string} linkKey
+ * @param {string} ymd YYYY-MM-DD
+ */
+export function getFacilityHandoverSnapshotForDate(linkKey, ymd) {
+  const k = String(linkKey ?? '').trim();
+  const day = String(ymd ?? '').trim();
+  if (!k || !day) {
+    return { ymd: day, continuous: null, oneOffItems: [], dayChanges: [], hasData: false };
+  }
+
+  const relevant = getAllCareEvents()
+    .filter((e) => {
+      const typ = String(e?.type ?? '');
+      if (!HANDOVER_EVENT_TYPES.includes(typ)) return false;
+      if (facilityHandoverLinkKey(e) !== k) return false;
+      const eventDay = tokyoYmdFromTs(String(e?.ts ?? ''));
+      return Boolean(eventDay) && ymdLe(eventDay, day);
+    })
+    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+  /** @type {{ text: string; updatedAt: string } | null} */
+  let continuous = null;
+  /** @type {Map<string, { id: string; text: string; createdAt: string }>} */
+  const items = new Map();
+
+  for (const e of relevant) {
+    const typ = String(e?.type ?? '');
+    const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+    if (typ === 'facility_handover') {
+      continuous = {
+        text: String(meta.text ?? '').trim(),
+        updatedAt: String(meta.updatedAt ?? e?.ts ?? '').trim(),
+      };
+    } else if (typ === 'facility_handover_item_add') {
+      const id = String(meta.id ?? '').trim();
+      const text = String(meta.text ?? '').trim();
+      const createdAt = String(meta.createdAt ?? e?.ts ?? '').trim();
+      if (id && text) items.set(id, { id, text, createdAt });
+    } else if (typ === 'facility_handover_item_remove') {
+      const id = String(meta.id ?? '').trim();
+      if (id) items.delete(id);
+    }
+  }
+
+  const dayChanges = getAllCareEvents()
+    .filter((e) => {
+      if (String(e?.type ?? '') !== 'facility_handover') return false;
+      if (facilityHandoverLinkKey(e) !== k) return false;
+      return tokyoYmdFromTs(String(e?.ts ?? '')) === day;
+    })
+    .map((e) => {
+      const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+      return {
+        text: String(meta.text ?? '').trim(),
+        updatedAt: String(meta.updatedAt ?? e?.ts ?? '').trim(),
+        ts: String(e?.ts ?? ''),
+      };
+    })
+    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+  const oneOffItems = [...items.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  const hasData = Boolean(continuous?.text) || oneOffItems.length > 0 || dayChanges.length > 0;
+
+  return { ymd: day, continuous, oneOffItems, dayChanges, hasData };
+}
+
+/**
+ * 申し送り履歴がある日付一覧（JST・新しい順）
+ * @param {string} linkKey
+ * @param {number} [limit]
+ */
+export function listFacilityHandoverHistoryDates(linkKey, limit = 90) {
+  const k = String(linkKey ?? '').trim();
+  if (!k) return [];
+  /** @type {Set<string>} */
+  const days = new Set();
+  for (const e of getAllCareEvents()) {
+    const typ = String(e?.type ?? '');
+    if (!HANDOVER_EVENT_TYPES.includes(typ)) continue;
+    if (facilityHandoverLinkKey(e) !== k) continue;
+    const day = tokyoYmdFromTs(String(e?.ts ?? ''));
+    if (day) days.add(day);
+  }
+  return [...days].sort((a, b) => b.localeCompare(a)).slice(0, Math.max(1, limit));
+}
+
+/**
+ * 指定日（JST）時点の個別申し送り・処置メモ（利用者ごと）
+ * @param {Record<string, unknown>[]} residents
+ * @param {string} ymd YYYY-MM-DD
+ */
+export function listIndividualHandoversSnapshotForDate(residents, ymd) {
+  const day = String(ymd ?? '').trim();
+  if (!day) return [];
+
+  /** @type {Map<string, { handover: string; treatment: string; updatedAt: string }>} */
+  const byResident = new Map();
+  for (const e of getAllCareEvents()) {
+    if (String(e?.type ?? '') !== 'resident_room_note') continue;
+    const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+    const rid = String(meta.residentId ?? e?.residentId ?? '').trim();
+    if (!rid) continue;
+    const eventDay = tokyoYmdFromTs(String(e?.ts ?? ''));
+    if (!eventDay || !ymdLe(eventDay, day)) continue;
+    const updatedAt = String(meta.updatedAt ?? e?.ts ?? '').trim();
+    const prev = byResident.get(rid);
+    const prevAt = prev ? new Date(prev.updatedAt).getTime() : 0;
+    const nextAt = new Date(updatedAt).getTime();
+    if (!Number.isFinite(nextAt) || nextAt < prevAt) continue;
+    byResident.set(rid, {
+      handover: String(meta.handover ?? '').trim(),
+      treatment: String(meta.treatment ?? '').trim(),
+      updatedAt,
+    });
+  }
+
+  /** @type {{ residentId: string; name: string; room: string; handover: string; treatment: string; updatedAt: string }[]} */
+  const out = [];
+  for (const res of residents || []) {
+    const id = String(res?.id ?? '').trim();
+    if (!id) continue;
+    const row = byResident.get(id);
+    if (!row || (!row.handover && !row.treatment)) continue;
+    out.push({
+      residentId: id,
+      name: String(res?.name ?? '').trim(),
+      room: String(res?.room ?? '').trim() || '—',
+      handover: row.handover,
+      treatment: row.treatment,
+      updatedAt: row.updatedAt,
+    });
+  }
+  out.sort((a, b) => {
+    const roomKey = (r) => {
+      const n = parseInt(String(r).replace(/\D/g, ''), 10);
+      return Number.isFinite(n) ? String(n).padStart(6, '0') : String(r);
+    };
+    const c = roomKey(a.room).localeCompare(roomKey(b.room), 'ja', { numeric: true });
+    if (c !== 0) return c;
+    return a.name.localeCompare(b.name, 'ja');
+  });
+  return out;
 }
 
 /** @param {string} linkKey */

@@ -73,6 +73,41 @@ async function supabaseRest(url, serviceKey, path, method, body) {
  * @param {string} serviceKey
  * @param {string} path
  */
+/**
+ * 他PCへ Realtime broadcast（保存直後に pull トリガー）
+ * @param {string} url
+ * @param {string} serviceKey
+ * @param {string} organizationId
+ */
+async function broadcastCareEventsUpdated(url, serviceKey, organizationId) {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(url, serviceKey);
+    const topic = `carelink-sync:${organizationId}`;
+    const channel = sb.channel(topic, { config: { broadcast: { self: false } } });
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('realtime subscribe timeout')), 8000);
+      channel.subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(timeout);
+          resolve(undefined);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timeout);
+          reject(err ?? new Error(String(status)));
+        }
+      });
+    });
+    await channel.send({
+      type: 'broadcast',
+      event: 'events_updated',
+      payload: { at: new Date().toISOString() },
+    });
+    await sb.removeChannel(channel);
+  } catch {
+    // broadcast 失敗は upsert 成功を阻害しない（ポーリングがフォールバック）
+  }
+}
+
 async function supabaseSelectJson(url, serviceKey, path) {
   const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
     method: 'GET',
@@ -148,6 +183,7 @@ export default async function handler(req, res) {
         return;
       }
       await supabaseRest(supabaseUrl, serviceKey, 'care_events?on_conflict=organization_id,client_event_id', 'POST', rows);
+      void broadcastCareEventsUpdated(supabaseUrl, serviceKey, organizationId);
       sendJson(res, 200, { ok: true, upserted: rows.length });
       return;
     }
