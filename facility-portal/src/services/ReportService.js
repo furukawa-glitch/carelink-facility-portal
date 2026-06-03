@@ -93,6 +93,8 @@ const LS = {
   dayServiceSchedule: 'carelink_os_day_service_v1',
   /** 傷病一覧CSVから取り込んだ病名 { [residentId]: { label, ym, importedAt } } */
   injuryDiseaseByResident: 'carelink_os_injury_disease_by_resident_v1',
+  /** 施設ごとの往診カレンダー（クリニックPDF取込） */
+  homeVisitCalendar: 'carelink_os_home_visit_calendar_v1',
 };
 
 const MAX_ACCIDENT_REPORTS = 2000;
@@ -1471,6 +1473,120 @@ export function removeWeeklyPlan(linkKey, planId) {
   all[k] = next;
   writeJson(LS.weeklyPlans, all);
   return true;
+}
+
+/**
+ * @typedef {{
+ *   date: string;
+ *   doctor: string;
+ *   visitType: string;
+ *   entries: { residentId: string; name: string; room: string; rawName: string }[];
+ *   unmatchedNames: string[];
+ * }} HomeVisitCalendarDay
+ */
+
+/**
+ * @typedef {{
+ *   yearMonth: string;
+ *   clinicName: string;
+ *   updatedAt: string;
+ *   sourceFileName: string;
+ *   days: HomeVisitCalendarDay[];
+ * }} HomeVisitCalendarRecord
+ */
+
+/** @param {string} linkKey */
+export function getHomeVisitCalendar(linkKey) {
+  const k = String(linkKey ?? '').trim();
+  if (!k) return null;
+  const all = readJson(LS.homeVisitCalendar, {});
+  const rec = all[k];
+  if (!rec || typeof rec !== 'object') return null;
+  const days = Array.isArray(rec.days) ? rec.days : [];
+  return {
+    yearMonth: String(rec.yearMonth ?? '').trim(),
+    clinicName: String(rec.clinicName ?? '').trim(),
+    updatedAt: String(rec.updatedAt ?? '').trim(),
+    sourceFileName: String(rec.sourceFileName ?? '').trim(),
+    days: days
+      .map((d) => ({
+        date: String(d?.date ?? '').trim(),
+        doctor: String(d?.doctor ?? '').trim(),
+        visitType: String(d?.visitType ?? '往診').trim() || '往診',
+        entries: (Array.isArray(d?.entries) ? d.entries : [])
+          .map((e) => ({
+            residentId: String(e?.residentId ?? '').trim(),
+            name: String(e?.name ?? '').trim(),
+            room: String(e?.room ?? '').trim(),
+            rawName: String(e?.rawName ?? '').trim(),
+          }))
+          .filter((e) => e.residentId || e.name),
+        unmatchedNames: (Array.isArray(d?.unmatchedNames) ? d.unmatchedNames : [])
+          .map((n) => String(n ?? '').trim())
+          .filter(Boolean),
+      }))
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.date)),
+  };
+}
+
+/**
+ * @param {string} linkKey
+ * @param {HomeVisitCalendarRecord} record
+ */
+export function saveHomeVisitCalendar(linkKey, record) {
+  const k = String(linkKey ?? '').trim();
+  if (!k || !record || typeof record !== 'object') return false;
+  const all = readJson(LS.homeVisitCalendar, {});
+  all[k] = {
+    yearMonth: String(record.yearMonth ?? '').trim(),
+    clinicName: String(record.clinicName ?? '').trim(),
+    updatedAt: String(record.updatedAt ?? new Date().toISOString()),
+    sourceFileName: String(record.sourceFileName ?? '').trim(),
+    days: Array.isArray(record.days) ? record.days : [],
+  };
+  writeJson(LS.homeVisitCalendar, all);
+  return true;
+}
+
+/**
+ * 週間カレンダー表示用プラン行に変換
+ * @param {string} linkKey
+ * @param {string} startYmd YYYY-MM-DD
+ * @param {string} endYmd YYYY-MM-DD
+ */
+export function getHomeVisitCalendarPlansInRange(linkKey, startYmd, endYmd) {
+  const rec = getHomeVisitCalendar(linkKey);
+  if (!rec?.days?.length) return [];
+  const start = new Date(`${String(startYmd ?? '').trim()}T00:00:00`).getTime();
+  const end = new Date(`${String(endYmd ?? '').trim()}T23:59:59.999`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  /** @type {ReturnType<typeof getHomeVisitCalendarPlansInRange>} */
+  const out = [];
+  for (const day of rec.days) {
+    const t = new Date(`${day.date}T12:00:00`).getTime();
+    if (!Number.isFinite(t) || t < start || t > end) continue;
+    const names = day.entries.map((e) => e.name).filter(Boolean);
+    const titleNames =
+      names.length <= 4 ? names.join('、') : `${names.slice(0, 3).join('、')} ほか${names.length - 3}名`;
+    const doctorPart = [day.doctor, day.visitType].filter(Boolean).join('・');
+    out.push({
+      id: `hvc:${day.date}`,
+      date: day.date,
+      time: '09:00',
+      type: '往診',
+      title: doctorPart ? `${doctorPart} — ${titleNames}` : titleNames || '往診',
+      source: 'home_visit_calendar',
+      doctor: day.doctor,
+      visitType: day.visitType,
+      residents: day.entries.map((e) => ({
+        residentId: e.residentId,
+        name: e.name,
+        room: e.room,
+      })),
+      unmatchedNames: day.unmatchedNames,
+    });
+  }
+  return out.sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
 /** @type {unknown[] | null} */

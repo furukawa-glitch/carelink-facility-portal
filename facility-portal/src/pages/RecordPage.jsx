@@ -77,6 +77,7 @@ import {
 import { CareAutoBackupPanel } from '../components/CareAutoBackupPanel.jsx';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
 import { parsePharmacyMedicationPdf } from '../lib/pharmacyMedicationPdf.js';
+import { fetchHomeVisitCalendarFromPdf, readPdfFileAsDataUrl } from '../lib/visitCalendarPdf.js';
 import { normalizePatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { AccidentMonthlyAnalysisModal } from '../components/AccidentMonthlyAnalysisModal.jsx';
 import { AccidentReportModal } from '../components/AccidentReportModal.jsx';
@@ -1048,6 +1049,8 @@ export function RecordPage({
   const kaipokeDayServiceCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const injuryDiseaseCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const medicationPdfInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
+  const visitCalendarPdfInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
+  const [homeVisitCalendarRev, setHomeVisitCalendarRev] = useState(0);
   const [daySvcExternalFor, setDaySvcExternalFor] = useState(/** @type {Record<string, unknown> | null} */ (null));
   const [daySvcExternalDraft, setDaySvcExternalDraft] = useState(/** @type {Record<string, boolean>} */ ({}));
   /** カード「周囲事項」手入力の再描画用（localStorage 更新後にインクリメント） */
@@ -1560,18 +1563,34 @@ export function RecordPage({
 
   const weeklyPlanDays = useMemo(() => {
     void tick;
+    void homeVisitCalendarRev;
     const k = selectedDef?.linkKey ?? '';
     if (!k) return [];
     const base = Report.getWeeklyPlanDays(k, new Date());
+    const rangeStart = base[0]?.date ?? currentYmd();
+    const rangeEnd = base[base.length - 1]?.date ?? rangeStart;
+    const homeVisitByDate = new Map();
+    for (const p of Report.getHomeVisitCalendarPlansInRange(k, rangeStart, rangeEnd)) {
+      const dkey = String(p.date ?? '').trim();
+      if (!dkey) continue;
+      const arr = homeVisitByDate.get(dkey) ?? [];
+      arr.push(p);
+      homeVisitByDate.set(dkey, arr);
+    }
     const out = base.map((day) => {
       const gcal = googleCalendarPlansByDate.get(String(day.date)) ?? [];
-      const merged = [...day.plans, ...gcal].sort((a, b) =>
+      const hvc = homeVisitByDate.get(String(day.date)) ?? [];
+      const merged = [...day.plans, ...gcal, ...hvc].sort((a, b) =>
         String(a.time ?? '').localeCompare(String(b.time ?? ''), 'ja')
       );
-      return { ...day, plans: merged };
+      return { ...day, plans: merged, homeVisit: hvc[0] ?? null };
     });
     return out;
-  }, [selectedDef, planRev, tick, googleCalendarPlansByDate, googleCalendarPlanRev]);
+  }, [selectedDef, planRev, tick, homeVisitCalendarRev, googleCalendarPlansByDate, googleCalendarPlanRev]);
+  const todayHomeVisit = useMemo(() => {
+    const d = weeklyPlanDays.find((x) => x.isToday);
+    return d?.homeVisit ?? null;
+  }, [weeklyPlanDays]);
   const todayPlans = useMemo(() => {
     const d = weeklyPlanDays.find((x) => x.isToday);
     if (!d || !Array.isArray(d.plans)) return [];
@@ -3264,6 +3283,97 @@ export function RecordPage({
     [allResidents, filteredResidents, selectedSheetTitle]
   );
 
+  const importVisitCalendarPdf = useCallback(
+    async (file) => {
+      if (!file) return;
+      const k = String(selectedFacilityLinkKey ?? '').trim();
+      if (!k) {
+        alert('施設を選んでから取り込んでください。');
+        return;
+      }
+      if (!GEMINI_KEY?.trim()) {
+        alert('VITE_GEMINI_API_KEY を .env に設定してください。');
+        return;
+      }
+      try {
+        const dataUrl = await readPdfFileAsDataUrl(file);
+        const parsed = await fetchHomeVisitCalendarFromPdf(GEMINI_KEY, dataUrl, {
+          facilityLabel: selectedDef?.tabLabel ?? selectedSheetTitle,
+          yearMonth: auditMonth,
+        });
+        if (!parsed.days.length) {
+          alert('往診日・利用者名をPDFから読み取れませんでした。スキャン品質を確認するか、別のPDFでお試しください。');
+          return;
+        }
+        const residentPool = allResidents.length > 0 ? allResidents : filteredResidents;
+        /** @type {import('../services/ReportService.js').HomeVisitCalendarDay[]} */
+        const days = [];
+        /** @type {string[]} */
+        const allUnmatched = [];
+        for (const day of parsed.days) {
+          /** @type {import('../services/ReportService.js').HomeVisitCalendarDay['entries']} */
+          const entries = [];
+          /** @type {string[]} */
+          const unmatchedNames = [];
+          for (const rawName of day.patientNames) {
+            const hit = findResidentForVitalsCsvName(residentPool, rawName);
+            if (hit) {
+              entries.push({
+                residentId: String(hit.id),
+                name: residentNameWithoutSama(String(hit.name ?? rawName)),
+                room: String(hit.room ?? '').trim(),
+                rawName: String(rawName),
+              });
+            } else {
+              unmatchedNames.push(String(rawName));
+              allUnmatched.push(String(rawName));
+            }
+          }
+          days.push({
+            date: day.date,
+            doctor: day.doctor,
+            visitType: day.visitType,
+            entries,
+            unmatchedNames,
+          });
+        }
+        Report.saveHomeVisitCalendar(k, {
+          yearMonth: parsed.yearMonth || auditMonth,
+          clinicName: parsed.clinicName,
+          updatedAt: new Date().toISOString(),
+          sourceFileName: String(file.name ?? ''),
+          days,
+        });
+        setHomeVisitCalendarRev((n) => n + 1);
+        setPlanRev((n) => n + 1);
+        const matched = days.reduce((s, d) => s + d.entries.length, 0);
+        const visitDays = days.length;
+        const unmatchedPreview = Array.from(new Set(allUnmatched)).slice(0, 5).join('、');
+        const msg = `${visitDays}日分・利用者 ${matched}名を登録${parsed.clinicName ? `（${parsed.clinicName}）` : ''}${
+          allUnmatched.length ? `\n名簿未一致 ${allUnmatched.length}名: ${unmatchedPreview}${allUnmatched.length > 5 ? '…' : ''}` : ''
+        }`;
+        setKaipokeImportStatus({
+          kind: 'vitals',
+          ok: matched > 0,
+          message: msg.replace(/\n/g, ' '),
+          at: Date.now(),
+          fileName: String(file.name ?? ''),
+        });
+        alert(`往診カレンダーを取り込みました。\n${msg}\n\n「今週の予定」と「本日の予定」に反映されます。`);
+      } catch (e) {
+        alert(e instanceof Error ? e.message : '往診カレンダーPDFの取り込みに失敗しました');
+      }
+    },
+    [allResidents, filteredResidents, selectedFacilityLinkKey, selectedDef, selectedSheetTitle, auditMonth]
+  );
+
+  const homeVisitCalendarMeta = useMemo(() => {
+    void homeVisitCalendarRev;
+    const k = String(selectedFacilityLinkKey ?? '').trim();
+    if (!k) return null;
+    return Report.getHomeVisitCalendar(k);
+  }, [selectedFacilityLinkKey, homeVisitCalendarRev]);
+
   const hdrBtn =
     'flex items-center gap-1 rounded-lg border-2 px-2 py-1.5 text-[11px] font-bold shadow-sm sm:gap-1.5 sm:px-2.5 sm:text-xs 2xl:px-3 2xl:text-sm';
 
@@ -3419,6 +3529,16 @@ export function RecordPage({
               e.target.value = '';
             }}
           />
+          <input
+            ref={visitCalendarPdfInputRef}
+            type="file"
+            accept=".pdf,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              void importVisitCalendarPdf(e.target.files?.[0] ?? null);
+              e.target.value = '';
+            }}
+          />
           <button
             type="button"
             onClick={() => kaipokeCsvInputRef.current?.click()}
@@ -3465,6 +3585,15 @@ export function RecordPage({
           >
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             薬局PDF
+          </button>
+          <button
+            type="button"
+            onClick={() => visitCalendarPdfInputRef.current?.click()}
+            className={`${hdrBtn} border-violet-800 bg-violet-800 text-white hover:bg-violet-700`}
+            title="在宅クリニックの「訪問カレンダー」PDF（紙をスキャンしたPDF可）。AIが日付・担当医・往診対象者を読み取り、今週の予定カレンダーに表示します。"
+          >
+            <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
+            往診カレンダーPDF
           </button>
           <div className="flex flex-wrap items-center gap-0.5 rounded-lg border border-slate-600 bg-slate-800 px-1.5 py-0.5">
             <input
@@ -3517,6 +3646,9 @@ export function RecordPage({
       <div className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 sm:text-xs">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-cyan-700">バイタルCSV: 利用者カードの「直近バイタル」に反映</span>
+          <span className="text-violet-800">
+            往診カレンダーPDF: クリニックの月間予定表 → 今週の予定・本日の往診対象者に反映（Gemini API 要）
+          </span>
           <span className="text-emerald-800">
             傷病一覧CSV: 対象月 {auditMonth} の傷病名 → 各利用者の「病名」（名簿の氏名と照合・通常指示優先）
           </span>
@@ -3600,7 +3732,45 @@ export function RecordPage({
                 </div>
                 <p className="mb-2 text-[11px] font-bold leading-snug text-teal-900/85">
                   公式LINEの面会予約が入った Google カレンダーの予定も、ここに自動で載ります（緑の Google 表示）。手入力の外出・受診なども下のフォームから追記できます。
+                  往診カレンダーPDFを取り込むと、往診日ごとに<strong className="font-black">対象利用者名</strong>が紫の「往診」表示で載ります。
                 </p>
+                {todayHomeVisit ? (
+                  <div className="mb-2 rounded-xl border-2 border-violet-500 bg-violet-50 px-3 py-2.5 shadow-sm">
+                    <div className="flex flex-wrap items-center gap-2 text-violet-950">
+                      <Stethoscope className="h-5 w-5 shrink-0" aria-hidden />
+                      <span className="text-sm font-black sm:text-base">本日の往診</span>
+                      {[todayHomeVisit.doctor, todayHomeVisit.visitType].filter(Boolean).map((x) => (
+                        <span
+                          key={x}
+                          className="rounded bg-violet-700 px-2 py-0.5 text-[10px] font-black text-white sm:text-xs"
+                        >
+                          {x}
+                        </span>
+                      ))}
+                    </div>
+                    <ul className="mt-2 flex flex-wrap gap-1.5">
+                      {(todayHomeVisit.residents ?? []).map((r) => (
+                        <li
+                          key={String(r.residentId || r.name)}
+                          className="rounded-lg border border-violet-300 bg-white px-2 py-1 text-[11px] font-bold text-violet-950 sm:text-xs"
+                        >
+                          {r.room ? `${r.room} ` : ''}
+                          {residentNameWithoutSama(r.name)} 様
+                        </li>
+                      ))}
+                    </ul>
+                    {(todayHomeVisit.unmatchedNames ?? []).length > 0 ? (
+                      <p className="mt-1.5 text-[10px] font-bold text-amber-900">
+                        名簿未一致: {(todayHomeVisit.unmatchedNames ?? []).join('、')}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : homeVisitCalendarMeta?.days?.length ? (
+                  <p className="mb-2 rounded-lg border border-violet-200 bg-violet-50/80 px-2 py-2 text-[11px] font-bold text-violet-900">
+                    往診カレンダー登録済（{homeVisitCalendarMeta.yearMonth || '—'}・{homeVisitCalendarMeta.days.length}日）。
+                    本日は往診予定がありません。
+                  </p>
+                ) : null}
                 {!visitCalendarConfigured ? (
                   <p className="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-2 py-2 text-[11px] font-bold leading-snug text-amber-950">
                     この施設（{selectedDef?.tabLabel ?? '—'}）の<strong className="font-black">面会予約用・施設専用</strong>
@@ -3649,10 +3819,20 @@ export function RecordPage({
                             day.plans.map((p) => (
                               <li
                                 key={String(p.id)}
-                                className="rounded-lg border border-teal-200 bg-teal-50/90 px-2 py-1.5 shadow-sm"
+                                className={`rounded-lg border px-2 py-1.5 shadow-sm ${
+                                  String(p.source ?? '') === 'home_visit_calendar'
+                                    ? 'border-violet-300 bg-violet-50/95'
+                                    : 'border-teal-200 bg-teal-50/90'
+                                }`}
                               >
                                 <div className="font-mono text-[11px] font-black text-teal-900">{p.time}</div>
-                                <span className="mt-0.5 inline-block rounded bg-teal-600/90 px-1 py-0.5 text-[9px] font-black text-white">
+                                <span
+                                  className={`mt-0.5 inline-block rounded px-1 py-0.5 text-[9px] font-black text-white ${
+                                    String(p.source ?? '') === 'home_visit_calendar'
+                                      ? 'bg-violet-700'
+                                      : 'bg-teal-600/90'
+                                  }`}
+                                >
                                   {p.type}
                                 </span>
                                 {String(p.source ?? '') === 'google_calendar' ? (
@@ -3660,8 +3840,34 @@ export function RecordPage({
                                     {p.type === '面会' ? 'LINE/Google' : 'Google'}
                                   </span>
                                 ) : null}
-                                <div className="mt-1 font-bold leading-snug text-slate-900">{p.title}</div>
-                                {String(p.source ?? '') === 'google_calendar' ? null : (
+                                {String(p.source ?? '') === 'home_visit_calendar' ? (
+                                  <>
+                                    <div className="mt-1 text-[10px] font-black leading-snug text-violet-900">
+                                      {[p.doctor, p.visitType].filter(Boolean).join('・')}
+                                    </div>
+                                    <ul className="mt-1 space-y-0.5">
+                                      {(p.residents ?? []).map((r) => (
+                                        <li
+                                          key={String(r.residentId || r.name)}
+                                          className="font-bold leading-snug text-slate-900"
+                                        >
+                                          {r.room ? `${r.room} ` : ''}
+                                          {residentNameWithoutSama(r.name)} 様
+                                        </li>
+                                      ))}
+                                    </ul>
+                                    {(p.unmatchedNames ?? []).length > 0 ? (
+                                      <p className="mt-1 text-[9px] font-bold text-amber-800">
+                                        未一致: {(p.unmatchedNames ?? []).slice(0, 3).join('、')}
+                                        {(p.unmatchedNames ?? []).length > 3 ? '…' : ''}
+                                      </p>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  <div className="mt-1 font-bold leading-snug text-slate-900">{p.title}</div>
+                                )}
+                                {String(p.source ?? '') === 'google_calendar' ||
+                                String(p.source ?? '') === 'home_visit_calendar' ? null : (
                                   <button
                                     type="button"
                                     onClick={() => removeWeeklyPlan(p.id)}
@@ -3850,16 +4056,43 @@ export function RecordPage({
                   {(todayPlans.length > 0 ? todayPlans : board.schedule).map((item, i) => (
                     <li
                       key={String(item.id ?? i)}
-                      className="flex gap-3 rounded-xl border border-teal-200/80 bg-white/90 px-3 py-2.5 shadow-sm"
+                      className={`flex gap-3 rounded-xl border px-3 py-2.5 shadow-sm ${
+                        String(item.source ?? '') === 'home_visit_calendar'
+                          ? 'border-violet-300 bg-violet-50/95'
+                          : 'border-teal-200/80 bg-white/90'
+                      }`}
                     >
                       <span className="w-16 shrink-0 font-mono font-bold text-teal-700">{item.time || '—'}</span>
-                      <div className="min-w-0">
-                        <span className="font-bold leading-snug text-slate-800">{item.title || '予定'}</span>
-                        {String(item.source ?? '') === 'google_calendar' ? (
-                          <span className="ml-1.5 inline-block rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black text-white">
-                            Google
-                          </span>
-                        ) : null}
+                      <div className="min-w-0 flex-1">
+                        {String(item.source ?? '') === 'home_visit_calendar' ? (
+                          <>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded bg-violet-700 px-1.5 py-0.5 text-[9px] font-black text-white">
+                                往診
+                              </span>
+                              <span className="font-black leading-snug text-violet-950">
+                                {[item.doctor, item.visitType].filter(Boolean).join('・') || '往診'}
+                              </span>
+                            </div>
+                            <ul className="mt-1.5 space-y-0.5">
+                              {(item.residents ?? []).map((r) => (
+                                <li key={String(r.residentId || r.name)} className="font-bold text-slate-900">
+                                  {r.room ? `${r.room} ` : ''}
+                                  {residentNameWithoutSama(r.name)} 様
+                                </li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : (
+                          <>
+                            <span className="font-bold leading-snug text-slate-800">{item.title || '予定'}</span>
+                            {String(item.source ?? '') === 'google_calendar' ? (
+                              <span className="ml-1.5 inline-block rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black text-white">
+                                Google
+                              </span>
+                            ) : null}
+                          </>
+                        )}
                       </div>
                     </li>
                   ))}
