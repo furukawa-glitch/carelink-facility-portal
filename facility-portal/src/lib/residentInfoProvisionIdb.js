@@ -1,5 +1,7 @@
+import { guessMimeFromFileName, mimeFromDataUrl } from './provisionDocumentMime.js';
+
 /**
- * 利用者別・PDF 永続化（localStorage 外のバイナリ用）
+ * 利用者別・文書バイナリ永続化（localStorage 外。PDF / 画像）
  * - info_provision: 情報提供書・退院サマリー等（従来）
  * - nurse_record: 看護記録・申し送り等の写し
  *
@@ -80,6 +82,8 @@ async function getLegacyInfoProvision(residentId) {
       db.close();
       resolve({
         ab: row.ab,
+        mimeType:
+          String(row.mimeType ?? '').trim() || guessMimeFromFileName(row.sourceFileName),
         sourceFileName: String(row.sourceFileName ?? 'document.pdf'),
         updatedAt: String(row.updatedAt ?? ''),
         docKind: PDF_DOC_KIND.INFO,
@@ -201,6 +205,7 @@ export async function getResidentDocRecord(residentId, docKind) {
         db.close();
         resolve({
           ab: row.ab,
+          mimeType: String(row.mimeType ?? '').trim() || guessMimeFromFileName(row.sourceFileName),
           sourceFileName: String(row.sourceFileName ?? 'document.pdf'),
           updatedAt: String(row.updatedAt ?? ''),
           docKind: kind,
@@ -232,12 +237,15 @@ export function getResidentInfoProvisionPdfRecord(residentId) {
 /**
  * @param {string} residentId
  * @param {string} [docKind=PDF_DOC_KIND.INFO]
+ * @returns {Promise<{ url: string; mime: string } | null>}
  */
 export async function createResidentDocObjectUrl(residentId, docKind) {
   const rec = await getResidentDocRecord(residentId, docKind);
   if (!rec?.ab?.byteLength) return null;
-  const blob = new Blob([rec.ab], { type: 'application/pdf' });
-  return URL.createObjectURL(blob);
+  const mime =
+    String(rec.mimeType ?? '').trim() || guessMimeFromFileName(rec.sourceFileName) || 'application/pdf';
+  const blob = new Blob([rec.ab], { type: mime });
+  return { url: URL.createObjectURL(blob), mime };
 }
 
 /**

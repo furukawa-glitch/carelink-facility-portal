@@ -7,7 +7,15 @@ import { nowJapanIsoString } from '../utils/japanIsoTime.js';
 import { buildNearMissReportHtml, NEAR_MISS_CATEGORY_LABELS } from './nearMissReportHtml.js';
 import { CARELINK_FACILITIES, facilityDefBySheetTitle } from '../config/carelinkFacilities.js';
 import { deleteAllResidentPdfs } from '../lib/residentInfoProvisionIdb.js';
+import { isAllowedProvisionMime, mimeFromDataUrl } from '../lib/provisionDocumentMime.js';
 import { tokyoYmdFromTs } from '../lib/hourlyCareGrid.js';
+import {
+  buildResidentStayStatusBadges,
+  normalizeResidentStayStatus,
+  notifyResidentStayStatusChanged,
+} from '../lib/residentStayStatus.js';
+
+export { buildResidentStayStatusBadges };
 import {
   CARE_RECORD_RETENTION_YEARS,
   careEventsRetentionSummary,
@@ -95,6 +103,8 @@ const LS = {
   injuryDiseaseByResident: 'carelink_os_injury_disease_by_resident_v1',
   /** 施設ごとの往診カレンダー（クリニックPDF取込） */
   homeVisitCalendar: 'carelink_os_home_visit_calendar_v1',
+  /** 利用者ごとの入院中・入居予定・退院予定（カード表示用） */
+  residentStayStatus: 'carelink_os_resident_stay_status_v1',
 };
 
 const MAX_ACCIDENT_REPORTS = 2000;
@@ -1346,6 +1356,48 @@ export function setResidentRoomNotes(residentId, patch, opts = {}) {
       },
     });
   }
+  return true;
+}
+
+/**
+ * 利用者カード用: 入院中・入居予定・退院予定
+ * @param {string} residentId
+ */
+export function getResidentStayStatus(residentId) {
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return null;
+  const all = readJson(LS.residentStayStatus, {});
+  return normalizeResidentStayStatus(all[rid]);
+}
+
+/**
+ * @param {string} residentId
+ * @param {{
+ *   hospitalized?: boolean;
+ *   hospitalSince?: string;
+ *   dischargePlannedDate?: string;
+ *   moveInPlannedDate?: string;
+ *   note?: string;
+ * }} patch
+ */
+export function setResidentStayStatus(residentId, patch) {
+  const rid = String(residentId ?? '').trim();
+  if (!rid) return false;
+  const all = readJson(LS.residentStayStatus, {});
+  const hospitalized = Boolean(patch?.hospitalized);
+  const row = {
+    hospitalized,
+    hospitalSince: hospitalized ? String(patch?.hospitalSince ?? '').trim() : '',
+    dischargePlannedDate: String(patch?.dischargePlannedDate ?? '').trim(),
+    moveInPlannedDate: String(patch?.moveInPlannedDate ?? '').trim(),
+    note: String(patch?.note ?? '').trim(),
+    updatedAt: new Date().toISOString(),
+  };
+  const norm = normalizeResidentStayStatus(row);
+  if (!norm) delete all[rid];
+  else all[rid] = row;
+  writeJson(LS.residentStayStatus, all);
+  notifyResidentStayStatusChanged(rid);
   return true;
 }
 
@@ -2732,17 +2784,22 @@ export async function deleteResidentInfoProvisionCompletely(residentId) {
 }
 
 /**
- * 情報提供書等の PDF を Gemini に読ませ、救急搬送サマリー用の項目をJSONで返す
+ * 情報提供書等の PDF / 画像 を Gemini に読ませ、救急搬送サマリー用の項目をJSONで返す
  * @param {string} apiKey
- * @param {string} pdfBase64 Data URL または生の base64（application/pdf）
+ * @param {string} documentDataUrl Data URL（application/pdf または image/*）
  * @param {{ residentName?: string; room?: string; facilityLabel?: string }} [context]
  */
-export async function fetchJohoteikyoFromPdf(apiKey, pdfBase64, context = {}) {
+export async function fetchJohoteikyoFromPdf(apiKey, documentDataUrl, context = {}) {
   if (!apiKey?.trim()) throw new Error('VITE_GEMINI_API_KEY が必要です');
-  let b64 = String(pdfBase64 ?? '').trim();
+  let mime = mimeFromDataUrl(documentDataUrl);
+  if (!mime) mime = 'application/pdf';
+  if (!isAllowedProvisionMime(mime)) {
+    throw new Error('PDF または画像（JPEG / PNG / WebP / GIF）を選んでください');
+  }
+  let b64 = String(documentDataUrl ?? '').trim();
   if (b64.includes(',')) b64 = String(b64.split(',').pop() ?? '').trim();
   b64 = b64.replace(/\s/g, '');
-  if (!b64) throw new Error('PDFのデータが空です');
+  if (!b64) throw new Error('ファイルのデータが空です');
 
   const resName = String(context.residentName ?? '').trim();
   const room = String(context.room ?? '').trim();
@@ -2765,10 +2822,10 @@ export async function fetchJohoteikyoFromPdf(apiKey, pdfBase64, context = {}) {
   ];
   const keyList = allExtractKeys.join(', ');
 
-  const prompt = `添付PDFは、在宅・施設の「情報提供書」「退院サマリー」「訪問看護・訪問診療の指示」などの写しであることが多いです。
+  const prompt = `添付の文書（PDFまたは写真・スキャン画像）は、在宅・施設の「情報提供書」「退院サマリー」「訪問看護・訪問診療の指示」などの写しであることが多いです。
 利用者本人の文書である前提で読み取り、次のキーをすべて持つJSONオブジェクトを1つだけ返してください（説明文・Markdownのフェンス禁止）。各値は日本語の文字列。読み取れない項目は空文字。推測は「可能性がある」と明示し、断定は避けてください。
 
-【コンテキスト（名簿の利用者。PDF内の氏名と照合）】
+【コンテキスト（名簿の利用者。文書内の氏名と照合）】
 - 利用者: ${resName || '（不明）'}
 - 居室: ${room || '—'}
 - 施設タブ: ${fac || '—'}
@@ -2794,7 +2851,7 @@ dailyLife / nurseProblems / careNotes / other に、上記の補足情報（病�
       {
         role: 'user',
         parts: [
-          { inline_data: { mime_type: 'application/pdf', data: b64 } },
+          { inline_data: { mime_type: mime, data: b64 } },
           { text: prompt },
         ],
       },
@@ -2822,7 +2879,7 @@ dailyLife / nurseProblems / careNotes / other に、上記の補足情報（病�
     }
     return out;
   } catch {
-    throw new Error('AIのJSONを解釈できませんでした。PDFが画像のみの場合は読み取れないことがあります。');
+    throw new Error('AIのJSONを解釈できませんでした。画質が低い・文字が小さい場合は読み取れないことがあります。');
   }
 }
 

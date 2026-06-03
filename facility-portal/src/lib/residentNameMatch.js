@@ -1,0 +1,120 @@
+/** 名簿・帳票・薬局PDFなど、氏名表記の揺れ（スペース・カナ混在）を吸収して照合 */
+
+export function normalizePersonNameForMatch(raw) {
+  let s = String(raw ?? '')
+    .replace(/\u3000/g, ' ')
+    .trim();
+  try {
+    s = s.normalize('NFKC');
+  } catch {
+    /* noop */
+  }
+  s = s
+    .replace(/様\s*$/u, '')
+    .replace(/さん\s*$/u, '')
+    .replace(/[\s\u3000\t]+/g, ' ')
+    .trim();
+  return s;
+}
+
+/** 照合用キー（スペース・中黒を除去） */
+export function personNameMatchKey(raw) {
+  return normalizePersonNameForMatch(raw)
+    .replace(/\s/g, '')
+    .replace(/・/g, '')
+    .replace(/･/g, '');
+}
+
+/**
+ * 照合候補を複数生成（漢字のみ・スペース除去・カナ部分など）
+ * @param {...(string|null|undefined)} sources
+ * @returns {string[]}
+ */
+export function buildPersonNameMatchCandidates(...sources) {
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+  const add = (raw) => {
+    const n = normalizePersonNameForMatch(raw);
+    if (!n || n.length < 2 || n.length > 40) return;
+    const key = personNameMatchKey(n);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(n);
+    const compact = n.replace(/\s/g, '');
+    if (compact && compact !== n) {
+      const ck = personNameMatchKey(compact);
+      if (ck && !seen.has(ck)) {
+        seen.add(ck);
+        out.push(compact);
+      }
+    }
+  };
+
+  for (const src of sources) {
+    if (!src) continue;
+    add(src);
+    const s = normalizePersonNameForMatch(src);
+    const idxKanji = s.search(/[一-龥々]/u);
+    if (idxKanji >= 0) add(s.slice(idxKanji));
+    const kanaOnly = s
+      .replace(/[一-龥々\s・･]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (/^[ァ-ヶー]+$/u.test(kanaOnly.replace(/\s/g, ''))) add(kanaOnly);
+    const kanjiOnly = s.replace(/[ァ-ヶーー\s]+/gu, '').trim();
+    if (kanjiOnly.length >= 2) add(kanjiOnly);
+  }
+  return out;
+}
+
+function namesLikelySame(aKey, bKey) {
+  if (!aKey || !bKey) return false;
+  if (aKey === bKey) return true;
+  if (aKey.length < 3 || bKey.length < 3) return false;
+  if (aKey.includes(bKey) || bKey.includes(aKey)) return true;
+  return false;
+}
+
+/**
+ * @param {Record<string, unknown>[]} residents
+ * @param {string | string[]} candidates
+ * @returns {Record<string, unknown> | null}
+ */
+export function findResidentByPersonNameCandidates(residents, candidates) {
+  const list = Array.isArray(candidates)
+    ? candidates
+    : buildPersonNameMatchCandidates(candidates);
+  for (const c of list) {
+    const hit = findResidentByPersonName(residents, c);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * @param {Record<string, unknown>[]} residents
+ * @param {string} cell
+ */
+export function findResidentByPersonName(residents, cell) {
+  const target = normalizePersonNameForMatch(cell);
+  if (!target) return null;
+  const targetKey = personNameMatchKey(cell);
+  for (const res of residents) {
+    const fields = [
+      res.name,
+      res.kana,
+      res.nameKana,
+      res.namePhonetic,
+    ];
+    for (const raw of fields) {
+      const n = normalizePersonNameForMatch(String(raw ?? ''));
+      if (!n) continue;
+      if (n === target) return res;
+      const nk = personNameMatchKey(n);
+      if (nk && targetKey.length >= 2 && nk === targetKey) return res;
+      if (namesLikelySame(targetKey, nk)) return res;
+    }
+  }
+  return null;
+}

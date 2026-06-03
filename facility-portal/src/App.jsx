@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { VoiceCareInput } from './components/VoiceCareInput.jsx';
 import { ResidentAdministrativeModals } from './components/ResidentAdministrativeModals.jsx';
+import { ResidentStayStatusBadges } from './components/ResidentStayStatusBadges.jsx';
 import { RecordPage } from './pages/RecordPage.jsx';
 import { NotionNewResidentsPage } from './pages/NotionNewResidentsPage.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
@@ -1743,6 +1744,14 @@ const App = () => {
           <h2 className="text-3xl text-slate-800 tracking-tight font-bold">
             {residentDisplayName(selectedResident?.name)} <span className="font-bold">様</span>
           </h2>
+          <ResidentStayStatusBadges
+            status={
+              selectedResident?.id
+                ? Report.getResidentStayStatus(String(selectedResident.id))
+                : null
+            }
+            className="mt-2 flex justify-center"
+          />
           <ResidentDiseaseLine resident={selectedResident} />
         </div>
         <p className="rounded-2xl border-2 border-slate-200 bg-slate-50 px-4 py-3 text-center text-xs font-bold leading-relaxed text-slate-600">

@@ -1,7 +1,11 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker } from 'tesseract.js';
+import { buildPersonNameMatchCandidates, normalizePersonNameForMatch } from './residentNameMatch.js';
+import { readPdfFileAsDataUrl } from './visitCalendarPdf.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+
+const GEMINI_MODEL = 'gemini-2.5-flash';
 
 function normalizeLine(s) {
   return String(s ?? '')
@@ -11,7 +15,19 @@ function normalizeLine(s) {
 }
 
 function normalizePersonName(s) {
-  return normalizeLine(String(s ?? '').replace(/様\s*$/u, ''));
+  return normalizePersonNameForMatch(String(s ?? '').replace(/様\s*$/u, ''));
+}
+
+function stripJsonFence(text) {
+  const t = String(text ?? '').trim();
+  const m = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/im.exec(t);
+  return m ? m[1].trim() : t;
+}
+
+/** テキスト層がほぼ無いスキャンPDF */
+function isLikelyScannedPdf(lines) {
+  const joined = lines.join('');
+  return lines.length < 8 || joined.length < 80;
 }
 
 /**
@@ -134,6 +150,8 @@ function extractPatientNameRawFromLines(lines) {
     /(.{1,42}?)\s*様お薬説明書/u,
     /(.{1,42}?)\s*様\s+お薬説明書/u,
     /(.{1,42}?)\s*さん\s*の\s*お薬\s*説明書/u,
+    /(.{2,24}?)\s*様\s*(?:の|$)/u,
+    /(?:利用者|患者|ご利用者)(?:氏名|名)[:：\s]*(.{2,24})/u,
   ];
   for (const line of lines) {
     const L = normalizeLine(line);
@@ -197,10 +215,72 @@ function augmentLinesForSplitTitles(lines) {
 }
 
 /**
+ * スキャンPDF向け: Gemini で氏名・薬剤を読み取り
+ * @param {string} apiKey
  * @param {File} file
- * @returns {Promise<{ patientName: string; patientNameRaw: string; dispensedOn: string; medicines: string[]; pages: number; fileName: string; }>}
  */
-export async function parsePharmacyMedicationPdf(file) {
+async function fetchPharmacyMedicationFromPdfGemini(apiKey, file) {
+  const dataUrl = await readPdfFileAsDataUrl(file);
+  let b64 = String(dataUrl ?? '').trim();
+  if (b64.includes(',')) b64 = String(b64.split(',').pop() ?? '').trim();
+  b64 = b64.replace(/\s/g, '');
+  if (!b64) throw new Error('PDFのデータが空です');
+
+  const prompt = `添付は薬局の「お薬説明書」PDFです。利用者1名分として次のJSONオブジェクト1つだけ返してください（説明文・Markdown禁止）。
+
+{
+  "patientName": "利用者氏名（様・さんは除く。姓と名の間にスペースがあってもそのまま）",
+  "patientNameKana": "フリガナがあれば（なければ空文字）",
+  "dispensedOn": "調剤日（例: 2026年6月3日。読めなければ空文字）",
+  "medicines": ["薬剤名の行のみの配列"]
+}
+
+ルール:
+- 表題の「○○様のお薬説明書」から patientName を最優先。
+- カナと漢字が並ぶ場合は漢字氏名を patientName、カナを patientNameKana。
+- 推測で氏名を補完しない。`;
+  const body = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inline_data: { mime_type: 'application/pdf', data: b64 } },
+          { text: prompt },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.1, maxOutputTokens: 8192, responseMimeType: 'application/json' },
+  };
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!res.ok || !text) {
+    const msg = data?.error?.message || res.statusText || 'Gemini API エラー';
+    throw new Error(msg);
+  }
+  const parsed = JSON.parse(stripJsonFence(text));
+  const patientName = String(parsed?.patientName ?? '').trim();
+  const patientNameKana = String(parsed?.patientNameKana ?? '').trim();
+  const dispensedOn = String(parsed?.dispensedOn ?? '').trim();
+  const medicines = Array.isArray(parsed?.medicines)
+    ? parsed.medicines.map((m) => normalizeLine(String(m ?? ''))).filter(Boolean)
+    : [];
+  const patientNameRaw = [patientNameKana, patientName].filter(Boolean).join(' ').trim() || patientName;
+  return { patientName, patientNameRaw, patientNameKana, dispensedOn, medicines };
+}
+
+/**
+ * @param {File} file
+ * @param {{ geminiApiKey?: string }} [options]
+ * @returns {Promise<{ patientName: string; patientNameRaw: string; patientNameKana: string; patientNameCandidates: string[]; dispensedOn: string; medicines: string[]; pages: number; fileName: string; source: string; }>}
+ */
+export async function parsePharmacyMedicationPdf(file, options = {}) {
+  const geminiApiKey = String(options?.geminiApiKey ?? '').trim();
   const buf = await file.arrayBuffer();
   const doc = await pdfjsLib.getDocument({ data: buf }).promise;
   /** @type {string[]} */
@@ -212,18 +292,24 @@ export async function parsePharmacyMedicationPdf(file) {
     lines.push(...groupTextItemsToLines(items));
   }
 
+  const scanned = isLikelyScannedPdf(lines);
   const linePool = augmentLinesForSplitTitles(lines);
   let patientNameRaw = extractPatientNameRawFromLines(linePool);
+  let patientNameKana = '';
   let dispensedOn = extractDispensedOnFromLines(linePool);
   let medicines = extractMedicineNameLines(linePool);
+  let source = 'pdf_text';
 
-  // 画像PDF・欠けたテキスト層は OCR で補完（氏名・薬剤のいずれか欠けるとき）
-  if (!patientNameRaw || medicines.length === 0) {
+  const needOcr = scanned || !patientNameRaw || medicines.length === 0;
+  if (needOcr) {
     const ocrLines = await extractLinesByOcr(doc);
     const ocrPool = augmentLinesForSplitTitles(ocrLines);
     if (!patientNameRaw) {
       const fromOcr = extractPatientNameRawFromLines(ocrPool);
-      if (fromOcr) patientNameRaw = fromOcr;
+      if (fromOcr) {
+        patientNameRaw = fromOcr;
+        source = 'ocr';
+      }
     }
     if (!dispensedOn) {
       const d2 = extractDispensedOnFromLines(ocrPool);
@@ -235,12 +321,36 @@ export async function parsePharmacyMedicationPdf(file) {
     else if (!medicines.length) medicines = extractMedicineNameLines(ocrPool);
   }
 
-  return {
-    patientName: pickLikelyResidentName(patientNameRaw),
+  if (geminiApiKey && (scanned || !patientNameRaw || medicines.length === 0)) {
+    try {
+      const gem = await fetchPharmacyMedicationFromPdfGemini(geminiApiKey, file);
+      if (gem.patientNameRaw) patientNameRaw = gem.patientNameRaw;
+      if (gem.patientNameKana) patientNameKana = gem.patientNameKana;
+      if (gem.dispensedOn) dispensedOn = gem.dispensedOn;
+      if (gem.medicines?.length) medicines = gem.medicines;
+      source = 'gemini';
+    } catch {
+      /* OCR/テキスト結果を維持 */
+    }
+  }
+
+  const patientName = pickLikelyResidentName(patientNameRaw);
+  const patientNameCandidates = buildPersonNameMatchCandidates(
+    patientName,
     patientNameRaw,
+    patientNameKana,
+    pickLikelyResidentName(patientNameRaw.replace(/[ァ-ヶー\s]+/gu, ' ').trim())
+  );
+
+  return {
+    patientName,
+    patientNameRaw,
+    patientNameKana,
+    patientNameCandidates,
     dispensedOn,
     medicines,
     pages: doc.numPages,
     fileName: String(file?.name ?? ''),
+    source,
   };
 }

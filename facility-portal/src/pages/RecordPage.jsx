@@ -76,6 +76,13 @@ import {
 import { CareAutoBackupPanel } from '../components/CareAutoBackupPanel.jsx';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
 import { parsePharmacyMedicationPdf } from '../lib/pharmacyMedicationPdf.js';
+import {
+  buildPersonNameMatchCandidates,
+  findResidentByPersonNameCandidates,
+} from '../lib/residentNameMatch.js';
+import { STAY_STATUS_CHANGED_EVENT } from '../lib/residentStayStatus.js';
+import { ResidentStayStatusBadges } from '../components/ResidentStayStatusBadges.jsx';
+import { ResidentMonitorBoard } from '../components/ResidentMonitorBoard.jsx';
 import { fetchHomeVisitCalendarFromPdf, readPdfFileAsDataUrl } from '../lib/visitCalendarPdf.js';
 import { normalizePatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { AccidentMonthlyAnalysisModal } from '../components/AccidentMonthlyAnalysisModal.jsx';
@@ -211,50 +218,12 @@ function normalizeVitalsImportPersonName(cellRaw) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-/**
- * @param {Record<string, unknown>[]} residents
- * @param {string} csvNameCell
- */
-function normalizeNameKeyForMatch(s) {
-  const t = normalizeVitalsImportPersonName(String(s ?? ''));
-  return t.replace(/\s/g, '').replace(/・/g, '').replace(/･/g, '');
-}
-
 function findResidentForVitalsCsvName(residents, csvNameCell) {
-  const target = normalizeVitalsImportPersonName(csvNameCell);
-  if (!target) return null;
-  const targetCompact = target.replace(/\s/g, '');
-  const targetKey = normalizeNameKeyForMatch(csvNameCell);
-  for (const res of residents) {
-    const n = normalizeVitalsImportPersonName(String(res.name ?? ''));
-    if (n && (n === target || n.replace(/\s/g, '') === targetCompact)) return res;
-    const nk = normalizeNameKeyForMatch(n);
-    if (nk && targetKey.length >= 2 && nk === targetKey) return res;
-    const k = String(res.kana ?? res.nameKana ?? res.namePhonetic ?? '').trim();
-    if (k) {
-      const kn = normalizeVitalsImportPersonName(k);
-      if (kn && (kn === target || kn.replace(/\s/g, '') === targetCompact)) return res;
-      const kk = normalizeNameKeyForMatch(k);
-      if (kk && targetKey.length >= 2 && kk === targetKey) return res;
-    }
-  }
-  return null;
+  return findResidentByPersonNameCandidates(residents, buildPersonNameMatchCandidates(csvNameCell));
 }
 
 function findResidentForVitalsCsvKana(residents, csvKanaCell) {
-  const target = normalizeVitalsImportPersonName(csvKanaCell);
-  if (!target) return null;
-  const targetCompact = target.replace(/\s/g, '');
-  const targetKey = normalizeNameKeyForMatch(csvKanaCell);
-  for (const res of residents) {
-    const k = String(res.kana ?? res.nameKana ?? res.namePhonetic ?? '').trim();
-    if (!k) continue;
-    const kn = normalizeVitalsImportPersonName(k);
-    if (kn && (kn === target || kn.replace(/\s/g, '') === targetCompact)) return res;
-    const kk = normalizeNameKeyForMatch(k);
-    if (kk && targetKey.length >= 2 && kk === targetKey) return res;
-  }
-  return null;
+  return findResidentByPersonNameCandidates(residents, buildPersonNameMatchCandidates(csvKanaCell));
 }
 
 /**
@@ -996,6 +965,7 @@ export function RecordPage({
     /** @type {'this_week' | 'next_week' | 'month'} */ ('this_week')
   );
   const [monitorMuteRev, setMonitorMuteRev] = useState(0);
+  const [stayStatusRev, setStayStatusRev] = useState(0);
   const [googleCalendarPlanRev, setGoogleCalendarPlanRev] = useState(0);
   const [googleCalendarReloadRev, setGoogleCalendarReloadRev] = useState(0);
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState(
@@ -1025,8 +995,24 @@ export function RecordPage({
   const [calOpenId, setCalOpenId] = useState('');
   const [auditMonth, setAuditMonth] = useState(currentYearMonth);
 
-  /** 'cards' | 'table' — 一覧表でバイタル・巡視等をまとめて入力 */
-  const [residentInputView, setResidentInputView] = useState(/** @type {'cards' | 'table'} */ ('cards'));
+  /** 'cards' | 'table' | 'monitor' — カード / 一覧表 / アラーム一覧（1画面） */
+  const [residentInputView, setResidentInputView] = useState(() => {
+    try {
+      const v = localStorage.getItem('carelink_record_resident_view_v1');
+      if (v === 'table' || v === 'monitor' || v === 'cards') return v;
+    } catch {
+      /* noop */
+    }
+    return 'cards';
+  });
+  const setResidentInputViewPersist = useCallback((mode) => {
+    setResidentInputView(mode);
+    try {
+      localStorage.setItem('carelink_record_resident_view_v1', mode);
+    } catch {
+      /* noop */
+    }
+  }, []);
   /** 入居者一覧の並び順 */
   const [residentSortMode, setResidentSortMode] = useState(/** @type {'room' | 'kana'} */ ('room'));
   /** 入居者一覧の名前検索（確定文字列のみで絞り込み。IME 変換中は絞り込まない） */
@@ -1728,6 +1714,12 @@ export function RecordPage({
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    const onStay = () => setStayStatusRev((n) => n + 1);
+    window.addEventListener(STAY_STATUS_CHANGED_EVENT, onStay);
+    return () => window.removeEventListener(STAY_STATUS_CHANGED_EVENT, onStay);
+  }, []);
+
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setClock(new Date()), 30000);
@@ -2120,8 +2112,8 @@ export function RecordPage({
       }
     }
     setBulkDraft(init);
-    setResidentInputView('table');
-  }, [displayResidents, bulkGlobalMealSlot, bulkSheetDate]);
+    setResidentInputViewPersist('table');
+  }, [displayResidents, bulkGlobalMealSlot, bulkSheetDate, setResidentInputViewPersist]);
 
   const onBulkGlobalMealSlotChange = useCallback(
     (slot) => {
@@ -3227,12 +3219,21 @@ export function RecordPage({
       for (const file of files) {
         let parsed;
         try {
-          parsed = await parsePharmacyMedicationPdf(file);
+          parsed = await parsePharmacyMedicationPdf(file, { geminiApiKey: GEMINI_KEY });
         } catch {
           continue;
         }
         appliedFiles += 1;
-        const hit = findResidentForVitalsCsvName(residentPool, parsed.patientName || parsed.patientNameRaw);
+        const hit = findResidentByPersonNameCandidates(
+          residentPool,
+          parsed.patientNameCandidates?.length
+            ? parsed.patientNameCandidates
+            : buildPersonNameMatchCandidates(
+                parsed.patientName,
+                parsed.patientNameRaw,
+                parsed.patientNameKana
+              )
+        );
         if (!hit) {
           const label = String(parsed.patientNameRaw || parsed.patientName || file.name || '氏名不明').trim();
           if (label) unmatched.push(label);
@@ -3280,10 +3281,16 @@ export function RecordPage({
       if (matchedResidents > 0) {
         alert(`薬局PDFの取り込みが完了しました。\n${msg}`);
       } else {
-        alert(`薬局PDFを解析しましたが、名簿氏名と一致しませんでした。\n${msg}`);
+        alert(
+          `薬局PDFを解析しましたが、名簿氏名と一致しませんでした。\n${msg}${
+            !GEMINI_KEY?.trim()
+              ? '\n\n※スキャンPDFの場合は .env の VITE_GEMINI_API_KEY を設定すると読み取り精度が上がります。'
+              : ''
+          }`
+        );
       }
     },
-    [allResidents, filteredResidents, selectedSheetTitle]
+    [allResidents, filteredResidents, selectedSheetTitle, GEMINI_KEY]
   );
 
   const importVisitCalendarPdf = useCallback(
@@ -3670,7 +3677,7 @@ export function RecordPage({
             </span>
           ) : null}
           <span className="text-indigo-700">
-            薬局PDF: 同一書式の「お薬説明書」を複数選択。氏名が名簿と一致すると、その利用者カードの「薬情報」と救急印刷に反映されます。
+            薬局PDF: 同一書式の「お薬説明書」を複数選択（スキャンPDFは OCR＋Gemini で氏名読取）。姓と名のスペースの有無は自動照合。名簿と一致すると「薬情報」に反映されます。
           </span>
         </div>
         {kaipokeImportStatus ? (
@@ -4548,7 +4555,20 @@ export function RecordPage({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setResidentInputView('cards')}
+                        onClick={() => setResidentInputViewPersist('monitor')}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border-2 px-3 py-2 text-xs font-black sm:text-sm ${
+                          residentInputView === 'monitor'
+                            ? 'border-red-600 bg-red-600 text-white'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="全利用者を小さく並べ、緊急・注意を1画面で確認（69床規模向け）"
+                      >
+                        <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden />
+                        アラーム一覧
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setResidentInputViewPersist('cards')}
                         className={`rounded-xl border-2 px-3 py-2 text-xs font-black sm:text-sm ${
                           residentInputView === 'cards'
                             ? 'border-blue-600 bg-blue-600 text-white'
@@ -4559,7 +4579,7 @@ export function RecordPage({
                       </button>
                       <button
                         type="button"
-                        onClick={switchToTableInput}
+                        onClick={() => switchToTableInput()}
                         className={`inline-flex items-center gap-1.5 rounded-xl border-2 px-3 py-2 text-xs font-black sm:text-sm ${
                           residentInputView === 'table'
                             ? 'border-emerald-600 bg-emerald-600 text-white'
@@ -4571,7 +4591,8 @@ export function RecordPage({
                       </button>
                     </div>
                     <p className="mt-2 text-[11px] font-bold leading-snug text-slate-600 sm:text-xs">
-                      名前をタップで行動メニュー（巡視・生活記録・障害福祉進捗・入退院・薬情報・情報提供書など）。画面上部の「情報提供書」から全体の取込もできます。一覧表は横スクロールで連続入力し、Tabキーで移動できます。
+                      <strong className="text-red-800">アラーム一覧</strong>
+                      は病院の床マップのように全員を小さく表示し、赤＝緊急・黄＝注意をスクロールなしで把握できます（愛西69床など向け）。カード表示は詳細確認用。一覧表は横スクロールで連続入力できます。
                     </p>
                     <CareAutoBackupPanel
                       facilityLabel={selectedSheetTitle}
@@ -4601,6 +4622,15 @@ export function RecordPage({
                       saveBulkVitalsOnly={saveBulkVitalsOnly}
                       geminiApiKey={GEMINI_KEY}
                     />
+                  ) : residentInputView === 'monitor' ? (
+                    <ResidentMonitorBoard
+                      residents={displayResidents}
+                      residentNameWithoutSama={residentNameWithoutSama}
+                      residentSortMode={residentSortMode}
+                      onSelectResident={onSelectResident}
+                      monitorRev={monitorMuteRev}
+                      stayStatusRev={stayStatusRev}
+                    />
                   ) : (
                     <div
                       className="grid min-w-0 max-w-full gap-2 pb-4 pl-0.5 pr-1 sm:gap-3 sm:pr-2 sm:pb-6"
@@ -4609,6 +4639,7 @@ export function RecordPage({
                   {displayResidents.map((res) => {
                     void tick;
                     void monitorMuteRev;
+                    void stayStatusRev;
                     const rawEv = Report.evaluateResidentMonitor(res, { ignoreMute: true });
                     const muted = Report.isResidentMonitorAlertMuted(String(res.id));
                     const ev = muted ? Report.evaluateResidentMonitor(res) : rawEv;
@@ -4665,6 +4696,7 @@ export function RecordPage({
                     const roomNotes = Report.getResidentRoomNotes(String(res.id));
                     const roomHandover = String(roomNotes.handover ?? '').trim();
                     const roomTreatment = String(roomNotes.treatment ?? '').trim();
+                    const stayStatus = Report.getResidentStayStatus(String(res.id));
                     return (
                       <div
                         key={String(res.id)}
@@ -4722,6 +4754,12 @@ export function RecordPage({
                                   )}
                                 </div>
                               </div>
+                              <ResidentStayStatusBadges
+                                status={stayStatus}
+                                critical={critical}
+                                className="mt-2"
+                                noteClassName={critical ? 'text-red-50' : 'text-slate-700'}
+                              />
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-1">
                               {(() => {

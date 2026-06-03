@@ -48,12 +48,17 @@ export function ResidentAdministrativeModals({ overlay, onClose, resident, porta
   });
 
   const [mvDraft, setMvDraft] = useState({
+    hospitalized: false,
+    hospitalSince: '',
+    dischargePlannedDate: '',
+    moveInPlannedDate: '',
+    note: '',
+    logAlso: false,
     kind: /** @type {'hospital'|'move_in'|'move_out'} */ ('hospital'),
     eventDate: '',
     residentName: '',
     gender: '',
     moveOutReason: '',
-    note: '',
   });
 
   useEffect(() => {
@@ -74,13 +79,19 @@ export function ResidentAdministrativeModals({ overlay, onClose, resident, porta
 
   useEffect(() => {
     if (overlay !== 'move_log' || !rid) return;
+    const saved = Report.getResidentStayStatus(rid);
     setMvDraft({
+      hospitalized: Boolean(saved?.hospitalized),
+      hospitalSince: String(saved?.hospitalSince ?? '') || todayYmdLocal(),
+      dischargePlannedDate: String(saved?.dischargePlannedDate ?? ''),
+      moveInPlannedDate: String(saved?.moveInPlannedDate ?? ''),
+      note: String(saved?.note ?? ''),
+      logAlso: false,
       kind: 'hospital',
       eventDate: todayYmdLocal(),
       residentName: nameNoSama(resident?.name ?? ''),
       gender: '',
       moveOutReason: '',
-      note: '',
     });
   }, [overlay, rid, resident]);
 
@@ -91,37 +102,50 @@ export function ResidentAdministrativeModals({ overlay, onClose, resident, porta
   }, [rid, disDraft, onClose]);
 
   const saveMoveLog = useCallback(() => {
-    const lk = String(facilityDef.linkKey ?? '').trim();
-    const tabLabel = String(facilityDef.tabLabel ?? '').trim();
-    if (!lk || !tabLabel) {
-      alert('施設情報が見つかりません。施設を選び直してからお試しください。');
-      return;
-    }
-    if (!String(mvDraft.eventDate ?? '').trim()) {
-      alert('発生日を入力してください。');
-      return;
-    }
-    if (!String(mvDraft.residentName ?? '').trim()) {
-      alert('利用者名を入力してください。');
-      return;
-    }
-    if (mvDraft.kind === 'move_out' && !mvDraft.moveOutReason) {
-      alert('退院（退去）では種別を選択してください。');
-      return;
-    }
-    addMoveInOutLog({
-      facilityLinkKey: lk,
-      tabLabel,
-      kind: mvDraft.kind,
-      eventDate: mvDraft.eventDate,
-      residentName: mvDraft.residentName,
-      gender: mvDraft.gender,
-      moveOutReason: mvDraft.kind === 'move_out' ? mvDraft.moveOutReason : '',
+    if (!rid) return;
+    Report.setResidentStayStatus(rid, {
+      hospitalized: mvDraft.hospitalized,
+      hospitalSince: mvDraft.hospitalized
+        ? String(mvDraft.hospitalSince ?? '').trim() || todayYmdLocal()
+        : '',
+      dischargePlannedDate: mvDraft.dischargePlannedDate,
+      moveInPlannedDate: mvDraft.moveInPlannedDate,
       note: mvDraft.note,
     });
-    alert('入院・入居・退院の記録を保存しました。');
+    if (mvDraft.logAlso) {
+      const lk = String(facilityDef.linkKey ?? '').trim();
+      const tabLabel = String(facilityDef.tabLabel ?? '').trim();
+      if (!lk || !tabLabel) {
+        alert('施設情報が見つかりません。カード表示は保存済みです。');
+        onClose();
+        return;
+      }
+      if (!String(mvDraft.eventDate ?? '').trim()) {
+        alert('施設ログ用の発生日を入力してください。');
+        return;
+      }
+      if (!String(mvDraft.residentName ?? '').trim()) {
+        alert('利用者名を入力してください。');
+        return;
+      }
+      if (mvDraft.kind === 'move_out' && !mvDraft.moveOutReason) {
+        alert('退院（退去）では種別を選択してください。');
+        return;
+      }
+      addMoveInOutLog({
+        facilityLinkKey: lk,
+        tabLabel,
+        kind: mvDraft.kind,
+        eventDate: mvDraft.eventDate,
+        residentName: mvDraft.residentName,
+        gender: mvDraft.gender,
+        moveOutReason: mvDraft.kind === 'move_out' ? mvDraft.moveOutReason : '',
+        note: mvDraft.note,
+      });
+    }
+    alert('保存しました。記録画面の利用者カードに反映されます。');
     onClose();
-  }, [facilityDef, mvDraft, onClose]);
+  }, [facilityDef, mvDraft, onClose, rid]);
 
   if (!overlay || !resident || !rid) return null;
 
@@ -319,96 +343,147 @@ export function ResidentAdministrativeModals({ overlay, onClose, resident, porta
             </button>
           </div>
           <p className="mb-3 text-xs font-bold text-slate-600">
-            対象施設: {facilityLabel || '—'} / 利用者ID: {rid}
+            対象施設: {facilityLabel || '—'} / 利用者: {nameNoSama(resident?.name ?? '')} 様
           </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-bold text-slate-600">種別</span>
-              <select
-                value={mvDraft.kind}
+          <p className="mb-3 rounded-xl bg-teal-50 px-3 py-2 text-xs font-bold leading-relaxed text-teal-950">
+            ここで入力した内容は<strong className="font-black">記録画面の利用者カード</strong>にバッジ表示されます（この端末に保存）。
+          </p>
+          <div className="mb-4 space-y-3 rounded-2xl border-2 border-teal-200 bg-teal-50/40 p-3">
+            <p className="text-sm font-black text-teal-900">利用者カードに表示</p>
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={mvDraft.hospitalized}
                 onChange={(e) =>
                   setMvDraft((prev) => ({
                     ...prev,
-                    kind: e.target.value === 'move_out' ? 'move_out' : e.target.value === 'move_in' ? 'move_in' : 'hospital',
-                    moveOutReason: e.target.value === 'move_out' ? prev.moveOutReason : '',
+                    hospitalized: e.target.checked,
+                    hospitalSince: e.target.checked && !prev.hospitalSince ? todayYmdLocal() : prev.hospitalSince,
                   }))
                 }
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold"
-              >
-                <option value="hospital">入院</option>
-                <option value="move_in">入居</option>
-                <option value="move_out">退院（退去）</option>
-              </select>
+                className="h-5 w-5 rounded border-teal-400"
+              />
+              <span className="text-sm font-black text-teal-950">入院中</span>
             </label>
+            {mvDraft.hospitalized ? (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-bold text-slate-600">入院日（任意）</span>
+                <input
+                  type="date"
+                  value={mvDraft.hospitalSince}
+                  onChange={(e) => setMvDraft((prev) => ({ ...prev, hospitalSince: e.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
+                />
+              </label>
+            ) : null}
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-bold text-slate-600">発生日</span>
+              <span className="text-xs font-bold text-slate-600">退院予定日</span>
               <input
                 type="date"
-                value={mvDraft.eventDate}
-                onChange={(e) => setMvDraft((prev) => ({ ...prev, eventDate: e.target.value }))}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
-              />
-            </label>
-            <label className="flex flex-col gap-1 sm:col-span-2">
-              <span className="text-xs font-bold text-slate-600">利用者名</span>
-              <input
-                value={mvDraft.residentName}
-                onChange={(e) => setMvDraft((prev) => ({ ...prev, residentName: e.target.value }))}
+                value={mvDraft.dischargePlannedDate}
+                onChange={(e) => setMvDraft((prev) => ({ ...prev, dischargePlannedDate: e.target.value }))}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-bold text-slate-600">性別（任意）</span>
-              <select
-                value={mvDraft.gender}
-                onChange={(e) =>
-                  setMvDraft((prev) => ({
-                    ...prev,
-                    gender: e.target.value === 'male' ? 'male' : e.target.value === 'female' ? 'female' : '',
-                  }))
-                }
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold"
-              >
-                <option value="">—</option>
-                <option value="male">男性</option>
-                <option value="female">女性</option>
-              </select>
+              <span className="text-xs font-bold text-slate-600">入居予定日</span>
+              <input
+                type="date"
+                value={mvDraft.moveInPlannedDate}
+                onChange={(e) => setMvDraft((prev) => ({ ...prev, moveInPlannedDate: e.target.value }))}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
+              />
             </label>
-            {mvDraft.kind === 'move_out' ? (
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-bold text-slate-600">退院（退去）種別</span>
-                <select
-                  value={mvDraft.moveOutReason}
-                  onChange={(e) =>
-                    setMvDraft((prev) => ({
-                      ...prev,
-                      moveOutReason:
-                        e.target.value === 'after_hospital' || e.target.value === 'death' || e.target.value === 'transfer_facility'
-                          ? e.target.value
-                          : '',
-                    }))
-                  }
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold"
-                >
-                  <option value="">選択してください</option>
-                  <option value="after_hospital">入院して退去</option>
-                  <option value="death">死亡退去</option>
-                  <option value="transfer_facility">他施設へ移動</option>
-                </select>
-              </label>
-            ) : (
-              <div />
-            )}
-            <label className="flex flex-col gap-1 sm:col-span-2">
-              <span className="text-xs font-bold text-slate-600">メモ（任意）</span>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-bold text-slate-600">メモ（任意・カードにも表示）</span>
               <textarea
                 value={mvDraft.note}
                 onChange={(e) => setMvDraft((prev) => ({ ...prev, note: e.target.value }))}
-                rows={3}
+                rows={2}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
-                placeholder="例: 〇〇病院へ入院 / 退院後に自宅療養 など"
+                placeholder="例: ○○病院へ入院 / 退院後に自宅療養 など"
               />
             </label>
+          </div>
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={mvDraft.logAlso}
+                onChange={(e) => setMvDraft((prev) => ({ ...prev, logAlso: e.target.checked }))}
+                className="h-4 w-4 rounded border-slate-400"
+              />
+              <span className="text-xs font-black text-slate-700">施設の入退院ログにも記録する（任意）</span>
+            </label>
+            {mvDraft.logAlso ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-slate-600">種別</span>
+                  <select
+                    value={mvDraft.kind}
+                    onChange={(e) =>
+                      setMvDraft((prev) => ({
+                        ...prev,
+                        kind:
+                          e.target.value === 'move_out'
+                            ? 'move_out'
+                            : e.target.value === 'move_in'
+                              ? 'move_in'
+                              : 'hospital',
+                        moveOutReason: e.target.value === 'move_out' ? prev.moveOutReason : '',
+                      }))
+                    }
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold"
+                  >
+                    <option value="hospital">入院</option>
+                    <option value="move_in">入居</option>
+                    <option value="move_out">退院（退去）</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-slate-600">発生日</span>
+                  <input
+                    type="date"
+                    value={mvDraft.eventDate}
+                    onChange={(e) => setMvDraft((prev) => ({ ...prev, eventDate: e.target.value }))}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 sm:col-span-2">
+                  <span className="text-xs font-bold text-slate-600">利用者名</span>
+                  <input
+                    value={mvDraft.residentName}
+                    onChange={(e) => setMvDraft((prev) => ({ ...prev, residentName: e.target.value }))}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
+                  />
+                </label>
+                {mvDraft.kind === 'move_out' ? (
+                  <label className="flex flex-col gap-1 sm:col-span-2">
+                    <span className="text-xs font-bold text-slate-600">退院（退去）種別</span>
+                    <select
+                      value={mvDraft.moveOutReason}
+                      onChange={(e) =>
+                        setMvDraft((prev) => ({
+                          ...prev,
+                          moveOutReason:
+                            e.target.value === 'after_hospital' ||
+                            e.target.value === 'death' ||
+                            e.target.value === 'transfer_facility'
+                              ? e.target.value
+                              : '',
+                        }))
+                      }
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold"
+                    >
+                      <option value="">選択してください</option>
+                      <option value="after_hospital">入院して退去</option>
+                      <option value="death">死亡退去</option>
+                      <option value="transfer_facility">他施設へ移動</option>
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <div className="mt-5 flex gap-2">
             <button

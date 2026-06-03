@@ -9,8 +9,11 @@ import {
   putResidentInfoProvisionFromDataUrl,
   putResidentDocFromDataUrl,
 } from '../lib/residentInfoProvisionIdb.js';
-
-const MAX_PDF_BYTES = 4 * 1024 * 1024;
+import {
+  PROVISION_DOC_ACCEPT,
+  isProvisionImageMime,
+  validateProvisionDocumentFile,
+} from '../lib/provisionDocumentMime.js';
 
 /**
  * @param {Record<string, string>} fields
@@ -97,12 +100,13 @@ export function ResidentInfoProvisionModal({
   const [pickId, setPickId] = useState('');
   const [viewId, setViewId] = useState('');
   const [fileName, setFileName] = useState('');
-  const [pdfBase64, setPdfBase64] = useState('');
+  const [docDataUrl, setDocDataUrl] = useState('');
   const [busy, setBusy] = useState(false);
   /** @type {[Record<string, string> | null, React.Dispatch<React.SetStateAction<Record<string, string> | null>>]} */
   const [preview, setPreview] = useState(/** @type {Record<string, string> | null} */ (null));
-  /** PDF表示用 object URL */
+  /** 文書表示用 object URL */
   const [viewPdfObjectUrl, setViewPdfObjectUrl] = useState(/** @type {string | null} */ (null));
+  const [viewDocMime, setViewDocMime] = useState('application/pdf');
   const [viewTick, setViewTick] = useState(0);
 
   const pickerResidents = useMemo(() => residents ?? [], [residents]);
@@ -123,9 +127,10 @@ export function ResidentInfoProvisionModal({
     setPickId(chosen);
     setViewId(chosen);
     setFileName('');
-    setPdfBase64('');
+    setDocDataUrl('');
     setPreview(null);
     setBusy(false);
+    setViewDocMime('application/pdf');
     setDocInIdb({ hasInfo: false, hasNurse: false, infoFile: null, nurseFile: null });
   }, [open, pickerResidents, initialResidentId, initialActiveTab]);
 
@@ -149,15 +154,16 @@ export function ResidentInfoProvisionModal({
     const idbK = viewDocKind === 'nurse' ? PDF_DOC_KIND.NURSE : PDF_DOC_KIND.INFO;
     let cancelled = false;
     (async () => {
-      const url = await createResidentDocObjectUrl(viewId, idbK);
+      const out = await createResidentDocObjectUrl(viewId, idbK);
       if (cancelled) {
-        if (url) URL.revokeObjectURL(url);
+        if (out?.url) URL.revokeObjectURL(out.url);
         return;
       }
       setViewPdfObjectUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
-        return url;
+        return out?.url ?? null;
       });
+      setViewDocMime(out?.mime ?? 'application/pdf');
     })();
     return () => {
       cancelled = true;
@@ -214,12 +220,9 @@ export function ResidentInfoProvisionModal({
 
   const onPickFile = useCallback((file) => {
     if (!file) return;
-    if (file.type && file.type !== 'application/pdf') {
-      alert('PDF ファイルを選んでください');
-      return;
-    }
-    if (file.size > MAX_PDF_BYTES) {
-      alert(`PDF は ${Math.floor(MAX_PDF_BYTES / (1024 * 1024))}MB 以下にしてください（API制限のため）`);
+    const v = validateProvisionDocumentFile(file);
+    if (!v.ok) {
+      alert(v.message);
       return;
     }
     setFileName(file.name);
@@ -227,12 +230,12 @@ export function ResidentInfoProvisionModal({
     const fr = new FileReader();
     fr.onload = () => {
       const s = String(fr.result ?? '');
-      setPdfBase64(s);
+      setDocDataUrl(s);
     };
     fr.onerror = () => {
       alert('ファイルの読み込みに失敗しました');
       setFileName('');
-      setPdfBase64('');
+      setDocDataUrl('');
     };
     fr.readAsDataURL(file);
   }, []);
@@ -242,15 +245,15 @@ export function ResidentInfoProvisionModal({
       alert('利用者を選んでください');
       return;
     }
-    if (!pdfBase64) {
-      alert('PDF を選択してください');
+    if (!docDataUrl) {
+      alert('PDF または画像を選択してください');
       return;
     }
     setBusy(true);
     try {
       await putResidentDocFromDataUrl(
         pickId,
-        pdfBase64,
+        docDataUrl,
         fileName || 'nurse-record.pdf',
         PDF_DOC_KIND.NURSE
       );
@@ -265,7 +268,7 @@ export function ResidentInfoProvisionModal({
     } finally {
       setBusy(false);
     }
-  }, [pickId, pdfBase64, fileName]);
+  }, [pickId, docDataUrl, fileName]);
 
   const runExtract = useCallback(async () => {
     if (!geminiKey?.trim()) {
@@ -276,8 +279,8 @@ export function ResidentInfoProvisionModal({
       alert('利用者を選んでください');
       return;
     }
-    if (!pdfBase64) {
-      alert('PDF を選択してください');
+    if (!docDataUrl) {
+      alert('PDF または画像を選択してください');
       return;
     }
     setBusy(true);
@@ -287,14 +290,14 @@ export function ResidentInfoProvisionModal({
         room: picked ? String(picked.room ?? '') : '',
         facilityLabel: String(facilityLabel ?? '').trim(),
       };
-      const out = await Report.fetchJohoteikyoFromPdf(geminiKey, pdfBase64, ctx);
+      const out = await Report.fetchJohoteikyoFromPdf(geminiKey, docDataUrl, ctx);
       setPreview(out);
       let pdfOk = true;
       try {
-        await putResidentInfoProvisionFromDataUrl(pickId, pdfBase64, fileName || 'document.pdf');
+        await putResidentInfoProvisionFromDataUrl(pickId, docDataUrl, fileName || 'document.pdf');
       } catch {
         pdfOk = false;
-        alert('AIの結果は保存済みですが、PDF ファイルの保存（端末内）に失敗しました。ストレージの空きを確認するか、ブラウザのサイトデータ設定をご確認ください。');
+        alert('AIの結果は保存済みですが、ファイルの保存（端末内）に失敗しました。ストレージの空きを確認するか、ブラウザのサイトデータ設定をご確認ください。');
       }
       Report.setResidentInfoProvisionExtract(pickId, {
         sourceFileName: fileName,
@@ -308,7 +311,7 @@ export function ResidentInfoProvisionModal({
     } finally {
       setBusy(false);
     }
-  }, [geminiKey, pickId, pdfBase64, picked, fileName, facilityLabel, residentNameWithoutSama]);
+  }, [geminiKey, pickId, docDataUrl, picked, fileName, facilityLabel, residentNameWithoutSama]);
 
   const viewRecord = useMemo(
     () => (viewId ? Report.getResidentInfoProvisionExtract(viewId) : null),
@@ -381,7 +384,7 @@ export function ResidentInfoProvisionModal({
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-2 text-lg font-black text-violet-900 sm:text-xl">
             <FileUp className="h-6 w-6 shrink-0" />
-            利用者別文書（PDF）
+            利用者別文書（PDF・画像）
           </h3>
           <button type="button" onClick={onClose} className="rounded-full p-2 hover:bg-slate-100" aria-label="閉じる">
             <X className="h-6 w-6" />
@@ -396,7 +399,7 @@ export function ResidentInfoProvisionModal({
               activeTab === 'import' ? 'bg-white text-violet-900 shadow' : 'text-violet-800 hover:bg-white/60'
             }`}
           >
-            PDF を取り込む
+            文書を取り込む
           </button>
           <button
             type="button"
@@ -444,12 +447,13 @@ export function ResidentInfoProvisionModal({
 
             {importDocKind === 'info' ? (
               <p className="mb-4 rounded-xl bg-violet-50 px-3 py-2 text-sm font-bold leading-relaxed text-violet-950">
-                退院サマリー・情報提供書の <strong>PDF</strong> を選び、AI が読み取り、<strong>この端末に利用者別で保存</strong>
+                退院サマリー・情報提供書の <strong>PDF または写真（JPEG/PNG 等）</strong> を選び、AI が読み取り、
+                <strong>この端末に利用者別で保存</strong>
                 します。救急サマリー用の反映は任意です。内容の誤りに注意し、医療判断の代替ではありません。
               </p>
             ) : (
               <p className="mb-4 rounded-xl bg-sky-50 px-3 py-2 text-sm font-bold leading-relaxed text-sky-950">
-                看護・リハ等の <strong>記録文書（PDF）</strong> を取り込み、<strong>同じ画面の「保存を見る」から閲覧</strong>
+                看護・リハ等の <strong>記録文書（PDF・画像）</strong> を取り込み、<strong>同じ画面の「保存を見る」から閲覧</strong>
                 できるように端末内に残します。AI
                 読み取りは行いません（要約はありません）。同一利用者の情報提供書の保存と切り分け可能です。
               </p>
@@ -477,11 +481,13 @@ export function ResidentInfoProvisionModal({
                   htmlFor="carelink-info-provision-pdf"
                   className="flex cursor-pointer flex-col items-center gap-2"
                 >
-                  <span className="text-sm font-black text-violet-900">PDF を選択（最大約 4MB）</span>
+                  <span className="text-sm font-black text-violet-900">
+                    PDF または画像を選択（最大約 4MB）
+                  </span>
                   <input
                     id="carelink-info-provision-pdf"
                     type="file"
-                    accept="application/pdf,.pdf"
+                    accept={PROVISION_DOC_ACCEPT}
                     className="hidden"
                     onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
                   />
@@ -495,7 +501,7 @@ export function ResidentInfoProvisionModal({
               {importDocKind === 'info' ? (
                 <button
                   type="button"
-                  disabled={busy || !pdfBase64 || !pickId || !geminiKey?.trim()}
+                  disabled={busy || !docDataUrl || !pickId || !geminiKey?.trim()}
                   onClick={() => void runExtract()}
                   className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-700 py-4 text-base font-black text-white shadow-lg disabled:opacity-40"
                 >
@@ -505,12 +511,12 @@ export function ResidentInfoProvisionModal({
               ) : (
                 <button
                   type="button"
-                  disabled={busy || !pdfBase64 || !pickId}
+                  disabled={busy || !docDataUrl || !pickId}
                   onClick={() => void runSaveNursePdfOnly()}
                   className="flex w-full items-center justify-center gap-2 rounded-2xl bg-sky-700 py-4 text-base font-black text-white shadow-lg disabled:opacity-40"
                 >
                   {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileUp className="h-5 w-5" />}
-                  {busy ? '保存中…' : '看護等 PDF を端末に保存'}
+                  {busy ? '保存中…' : '看護等の文書を端末に保存'}
                 </button>
               )}
             </div>
@@ -560,7 +566,7 @@ export function ResidentInfoProvisionModal({
             </div>
             {importDocKind === 'info' && !geminiKey?.trim() ? (
               <p className="mt-3 text-center text-xs font-bold text-amber-700">
-                VITE_GEMINI_API_KEY がないと情報提供の AI 読み取りは使えません。看護文書の「PDF のみ保存」は使用できます。
+                VITE_GEMINI_API_KEY がないと情報提供の AI 読み取りは使えません。看護文書の「保存のみ」は使用できます。
               </p>
             ) : null}
           </>
@@ -568,7 +574,7 @@ export function ResidentInfoProvisionModal({
           <>
             <p className="mb-3 text-sm font-bold text-slate-600">
               利用者を選び、<strong>情報提供</strong>と<strong>看護等の文書</strong>を切り替えて表示します。元の
-              PDF は端末内に保持され、別端末では共有されません。情報提供については AI 抽出の文字データも表示します。
+              原本（PDF・画像）は端末内に保持され、別端末では共有されません。情報提供については AI 抽出の文字データも表示します。
             </p>
             <label className="mb-3 flex flex-col gap-1">
               <span className="text-xs font-bold text-slate-600">利用者</span>
@@ -589,7 +595,7 @@ export function ResidentInfoProvisionModal({
 
             {!viewHasAnyData ? (
               <p className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm font-bold text-amber-950">
-                この利用者の保存データはまだありません。「PDF を取り込む」タブで取り込んでください。
+                この利用者の保存データはまだありません。「文書を取り込む」タブで取り込んでください。
               </p>
             ) : (
               <div className="space-y-3">
@@ -621,9 +627,9 @@ export function ResidentInfoProvisionModal({
                     <span>
                       ファイル: {String(viewRecord?.sourceFileName ?? docInIdb.infoFile?.sourceFileName ?? '—')}{' '}
                       {viewRecord?.hasPdf || docInIdb.hasInfo ? (
-                        <span className="text-emerald-700">（PDF 保存あり）</span>
+                        <span className="text-emerald-700">（原本保存あり）</span>
                       ) : (
-                        <span className="text-amber-800">（PDF 未保存・抽出のみ）</span>
+                        <span className="text-amber-800">（原本未保存・抽出のみ）</span>
                       )}
                     </span>
                     {viewRecord?.extractedAt || docInIdb.infoFile?.updatedAt ? (
@@ -655,29 +661,37 @@ export function ResidentInfoProvisionModal({
 
                 {viewDocKind === 'info' && !docInIdb.hasInfo && !viewRecord ? (
                   <p className="rounded-xl border border-amber-200 bg-amber-50/90 p-3 text-sm font-bold text-amber-950">
-                    この種別のテキスト抽出はまだありません。「PDF を取り込む」で情報提供を取り込んでください。
+                    この種別のテキスト抽出はまだありません。「文書を取り込む」で情報提供を取り込んでください。
                   </p>
                 ) : null}
                 {viewDocKind === 'nurse' && !docInIdb.hasNurse ? (
                   <p className="rounded-xl border border-amber-200 bg-amber-50/90 p-3 text-sm font-bold text-amber-950">
-                    看護等の PDF はまだ保存されていません。取り込みタブの「看護・他職の記録」から保存できます。
+                    看護等の文書はまだ保存されていません。取り込みタブの「看護・他職の記録」から保存できます。
                   </p>
                 ) : null}
 
                 {viewDocKind === 'info' && (viewRecord || docInIdb.hasInfo) ? (
                   viewPdfObjectUrl ? (
                     <div className="overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100">
-                      <div className="max-h-[min(55vh,520px)] min-h-[200px] w-full">
-                        <iframe
-                          title="情報提供書 PDF"
-                          src={viewPdfObjectUrl}
-                          className="h-[min(55vh,520px)] w-full border-0"
-                        />
+                      <div className="max-h-[min(55vh,520px)] min-h-[200px] w-full overflow-auto">
+                        {isProvisionImageMime(viewDocMime) ? (
+                          <img
+                            src={viewPdfObjectUrl}
+                            alt="情報提供書"
+                            className="mx-auto max-h-[min(55vh,520px)] w-full object-contain"
+                          />
+                        ) : (
+                          <iframe
+                            title="情報提供書"
+                            src={viewPdfObjectUrl}
+                            className="h-[min(55vh,520px)] w-full border-0"
+                          />
+                        )}
                       </div>
                     </div>
                   ) : docInIdb.hasInfo || viewRecord?.hasPdf ? (
                     <p className="text-sm font-bold text-amber-800">
-                      PDF の表示用データを開けませんでした。下の「抽出データ」のみ表示します。
+                      原本の表示用データを開けませんでした。下の「抽出データ」のみ表示します。
                     </p>
                   ) : null
                 ) : null}
@@ -685,16 +699,26 @@ export function ResidentInfoProvisionModal({
                 {viewDocKind === 'nurse' && docInIdb.hasNurse ? (
                   viewPdfObjectUrl ? (
                     <div className="overflow-hidden rounded-2xl border-2 border-sky-200 bg-slate-100">
-                      <div className="max-h-[min(55vh,520px)] min-h-[200px] w-full">
-                        <iframe
-                          title="看護・他職の文書 PDF"
-                          src={viewPdfObjectUrl}
-                          className="h-[min(55vh,520px)] w-full border-0"
-                        />
+                      <div className="max-h-[min(55vh,520px)] min-h-[200px] w-full overflow-auto">
+                        {isProvisionImageMime(viewDocMime) ? (
+                          <img
+                            src={viewPdfObjectUrl}
+                            alt="看護・他職の文書"
+                            className="mx-auto max-h-[min(55vh,520px)] w-full object-contain"
+                          />
+                        ) : (
+                          <iframe
+                            title="看護・他職の文書"
+                            src={viewPdfObjectUrl}
+                            className="h-[min(55vh,520px)] w-full border-0"
+                          />
+                        )}
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm font-bold text-amber-800">PDF を開けませんでした。再読み込みするか、取り込み直しをお試しください。</p>
+                    <p className="text-sm font-bold text-amber-800">
+                      文書を開けませんでした。再読み込みするか、取り込み直しをお試しください。
+                    </p>
                   )
                 ) : null}
 
@@ -708,7 +732,7 @@ export function ResidentInfoProvisionModal({
                       className="inline-flex items-center gap-2 rounded-xl border-2 border-slate-400 bg-white px-4 py-2.5 text-sm font-black text-slate-800"
                     >
                       <Download className="h-4 w-4" />
-                      PDFをダウンロード
+                      原本をダウンロード
                     </button>
                   ) : null}
                   <button
@@ -748,7 +772,7 @@ export function ResidentInfoProvisionModal({
                 ) : null}
                 {viewDocKind === 'nurse' && docInIdb.hasNurse ? (
                   <p className="text-xs font-bold text-slate-500">
-                    看護等の文書は PDF のみ保存しています。AI による要約・抽出は行っていません。
+                    看護等の文書は原本（PDF・画像）のみ保存しています。AI による要約・抽出は行っていません。
                   </p>
                 ) : null}
               </div>
