@@ -21,7 +21,6 @@ import {
   MessageSquarePlus,
   Mic,
   Monitor,
-  PenLine,
   RefreshCw,
   Smartphone,
   Sparkles,
@@ -87,7 +86,6 @@ import { NearMissMonthlyAnalysisModal } from '../components/NearMissMonthlyAnaly
 import { NearMissReportModal } from '../components/NearMissReportModal.jsx';
 import { ResidentBulkInputTable } from '../components/ResidentBulkInputTable.jsx';
 import { ResidentInfoProvisionModal } from '../components/ResidentInfoProvisionModal.jsx';
-import { VitalHandwritingModal } from '../components/VitalHandwritingModal.jsx';
 import { isNursingOfficeUiEnabled } from '../services/NearMissLedgerService.js';
 import { fetchFacilityCalendarEvents } from '../services/GoogleCalendarService.js';
 import * as Report from '../services/ReportService.js';
@@ -1053,18 +1051,12 @@ export function RecordPage({
   const [homeVisitCalendarRev, setHomeVisitCalendarRev] = useState(0);
   const [daySvcExternalFor, setDaySvcExternalFor] = useState(/** @type {Record<string, unknown> | null} */ (null));
   const [daySvcExternalDraft, setDaySvcExternalDraft] = useState(/** @type {Record<string, boolean>} */ ({}));
-  /** カード「周囲事項」手入力の再描画用（localStorage 更新後にインクリメント） */
-  const [surroundMemoRev, setSurroundMemoRev] = useState(0);
   /** 個別申し送り・施設共通申し送りの再読込（App から戻ったとき等） */
   const [roomNotesRev, setRoomNotesRev] = useState(0);
   const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
   const [facilityHandoverItemDraft, setFacilityHandoverItemDraft] = useState('');
   const [facilityHandoverSaveFlash, setFacilityHandoverSaveFlash] = useState(false);
   const [handoverViewYmd, setHandoverViewYmd] = useState(() => currentYmd());
-  const [surroundTextEditId, setSurroundTextEditId] = useState('');
-  const [surroundDraftText, setSurroundDraftText] = useState('');
-  const [surroundHandwritingId, setSurroundHandwritingId] = useState('');
-
   const selectedDef = useMemo(
     () => facilityDefBySheetTitle(selectedSheetTitle),
     [selectedSheetTitle]
@@ -1641,7 +1633,9 @@ export function RecordPage({
         forceRefresh: Boolean(isManualRefresh),
       });
       if (seq !== loadSeqRef.current) return;
-      setAllResidents(Report.applyInjuryDiseaseImportsToResidentList(residents));
+      const rows = Report.applyInjuryDiseaseImportsToResidentList(residents);
+      setAllResidents(rows);
+      Report.runBpDiastolicLowBulkApplyIfNeeded(rows.map((r) => String(r?.id ?? '')));
       setFetchSourceMeta({
         source: String(source ?? ''),
         mode: String(mode ?? ''),
@@ -2578,16 +2572,6 @@ export function RecordPage({
     }
     return { residentCount, lineCount };
   }, [filteredResidents, auditMonth, tick]);
-
-  const surroundMemoByResident = useMemo(() => {
-    const m = new Map();
-    for (const res of displayResidents) {
-      const id = String(res?.id ?? '').trim();
-      if (!id) continue;
-      m.set(id, Report.getResidentSurroundMemo(id));
-    }
-    return m;
-  }, [displayResidents, surroundMemoRev]);
 
   const importKaipokeVitalsCsv = useCallback(
     (file) => {
@@ -4595,13 +4579,6 @@ export function RecordPage({
                       return 'bg-slate-700 text-white border-slate-900';
                     })();
                     const bill = residentBillingById.get(String(res.id)) ?? { mealLogged: 0, enteralLogged: 0 };
-                    const surroundMemo = surroundMemoByResident.get(String(res.id)) ?? {
-                      text: '',
-                      handwritingDataUrl: '',
-                    };
-                    const surroundLocalText = String(surroundMemo.text ?? '').trim();
-                    const surroundLocalHw = String(surroundMemo.handwritingDataUrl ?? '').trim();
-                    const surroundHasStaff = Boolean(surroundLocalText || surroundLocalHw);
                     const sheetDisease = residentDiseaseLabel(res);
                     const sheetMeal = Number(res.mealCountThisMonth) || 0;
                     const mealTotal = sheetMeal + bill.mealLogged;
@@ -4728,102 +4705,6 @@ export function RecordPage({
                                 {warn && !critical && <Clock className="h-5 w-5 animate-pulse text-amber-700" />}
                               </div>
                             </div>
-                          </div>
-                          <div
-                            role="group"
-                            aria-label="周囲事項"
-                            onClick={(e) => e.stopPropagation()}
-                            className={`rounded-lg border-2 px-2 py-1.5 ${
-                              critical ? 'border-white/40 bg-black/20' : 'border-slate-200 bg-slate-50/90'
-                            }`}
-                          >
-                            <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                              <span
-                                className={`text-[9px] font-black tracking-wide ${
-                                  critical ? 'text-red-100' : 'text-slate-500'
-                                }`}
-                              >
-                                周囲事項
-                              </span>
-                              <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSurroundDraftText(String(surroundMemo.text ?? ''));
-                                    setSurroundTextEditId(String(res.id));
-                                  }}
-                                  className={`rounded-md border px-1.5 py-0.5 text-[9px] font-black ${
-                                    critical
-                                      ? 'border-red-100/50 bg-white/10 text-white hover:bg-white/20'
-                                      : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
-                                  }`}
-                                >
-                                  文字
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setSurroundHandwritingId(String(res.id))}
-                                  className={`inline-flex items-center gap-0.5 rounded-md border px-1.5 py-0.5 text-[9px] font-black ${
-                                    critical
-                                      ? 'border-red-100/50 bg-white/10 text-white hover:bg-white/20'
-                                      : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
-                                  }`}
-                                >
-                                  <PenLine className="h-3 w-3 shrink-0" aria-hidden />
-                                  手書き
-                                </button>
-                                {surroundHasStaff ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      Report.updateResidentSurroundMemo(String(res.id), {
-                                        text: '',
-                                        handwritingDataUrl: '',
-                                      });
-                                      setSurroundMemoRev((n) => n + 1);
-                                    }}
-                                    className={`rounded-md border px-1.5 py-0.5 text-[9px] font-black ${
-                                      critical
-                                        ? 'border-red-200/60 text-red-100 hover:bg-white/10'
-                                        : 'border-rose-300 bg-rose-50 text-rose-900 hover:bg-rose-100'
-                                    }`}
-                                  >
-                                    リセット
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                            {surroundHasStaff ? (
-                              <div className={`space-y-1 text-sm font-bold sm:text-base ${critical ? 'text-red-50' : 'text-slate-800'}`}>
-                                {surroundLocalText ? (
-                                  <p className="line-clamp-4 whitespace-pre-wrap break-words leading-snug">{surroundMemo.text}</p>
-                                ) : null}
-                                {surroundLocalHw ? (
-                                  <img
-                                    src={surroundLocalHw}
-                                    alt=""
-                                    className="max-h-24 w-full rounded-md border border-slate-200 bg-white object-contain object-left"
-                                  />
-                                ) : null}
-                                {sheetDisease ? (
-                                  <p
-                                    className={`border-t pt-1 text-[10px] font-bold leading-snug ${
-                                      critical ? 'border-white/20 text-red-100/90' : 'border-slate-200 text-slate-500'
-                                    }`}
-                                  >
-                                    名簿: {sheetDisease}
-                                  </p>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <p
-                                className={`line-clamp-3 text-sm font-bold leading-snug sm:text-base ${
-                                  critical ? 'text-red-100' : 'text-slate-600'
-                                }`}
-                              >
-                                {sheetDisease || '—'}
-                              </p>
-                            )}
                           </div>
                           {(roomHandover || roomTreatment) ? (
                             <div
@@ -5217,106 +5098,6 @@ export function RecordPage({
           setInfoProvisionInitialResidentId(null);
           setInfoProvisionInitialActiveTab(null);
           setEmergencyOpen(true);
-        }}
-      />
-
-      {(() => {
-        const rid = String(surroundTextEditId ?? '').trim();
-        if (!rid) return null;
-        const res =
-          displayResidents.find((r) => String(r.id) === rid) ?? allResidents.find((r) => String(r.id) === rid);
-        const sheetHint = residentDiseaseLabel(res);
-        return (
-          <div
-            className="fixed inset-0 z-[207] flex items-center justify-center bg-black/60 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="surround-text-edit-title"
-            onClick={() => setSurroundTextEditId('')}
-          >
-            <div
-              className="w-full max-w-lg rounded-2xl border-4 border-slate-700 bg-white p-5 shadow-2xl sm:p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h3 id="surround-text-edit-title" className="text-lg font-black text-slate-900 sm:text-xl">
-                  周囲事項（文字入力）
-                  <span className="mt-1 block text-xs font-bold text-slate-600">
-                    {residentNameWithoutSama(res?.name ?? '') || '利用者'} 様
-                  </span>
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setSurroundTextEditId('')}
-                  className="rounded-full p-2 hover:bg-slate-100"
-                  aria-label="閉じる"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              <p className="mb-2 text-[11px] font-bold leading-snug text-slate-600 sm:text-xs">
-                ここで保存した内容はカードの表示と、救急サマリー印刷の「周囲事項（カード手入力）」に出ます。スプレッドシートの名簿は自動では書き換わりません。
-              </p>
-              {sheetHint ? (
-                <p className="mb-2 max-h-24 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-bold leading-snug text-slate-700">
-                  <span className="font-black text-slate-500">名簿（参照）</span> {sheetHint}
-                </p>
-              ) : null}
-              <textarea
-                rows={6}
-                value={surroundDraftText}
-                onChange={(e) => setSurroundDraftText(e.target.value)}
-                className="mb-3 w-full rounded-xl border-2 border-slate-300 p-3 text-sm font-bold text-slate-900"
-                placeholder="例: KP郵便物送付禁止、電話での連絡で対応して下さい。"
-              />
-              <div className="flex flex-wrap justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSurroundTextEditId('')}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50"
-                >
-                  キャンセル
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    Report.updateResidentSurroundMemo(rid, { text: surroundDraftText });
-                    setSurroundMemoRev((n) => n + 1);
-                    setSurroundTextEditId('');
-                  }}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-700"
-                >
-                  保存
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      <VitalHandwritingModal
-        open={Boolean(String(surroundHandwritingId ?? '').trim())}
-        residentName={(() => {
-          const rid = String(surroundHandwritingId ?? '').trim();
-          const r =
-            displayResidents.find((x) => String(x.id) === rid) ?? allResidents.find((x) => String(x.id) === rid);
-          return `${residentNameWithoutSama(r?.name ?? '') || '利用者'} 様`;
-        })()}
-        heading={(() => {
-          const rid = String(surroundHandwritingId ?? '').trim();
-          const r =
-            displayResidents.find((x) => String(x.id) === rid) ?? allResidents.find((x) => String(x.id) === rid);
-          const nm = residentNameWithoutSama(r?.name ?? '') || '利用者';
-          return `${nm} 様・周囲事項（手書き）`;
-        })()}
-        initialDataUrl={Report.getResidentSurroundMemo(String(surroundHandwritingId ?? '').trim()).handwritingDataUrl}
-        onClose={() => setSurroundHandwritingId('')}
-        onConfirm={(dataUrl) => {
-          const id = String(surroundHandwritingId ?? '').trim();
-          if (id) {
-            Report.updateResidentSurroundMemo(id, { handwritingDataUrl: dataUrl });
-            setSurroundMemoRev((n) => n + 1);
-          }
         }}
       />
 

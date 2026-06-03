@@ -1335,6 +1335,7 @@ const App = () => {
       setResidentAdminOverlay(null);
       setSelectedResident(res);
       if (Array.isArray(navList) && navList.length > 0) setResidentNavList(navList);
+      Report.runBpDiastolicLowBulkApplyIfNeeded([String(res?.id ?? '')]);
       applyResidentDetailState(res);
       const th = Report.resolveAlertThresholdsForResident(String(res?.id ?? ''));
       setAlertThresholdDraft({
@@ -2321,7 +2322,7 @@ const App = () => {
                 ))}
               </div>
               <p className="mt-2 text-[10px] font-bold text-violet-800">
-                例: 普段から低血圧の方は「血圧下 下限」を個別に下げてください。
+                拡張期血圧が設定値（初期 50）以下でアラート。個別に変更できます。
               </p>
             </div>
           </div>
@@ -2634,7 +2635,12 @@ const App = () => {
             onBack={() => setView('portal')}
             onOpenMonthlyReport={() => setView('monthly_report_manager')}
             onOpenNotionNewResidents={() => setView('notion_new_residents')}
-            onResidentsSync={setResidents}
+            onResidentsSync={(rows) => {
+              Report.runBpDiastolicLowBulkApplyIfNeeded(
+                (Array.isArray(rows) ? rows : []).map((r) => String(r?.id ?? ''))
+              );
+              setResidents(Array.isArray(rows) ? rows : []);
+            }}
             initialSheetTitle={selectedPortalSheetTitle}
           />
         );

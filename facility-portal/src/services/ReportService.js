@@ -224,7 +224,7 @@ function formatGeminiGenerateContentErrorMessage(data, httpStatus) {
 export const VITAL_THRESHOLDS = Object.freeze({
   tempCMinFever: 37.5,
   bpSystolicHigh: 150,
-  bpDiastolicLow: 80,
+  bpDiastolicLow: 50,
   stoolHoursMax: 72,
   urineHoursMax: 6,
   patrolIntervalWarnMin: 180,
@@ -246,6 +246,14 @@ function normalizeThresholdNumber(v, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** 旧デフォルト 80 → 現行 50 へ（端末に残った個別設定の表示・判定用） */
+const LEGACY_BP_DIA_LOW_DEFAULT = 80;
+
+function normalizeBpDiastolicLowValue(v, fallback = VITAL_THRESHOLDS.bpDiastolicLow) {
+  const n = normalizeThresholdNumber(v, fallback);
+  return n === LEGACY_BP_DIA_LOW_DEFAULT ? VITAL_THRESHOLDS.bpDiastolicLow : n;
+}
+
 /** @param {string} residentId */
 export function getResidentAlertThresholds(residentId) {
   const id = String(residentId ?? '').trim();
@@ -256,7 +264,7 @@ export function getResidentAlertThresholds(residentId) {
   return {
     tempCMinFever: normalizeThresholdNumber(row.tempCMinFever, VITAL_THRESHOLDS.tempCMinFever),
     bpSystolicHigh: normalizeThresholdNumber(row.bpSystolicHigh, VITAL_THRESHOLDS.bpSystolicHigh),
-    bpDiastolicLow: normalizeThresholdNumber(row.bpDiastolicLow, VITAL_THRESHOLDS.bpDiastolicLow),
+    bpDiastolicLow: normalizeBpDiastolicLowValue(row.bpDiastolicLow, VITAL_THRESHOLDS.bpDiastolicLow),
     stoolHoursMax: normalizeThresholdNumber(row.stoolHoursMax, VITAL_THRESHOLDS.stoolHoursMax),
     urineHoursMax: normalizeThresholdNumber(row.urineHoursMax, VITAL_THRESHOLDS.urineHoursMax),
     patrolIntervalWarnMin: normalizeThresholdNumber(
@@ -293,6 +301,72 @@ export function setResidentAlertThresholds(residentId, patch) {
 /** @param {string} residentId */
 export function resolveAlertThresholdsForResident(residentId) {
   return { ...VITAL_THRESHOLDS, ...(getResidentAlertThresholds(residentId) ?? {}) };
+}
+
+/**
+ * 全利用者の拡張期血圧下限アラームを一括設定（名簿 ID ＋ 既存保存分）
+ * @param {string[]} residentIds
+ * @param {number} [value=50]
+ */
+export function applyBpDiastolicLowToAllResidents(residentIds, value = VITAL_THRESHOLDS.bpDiastolicLow) {
+  const target = normalizeThresholdNumber(value, VITAL_THRESHOLDS.bpDiastolicLow);
+  const all = readJson(LS.residentAlertThresholds, {});
+  /** @type {Set<string>} */
+  const ids = new Set(Object.keys(all));
+  for (const raw of Array.isArray(residentIds) ? residentIds : []) {
+    const id = String(raw ?? '').trim();
+    if (id) ids.add(id);
+  }
+  for (const id of ids) {
+    const prev = getResidentAlertThresholds(id) ?? { ...VITAL_THRESHOLDS };
+    all[id] = {
+      tempCMinFever: prev.tempCMinFever,
+      bpSystolicHigh: prev.bpSystolicHigh,
+      bpDiastolicLow: target,
+      stoolHoursMax: prev.stoolHoursMax,
+      urineHoursMax: prev.urineHoursMax,
+      patrolIntervalWarnMin: prev.patrolIntervalWarnMin,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  writeJson(LS.residentAlertThresholds, all);
+  return ids.size;
+}
+
+const BP_DIA_LOW_BULK_APPLIED_LS = 'carelink_os_bp_dia_low_bulk_v50_applied_v2';
+
+/**
+ * 拡張期血圧下限 50 への移行（名簿読込のたびに 80 残存を修復）
+ * @param {string[]} residentIds
+ */
+export function runBpDiastolicLowBulkApplyIfNeeded(residentIds) {
+  const roster = (Array.isArray(residentIds) ? residentIds : [])
+    .map((x) => String(x ?? '').trim())
+    .filter(Boolean);
+  if (!roster.length) return 0;
+
+  const all = readJson(LS.residentAlertThresholds, {});
+  let legacyFixed = 0;
+  for (const [id, row] of Object.entries(all)) {
+    if (!row || typeof row !== 'object') continue;
+    if (Number(row.bpDiastolicLow) === LEGACY_BP_DIA_LOW_DEFAULT) {
+      all[id] = {
+        ...row,
+        bpDiastolicLow: VITAL_THRESHOLDS.bpDiastolicLow,
+        updatedAt: new Date().toISOString(),
+      };
+      legacyFixed += 1;
+    }
+  }
+  if (legacyFixed) writeJson(LS.residentAlertThresholds, all);
+
+  const applied = String(readJson(BP_DIA_LOW_BULK_APPLIED_LS, '') ?? '');
+  if (applied !== 'v2') {
+    applyBpDiastolicLowToAllResidents(roster, VITAL_THRESHOLDS.bpDiastolicLow);
+    writeJson(BP_DIA_LOW_BULK_APPLIED_LS, 'v2');
+    return roster.length;
+  }
+  return legacyFixed;
 }
 
 /**
