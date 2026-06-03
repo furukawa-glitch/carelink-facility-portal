@@ -1136,6 +1136,7 @@ const App = () => {
   });
   const [panoramaNursingEnd, setPanoramaNursingEnd] = useState('');
   const [panoramaNursingRev, setPanoramaNursingRev] = useState(0);
+  const [careSyncRev, setCareSyncRev] = useState(0);
   const [facilityNoticeDraft, setFacilityNoticeDraft] = useState('');
   const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
   const [roomHandoverDraft, setRoomHandoverDraft] = useState('');
