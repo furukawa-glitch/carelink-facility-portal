@@ -1457,21 +1457,50 @@ export function getWeeklyPlans(linkKey, anchor = new Date()) {
 
 const WEEKDAY_JA_SHORT = Object.freeze(['日', '月', '火', '水', '木', '金', '土']);
 
+/** @typedef {'this_week' | 'next_week' | 'month'} PlanCalendarRangeMode */
+
+/** 予定カレンダーの表示範囲 */
+export const PLAN_CALENDAR_RANGES = Object.freeze({
+  this_week: { label: '今週', dayCount: 7, startOffsetDays: 0 },
+  next_week: { label: '来週', dayCount: 7, startOffsetDays: 7 },
+  month: { label: '1か月', dayCount: 30, startOffsetDays: 0 },
+});
+
 /**
- * 当日0時基準の7日間それぞれに予定を割り当て（未登録日は空配列）。外出・受診の持ち物・服薬準備の俯瞰用。
- * @param {string} linkKey
  * @param {Date} [anchor]
+ * @param {PlanCalendarRangeMode} [mode]
+ */
+export function getPlanCalendarRangeMeta(mode = 'this_week', anchor = new Date()) {
+  const cfg = PLAN_CALENDAR_RANGES[mode] ?? PLAN_CALENDAR_RANGES.this_week;
+  const start = new Date(anchor);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + cfg.startOffsetDays);
+  return {
+    mode,
+    start,
+    dayCount: cfg.dayCount,
+    label: cfg.label,
+    countLabel: `${cfg.dayCount}日間`,
+  };
+}
+
+/**
+ * 指定開始日から N 日分、日ごとに予定を割り当て（未登録日は空配列）
+ * @param {string} linkKey
+ * @param {Date} [anchor] 表示開始日（0時）
+ * @param {{ dayCount?: number }} [options]
  * @returns {{ date: string; weekdayShort: string; isToday: boolean; plans: unknown[] }[]}
  */
-export function getWeeklyPlanDays(linkKey, anchor = new Date()) {
+export function getWeeklyPlanDays(linkKey, anchor = new Date(), options = {}) {
   const k = String(linkKey ?? '').trim();
   if (!k) return [];
   const all = readJson(LS.weeklyPlans, {});
   const list = Array.isArray(all[k]) ? all[k] : [];
   const start = new Date(anchor);
   start.setHours(0, 0, 0, 0);
+  const dayCount = Math.max(1, Math.min(31, Number(options.dayCount) || 7));
   const endExclusive = new Date(start);
-  endExclusive.setDate(endExclusive.getDate() + 7);
+  endExclusive.setDate(endExclusive.getDate() + dayCount);
 
   const inWindow = list.filter((v) => {
     const ds = String(v.date ?? '').slice(0, 10);
@@ -1492,7 +1521,7 @@ export function getWeeklyPlanDays(linkKey, anchor = new Date()) {
 
   const todayKey = localYmd(new Date());
   const out = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < dayCount; i++) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
     const key = localYmd(d);

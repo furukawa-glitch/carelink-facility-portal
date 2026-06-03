@@ -991,6 +991,10 @@ export function RecordPage({
   const [planDraftType, setPlanDraftType] = useState('外出');
   const [planDraftTitle, setPlanDraftTitle] = useState('');
   const [planRev, setPlanRev] = useState(0);
+  /** 予定カレンダー表示範囲: 今週 / 来週 / 1か月 */
+  const [planCalendarRange, setPlanCalendarRange] = useState(
+    /** @type {'this_week' | 'next_week' | 'month'} */ ('this_week')
+  );
   const [monitorMuteRev, setMonitorMuteRev] = useState(0);
   const [googleCalendarPlanRev, setGoogleCalendarPlanRev] = useState(0);
   const [googleCalendarReloadRev, setGoogleCalendarReloadRev] = useState(0);
@@ -1088,7 +1092,7 @@ export function RecordPage({
       }
       setGoogleCalendarStatus('loading');
       try {
-        const rows = await fetchFacilityCalendarEvents({ apiKey, calendarId, days: 7 });
+        const rows = await fetchFacilityCalendarEvents({ apiKey, calendarId, days: 31 });
         if (canceled) return;
         const map = new Map();
         for (const e of rows) {
@@ -1553,12 +1557,18 @@ export function RecordPage({
     [selectedDef]
   );
 
+  const planRangeMeta = useMemo(
+    () => Report.getPlanCalendarRangeMeta(planCalendarRange, new Date()),
+    [planCalendarRange, tick]
+  );
+
   const weeklyPlanDays = useMemo(() => {
     void tick;
     void homeVisitCalendarRev;
+    void planRev;
     const k = selectedDef?.linkKey ?? '';
     if (!k) return [];
-    const base = Report.getWeeklyPlanDays(k, new Date());
+    const base = Report.getWeeklyPlanDays(k, planRangeMeta.start, { dayCount: planRangeMeta.dayCount });
     const rangeStart = base[0]?.date ?? currentYmd();
     const rangeEnd = base[base.length - 1]?.date ?? rangeStart;
     const homeVisitByDate = new Map();
@@ -1578,7 +1588,16 @@ export function RecordPage({
       return { ...day, plans: merged, homeVisit: hvc[0] ?? null };
     });
     return out;
-  }, [selectedDef, planRev, tick, homeVisitCalendarRev, googleCalendarPlansByDate, googleCalendarPlanRev]);
+  }, [
+    selectedDef,
+    planRev,
+    tick,
+    homeVisitCalendarRev,
+    googleCalendarPlansByDate,
+    googleCalendarPlanRev,
+    planCalendarRange,
+    planRangeMeta,
+  ]);
   const todayHomeVisit = useMemo(() => {
     const d = weeklyPlanDays.find((x) => x.isToday);
     return d?.homeVisit ?? null;
@@ -3343,7 +3362,7 @@ export function RecordPage({
           at: Date.now(),
           fileName: String(file.name ?? ''),
         });
-        alert(`往診カレンダーを取り込みました。\n${msg}\n\n「今週の予定」と「本日の予定」に反映されます。`);
+        alert(`往診カレンダーを取り込みました。\n${msg}\n\n「予定カレンダー」と「本日の予定」に反映されます。`);
       } catch (e) {
         alert(e instanceof Error ? e.message : '往診カレンダーPDFの取り込みに失敗しました');
       }
@@ -3574,7 +3593,7 @@ export function RecordPage({
             type="button"
             onClick={() => visitCalendarPdfInputRef.current?.click()}
             className={`${hdrBtn} border-violet-800 bg-violet-800 text-white hover:bg-violet-700`}
-            title="在宅クリニックの「訪問カレンダー」PDF（紙をスキャンしたPDF可）。AIが日付・担当医・往診対象者を読み取り、今週の予定カレンダーに表示します。"
+            title="在宅クリニックの「訪問カレンダー」PDF（紙をスキャンしたPDF可）。AIが日付・担当医・往診対象者を読み取り、予定カレンダーに表示します。"
           >
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             往診カレンダーPDF
@@ -3631,7 +3650,7 @@ export function RecordPage({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-cyan-700">バイタルCSV: 利用者カードの「直近バイタル」に反映</span>
           <span className="text-violet-800">
-            往診カレンダーPDF: クリニックの月間予定表 → 今週の予定・本日の往診対象者に反映（Gemini API 要）
+            往診カレンダーPDF: クリニックの月間予定表 → 予定カレンダー・本日の往診対象者に反映（Gemini API 要）
           </span>
           <span className="text-emerald-800">
             傷病一覧CSV: 対象月 {auditMonth} の傷病名 → 各利用者の「病名」（名簿の氏名と照合・通常指示優先）
@@ -3710,10 +3729,40 @@ export function RecordPage({
                 </p>
               </div>
               <div className="flex min-w-0 flex-col rounded-2xl border-2 border-teal-300/90 bg-teal-50/95 p-3 shadow-md">
-                <div className="mb-1 flex flex-wrap items-center gap-2 text-teal-900">
-                  <CalendarDays className="h-5 w-5 shrink-0" />
-                  <h3 className="text-base font-black">今週の予定（7日分・一覧）</h3>
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-teal-900">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CalendarDays className="h-5 w-5 shrink-0" />
+                    <h3 className="text-base font-black">
+                      予定カレンダー（{planRangeMeta.countLabel}）
+                    </h3>
+                  </div>
+                  <div className="flex flex-wrap gap-1 rounded-lg border border-teal-300 bg-white/90 p-0.5">
+                    {(
+                      [
+                        ['this_week', '今週'],
+                        ['next_week', '来週'],
+                        ['month', '1か月'],
+                      ]
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setPlanCalendarRange(/** @type {'this_week' | 'next_week' | 'month'} */ (id))}
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-black sm:text-xs ${
+                          planCalendarRange === id
+                            ? 'bg-teal-600 text-white shadow-sm'
+                            : 'text-teal-900 hover:bg-teal-100'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+                <p className="mb-2 text-[10px] font-bold text-teal-800/90">
+                  表示中: {planRangeMeta.label}（{weeklyPlanDays[0]?.date ?? '—'} 〜{' '}
+                  {weeklyPlanDays[weeklyPlanDays.length - 1]?.date ?? '—'}）— 横スクロールで全日程を確認できます
+                </p>
                 <p className="mb-2 text-[11px] font-bold leading-snug text-teal-900/85">
                   公式LINEの面会予約が入った Google カレンダーの予定も、ここに自動で載ります（緑の Google 表示）。手入力の外出・受診なども下のフォームから追記できます。
                   往診カレンダーPDFを取り込むと、往診日ごとに<strong className="font-black">対象利用者名</strong>が紫の「往診」表示で載ります。
@@ -3770,14 +3819,18 @@ export function RecordPage({
                 ) : null}
                 {weeklyPlanDays.length === 0 ? (
                   <p className="mb-2 rounded-lg border border-dashed border-teal-300 bg-white/70 px-2 py-3 text-center text-sm font-bold text-slate-600">
-                    施設を選ぶと、ここに7日分の枠が表示されます。
+                    施設を選ぶと、ここに予定の日付枠が表示されます。
                   </p>
                 ) : (
                   <div className="carelink-resident-grid-scroll mb-2 flex gap-2 overflow-x-auto overflow-y-visible pb-2 pl-0.5 pr-1 pt-0.5">
                     {weeklyPlanDays.map((day) => (
                       <div
                         key={day.date}
-                        className={`flex w-[min(100%,10.5rem)] shrink-0 flex-col rounded-xl border-2 shadow-sm ${
+                        className={`flex shrink-0 flex-col rounded-xl border-2 shadow-sm ${
+                          planCalendarRange === 'month'
+                            ? 'w-[min(100%,8.25rem)]'
+                            : 'w-[min(100%,10.5rem)]'
+                          } ${
                           day.isToday
                             ? 'border-teal-600 bg-white ring-2 ring-teal-400/50'
                             : 'border-teal-200/90 bg-white/95'
