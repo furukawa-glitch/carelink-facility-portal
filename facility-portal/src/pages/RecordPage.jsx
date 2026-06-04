@@ -4261,7 +4261,7 @@ export function RecordPage({
           </span>
           {residentScheduleSheetCfg ? (
             <span className="text-purple-800">
-              予定: 千音寺は「R8カレンダー（今月）」で xlsx を一度取込。各カードの「予定・入力」で1か月表示・毎週の決まった予定も登録できます。
+              予定: 千音寺は「R8カレンダー（今月）」で xlsx を一度取込。各カードの「予定・入力」で1か月・毎週の予定を登録（クラウド同期ONなら全PCで共有）。
             </span>
           ) : null}
         </div>

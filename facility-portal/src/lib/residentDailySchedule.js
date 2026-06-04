@@ -8,6 +8,7 @@ import {
   findResidentByPersonNameCandidates,
   personNameMatchKey,
 } from './residentNameMatch.js';
+import { queueResidentScheduleCloudSync } from './facilityPortalStoreSync.js';
 
 const LS_KEY = 'carelink_os_resident_daily_plans_v1';
 const LS_META_KEY = 'carelink_os_resident_daily_plans_meta_v1';
@@ -59,9 +60,20 @@ function facilityBucket(linkKey) {
   return { all, k, bucket: all[k] };
 }
 
+function touchFacilityScheduleSavedAt(linkKey) {
+  const fk = String(linkKey ?? '').trim();
+  if (!fk) return;
+  const all = readMetaStore();
+  const prev = all[fk] && typeof all[fk] === 'object' ? all[fk] : {};
+  all[fk] = { ...prev, scheduleSavedAt: new Date().toISOString() };
+  writeMetaStore(all);
+}
+
 function persistFacilityBucket(all, k, bucket) {
   all[k] = bucket;
   writeStore(all);
+  touchFacilityScheduleSavedAt(k);
+  queueResidentScheduleCloudSync(k);
 }
 
 /**
@@ -624,11 +636,16 @@ function readRecurringStore() {
   }
 }
 
-function writeRecurringStore(all) {
+function writeRecurringStore(all, touchLinkKey = '') {
   try {
     localStorage.setItem(LS_RECURRING_KEY, JSON.stringify(all && typeof all === 'object' ? all : {}));
   } catch {
     /* ignore */
+  }
+  const fk = String(touchLinkKey ?? '').trim();
+  if (fk) {
+    touchFacilityScheduleSavedAt(fk);
+    queueResidentScheduleCloudSync(fk);
   }
 }
 
@@ -701,7 +718,7 @@ export function addResidentRecurringPlan(linkKey, residentId, plan) {
     source: 'app_recurring',
   });
   all[fk][rid] = list;
-  writeRecurringStore(all);
+  writeRecurringStore(all, fk);
   return true;
 }
 
@@ -715,7 +732,7 @@ export function removeResidentRecurringPlan(linkKey, residentId, planId) {
   const next = list.filter((p) => String(p?.id ?? '') !== pid);
   if (next.length === list.length) return false;
   all[fk][rid] = next;
-  writeRecurringStore(all);
+  writeRecurringStore(all, fk);
   return true;
 }
 

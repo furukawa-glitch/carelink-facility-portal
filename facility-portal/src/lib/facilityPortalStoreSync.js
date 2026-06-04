@@ -9,6 +9,7 @@ export const FACILITY_STORE_HOME_VISIT = 'home_visit_calendar';
 export const FACILITY_STORE_INJURY_DISEASE = 'injury_disease_by_resident';
 export const FACILITY_STORE_ENTERAL_MENU = 'enteral_nutrition_menu';
 export const FACILITY_STORE_BATH_SCHEDULE = 'bath_schedule';
+export const FACILITY_STORE_RESIDENT_SCHEDULE = 'resident_daily_schedule';
 /** 組織全体で1つ（利用者IDキー） */
 export const FACILITY_STORE_ORG_KEY = '__org__';
 
@@ -17,6 +18,9 @@ const LS_HOME_VISIT = 'carelink_os_home_visit_calendar_v1';
 const LS_INJURY_DISEASE = 'carelink_os_injury_disease_by_resident_v1';
 const LS_ENTERAL_MENU = 'carelink_os_enteral_nutrition_menu_v1';
 const LS_BATH_SCHEDULE = 'carelink_os_bath_schedule_v1';
+const LS_RESIDENT_PLANS = 'carelink_os_resident_daily_plans_v1';
+const LS_RESIDENT_RECURRING = 'carelink_os_resident_recurring_plans_v1';
+const LS_RESIDENT_PLANS_META = 'carelink_os_resident_daily_plans_meta_v1';
 const FLUSH_DEBOUNCE_MS = 2_000;
 
 /** @type {Set<string>} */
@@ -103,17 +107,33 @@ function mergeEnteralMenuFacilityStore(local, remote) {
   return out;
 }
 
+/**
+ * @param {Record<string, unknown> | null | undefined} local
+ * @param {Record<string, unknown> | null | undefined} remote
+ */
+function mergeResidentScheduleFacilityStore(local, remote) {
+  if (!remote || typeof remote !== 'object') return local ?? null;
+  const remoteAt = String(remote.savedAt ?? '');
+  const localAt = String(local?.savedAt ?? '');
+  if (!local || remoteAt >= localAt) return remote;
+  return local;
+}
+
 function applyFacilityStoresToLocal(rows) {
   let weeklyChanged = 0;
   let homeChanged = 0;
   let injuryChanged = 0;
   let enteralChanged = 0;
   let bathChanged = 0;
+  let residentScheduleChanged = 0;
   const weeklyAll = readJson(LS_WEEKLY, {});
   const homeAll = readJson(LS_HOME_VISIT, {});
   let injuryAll = readJson(LS_INJURY_DISEASE, {});
   let enteralAll = readJson(LS_ENTERAL_MENU, {});
   let bathAll = readJson(LS_BATH_SCHEDULE, {});
+  let residentPlansAll = readJson(LS_RESIDENT_PLANS, {});
+  let residentRecurringAll = readJson(LS_RESIDENT_RECURRING, {});
+  let residentMetaAll = readJson(LS_RESIDENT_PLANS_META, {});
 
   for (const row of rows) {
     const type = String(row?.store_type ?? '').trim();
@@ -163,6 +183,30 @@ function applyFacilityStoresToLocal(rows) {
         bathAll[linkKey] = remote;
         bathChanged = 1;
       }
+    } else if (type === FACILITY_STORE_RESIDENT_SCHEDULE) {
+      const remote = row.payload && typeof row.payload === 'object' ? row.payload : null;
+      if (!remote) continue;
+      const localPayload = {
+        savedAt: String(residentMetaAll[linkKey]?.scheduleSavedAt ?? ''),
+        residents: residentPlansAll[linkKey] ?? {},
+        recurring: residentRecurringAll[linkKey] ?? {},
+      };
+      const merged = mergeResidentScheduleFacilityStore(localPayload, remote);
+      if (merged && merged !== localPayload) {
+        if (merged.residents && typeof merged.residents === 'object') {
+          residentPlansAll[linkKey] = merged.residents;
+        }
+        if (merged.recurring && typeof merged.recurring === 'object') {
+          residentRecurringAll[linkKey] = merged.recurring;
+        }
+        residentMetaAll[linkKey] = {
+          ...(residentMetaAll[linkKey] && typeof residentMetaAll[linkKey] === 'object'
+            ? residentMetaAll[linkKey]
+            : {}),
+          scheduleSavedAt: String(merged.savedAt ?? new Date().toISOString()),
+        };
+        residentScheduleChanged = 1;
+      }
     }
   }
 
@@ -178,13 +222,25 @@ function applyFacilityStoresToLocal(rows) {
       }
     });
   }
-  const storesMerged = weeklyChanged + homeChanged + injuryChanged + enteralChanged + bathChanged;
+  if (residentScheduleChanged) {
+    writeJson(LS_RESIDENT_PLANS, residentPlansAll);
+    writeJson(LS_RESIDENT_RECURRING, residentRecurringAll);
+    writeJson(LS_RESIDENT_PLANS_META, residentMetaAll);
+  }
+  const storesMerged =
+    weeklyChanged +
+    homeChanged +
+    injuryChanged +
+    enteralChanged +
+    bathChanged +
+    residentScheduleChanged;
   return {
     weeklyChanged,
     homeChanged,
     injuryChanged,
     enteralChanged,
     bathChanged,
+    residentScheduleChanged,
     storesMerged,
   };
 }
@@ -198,6 +254,11 @@ export function queueEnteralMenuCloudSync(facilityLinkKey) {
 /** 入浴予定表保存後にクラウドへ送る */
 export function queueBathScheduleCloudSync(facilityLinkKey) {
   queueFacilityPortalStoreSync(FACILITY_STORE_BATH_SCHEDULE, facilityLinkKey);
+}
+
+/** 利用者予定（1か月・毎週）保存後にクラウドへ送る */
+export function queueResidentScheduleCloudSync(facilityLinkKey) {
+  queueFacilityPortalStoreSync(FACILITY_STORE_RESIDENT_SCHEDULE, facilityLinkKey);
 }
 
 /** 傷病一覧CSV取り込み後にクラウドへ送る */
@@ -266,6 +327,24 @@ export async function flushFacilityPortalStoresCloud() {
         payload = all[facilityLinkKey] ?? null;
         if (!payload) continue;
         updatedAt = String(payload.savedAt ?? updatedAt);
+      } else if (storeType === FACILITY_STORE_RESIDENT_SCHEDULE) {
+        const plansAll = readJson(LS_RESIDENT_PLANS, {});
+        const recurringAll = readJson(LS_RESIDENT_RECURRING, {});
+        const metaAll = readJson(LS_RESIDENT_PLANS_META, {});
+        const residents = plansAll[facilityLinkKey];
+        const recurring = recurringAll[facilityLinkKey];
+        if (
+          (!residents || !Object.keys(residents).length) &&
+          (!recurring || !Object.keys(recurring).length)
+        ) {
+          continue;
+        }
+        updatedAt = String(metaAll[facilityLinkKey]?.scheduleSavedAt ?? updatedAt);
+        payload = {
+          savedAt: updatedAt,
+          residents: residents && typeof residents === 'object' ? residents : {},
+          recurring: recurring && typeof recurring === 'object' ? recurring : {},
+        };
       } else {
         continue;
       }
@@ -301,6 +380,7 @@ export async function pullAndMergeFacilityPortalStores() {
       FACILITY_STORE_INJURY_DISEASE,
       FACILITY_STORE_ENTERAL_MENU,
       FACILITY_STORE_BATH_SCHEDULE,
+      FACILITY_STORE_RESIDENT_SCHEDULE,
     ],
   });
   const rows = Array.isArray(result?.stores) ? result.stores : [];
@@ -315,6 +395,7 @@ export async function pullAndMergeFacilityPortalStores() {
     injuryChanged: applied.injuryChanged,
     enteralChanged: applied.enteralChanged,
     bathChanged: applied.bathChanged,
+    residentScheduleChanged: applied.residentScheduleChanged,
   };
 }
 
@@ -386,6 +467,36 @@ export async function pushAllFacilityPortalStoresCloud() {
       facilityLinkKey,
       payload: rec,
       updatedAt: String(rec.savedAt ?? new Date().toISOString()),
+    });
+    upserted++;
+  }
+  const plansAll = readJson(LS_RESIDENT_PLANS, {});
+  const recurringAll = readJson(LS_RESIDENT_RECURRING, {});
+  const metaAll = readJson(LS_RESIDENT_PLANS_META, {});
+  for (const facilityLinkKey of new Set([
+    ...Object.keys(plansAll),
+    ...Object.keys(recurringAll),
+  ])) {
+    if (!facilityLinkKey) continue;
+    const residents = plansAll[facilityLinkKey];
+    const recurring = recurringAll[facilityLinkKey];
+    if (
+      (!residents || !Object.keys(residents).length) &&
+      (!recurring || !Object.keys(recurring).length)
+    ) {
+      continue;
+    }
+    const updatedAt = String(metaAll[facilityLinkKey]?.scheduleSavedAt ?? new Date().toISOString());
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_RESIDENT_SCHEDULE,
+      facilityLinkKey,
+      payload: {
+        savedAt: updatedAt,
+        residents: residents && typeof residents === 'object' ? residents : {},
+        recurring: recurring && typeof recurring === 'object' ? recurring : {},
+      },
+      updatedAt,
     });
     upserted++;
   }
