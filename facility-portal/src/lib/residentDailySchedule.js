@@ -394,6 +394,9 @@ export async function importResidentScheduleFromSheet(linkKey, apiKey, targetYmd
 
 /** @param {string} linkKey @param {Record<string, unknown>[]} residents @param {import('./residentDailySchedule.js').ReturnType<typeof parseResidentScheduleSheetRows>} parsed */
 export function applyImportedResidentSchedules(linkKey, residents, parsed) {
+  if (!parsed || !(parsed.plansByName instanceof Map)) {
+    return { applied: 0, unmatched: 0, ymd: String(parsed?.ymd ?? currentYmd()) };
+  }
   const { matched, unmatched } = matchResidentScheduleImports(residents, parsed.plansByName);
   for (const row of matched) {
     setResidentDailyPlans(linkKey, row.residentId, parsed.ymd, row.plans, { merge: 'merge_sheet' });

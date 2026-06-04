@@ -71,7 +71,11 @@ import {
   tokyoHourFromTs,
 } from '../lib/hourlyCareGrid.js';
 import { bulkCareEventTs, parseMealAmountFieldsFromLog } from '../lib/bulkCareEventTs.js';
-import { defaultEnteralMenuForResident } from '../lib/enteralNutritionMenu.js';
+import {
+  defaultEnteralMenuForResident,
+  enteralBulkFieldsForResident,
+  parseEnteralStatusFromLogNote,
+} from '../lib/enteralNutritionMenu.js';
 import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
 import {
   buildInjuryDiseaseLabelMapFromRows,
@@ -193,8 +197,11 @@ const BULK_CARE_RESET = Object.freeze({
   ensurePortion: '',
   /** ソリタ（経口補助栄養）の摂取割合 — 食事メモに「ソリタ1/2」等で残す */
   solitaPortion: '',
-  /** 経管栄養の内容（製剤・量・本剤/水分など）— 保存で enteral ログ */
+  /** @deprecated 互換用。新規は enteralMenuPlan + enteralStatus */
   enteralMenu: '',
+  enteralMenuPlan: '',
+  enteralMenuMed: '',
+  enteralStatus: '',
   /** 間食・補助食など自由記述（パン、バナナ等）— 食事メモに連結 */
   mealExtras: '',
 });
@@ -212,6 +219,9 @@ const BULK_MEAL_FIELD_KEYS = [
   'ensurePortion',
   'solitaPortion',
   'enteralMenu',
+  'enteralMenuPlan',
+  'enteralMenuMed',
+  'enteralStatus',
   'mealExtras',
 ];
 
@@ -230,7 +240,19 @@ function bulkMealFieldsEmpty(mealSlot = '') {
     ensurePortion: '',
     solitaPortion: '',
     enteralMenu: '',
+    enteralMenuPlan: '',
+    enteralMenuMed: '',
+    enteralStatus: '',
     mealExtras: '',
+  };
+}
+
+function applyEnteralBulkPlanToRow(row, res, facilityLinkKey, mealSlot) {
+  const ent = enteralBulkFieldsForResident(res, facilityLinkKey, mealSlot);
+  return {
+    ...row,
+    enteralMenuPlan: ent.plan,
+    enteralMenuMed: ent.medication,
   };
 }
 
@@ -271,9 +293,7 @@ function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident, faci
     ...bulkNonMealCareFromSeed(care),
     vitalHandwritingDataUrl: '',
   };
-  const def = defaultEnteralMenuForResident(resident, facilityLinkKey);
-  if (def && !String(base.enteralMenu ?? '').trim()) base.enteralMenu = def;
-  return base;
+  return applyEnteralBulkPlanToRow(base, resident, facilityLinkKey, mealSlot);
 }
 
 const BULK_DRAFT_LS_KEY = 'carelink_os_bulk_table_draft_v1';
@@ -1066,7 +1086,10 @@ function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
     } else if (ev?.type === 'fluid_intake') {
       if (meta.waterMl != null && String(meta.waterMl).trim() !== '') seed.waterMl = String(meta.waterMl);
     } else if (ev?.type === 'enteral') {
-      if (meta.note != null && String(meta.note).trim() !== '') seed.enteralMenu = String(meta.note);
+      const parsed = parseEnteralStatusFromLogNote(meta.note);
+      if (parsed.plan) seed.enteralMenuPlan = parsed.plan;
+      if (parsed.status) seed.enteralStatus = parsed.status;
+      if (parsed.plan) seed.enteralMenu = parsed.plan;
     }
   }
   return seed;
@@ -1208,6 +1231,18 @@ export function RecordPage({
   const [nearMissAwarenessAdminOpen, setNearMissAwarenessAdminOpen] = useState(false);
   const [homeVisitNoteOpen, setHomeVisitNoteOpen] = useState(false);
   const [enteralMenuOpen, setEnteralMenuOpen] = useState(false);
+
+  const refreshBulkEnteralPlans = useCallback(() => {
+    setBulkDraft((prev) => {
+      const next = { ...prev };
+      for (const r of displayResidents) {
+        const id = String(r.id);
+        if (!next[id]) continue;
+        next[id] = applyEnteralBulkPlanToRow(next[id], r, selectedFacilityLinkKey, bulkGlobalMealSlot);
+      }
+      return next;
+    });
+  }, [displayResidents, selectedFacilityLinkKey, bulkGlobalMealSlot]);
   const [homeVisitNoteLaunch, setHomeVisitNoteLaunch] = useState(
     /** @type {null | { visitDateYmd: string; residentIds: string[]; doctor?: string; visitType?: string }} */ (null)
   );
@@ -1547,8 +1582,11 @@ export function RecordPage({
           };
           if (!String(row.mealSlot ?? '').trim()) row = { ...row, mealSlot };
           row.vitalHandwritingDataUrl = '';
-          const def = defaultEnteralMenuForResident(r, selectedFacilityLinkKey);
-          if (def && !String(row.enteralMenu ?? '').trim()) row.enteralMenu = def;
+          row = applyEnteralBulkPlanToRow(row, r, selectedFacilityLinkKey, mealSlot);
+          if (String(row.enteralMenuPlan ?? '').trim() && !String(row.enteralStatus ?? '').trim()) {
+            const legacy = String(row.enteralMenu ?? '').trim();
+            if (legacy) row = { ...row, enteralStatus: 'done' };
+          }
         } else {
           row = {
             ...vital,
@@ -2160,7 +2198,7 @@ export function RecordPage({
         alert(result.error ?? '取り込みに失敗しました');
         return;
       }
-      const applied = applyImportedResidentSchedules(displayResidents, result.parsed);
+      const applied = applyImportedResidentSchedules(lk, displayResidents, result.parsed);
       setScheduleImportMsg(
         `${residentScheduleSheetCfg.label}（${result.ymd}）: ${applied.applied}名に反映、名簿未一致 ${applied.unmatched}名`
       );
@@ -2199,6 +2237,9 @@ export function RecordPage({
       ensurePortion = '',
       solitaPortion = '',
       enteralMenu = '',
+      enteralMenuPlan = '',
+      enteralMenuMed = '',
+      enteralStatus = '',
       mealExtras = '',
       vitalHandwritingDataUrl = '',
       hourPatrol,
@@ -2373,19 +2414,23 @@ export function RecordPage({
       }
     }
 
-    const entMenu = String(enteralMenu ?? '').trim();
-    if (entMenu) {
-      const ents = bulkCareEventTs(ymdLog, 'enteral', { mealSlot: String(mealSlot ?? bulkGlobalMealSlot ?? '') });
-      Report.removeCareEventsByResidentAtMinute(id, ents, ['enteral']);
+    const entPlan =
+      String(enteralMenuPlan ?? '').trim() ||
+      String(enteralMenu ?? '').trim();
+    const entSt = String(enteralStatus ?? '').trim();
+    const entSlot = String(mealSlot ?? bulkGlobalMealSlot ?? '');
+    const ents = bulkCareEventTs(ymdLog, 'enteral', { mealSlot: entSlot });
+    Report.removeCareEventsByResidentAtMinute(id, ents, ['enteral']);
+    if (entSt === 'done') {
+      const note = entPlan ? `${entPlan}（実施）` : '経管実施（実施）';
       Report.logCareEvent({
         type: 'enteral',
         ts: ents,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
-        meta: { note: entMenu, bulkEnteralMenu: true },
+        meta: { note, bulkEnteralMenu: true, enteralExecuted: true },
       });
-    }
 
     const hp = Array.isArray(hourPatrol) && hourPatrol.length === 24 ? hourPatrol : freshHourly24();
     const hu = normalizeHourlyText24(hourUrine);
@@ -2475,10 +2520,7 @@ export function RecordPage({
             }
           : { ...savedCare, mealSlot: bulkGlobalMealSlot }),
       };
-      if (!String(init[id].enteralMenu ?? '').trim()) {
-        const enteralDefault = defaultEnteralMenuForResident(r, selectedFacilityLinkKey);
-        if (enteralDefault) init[id].enteralMenu = enteralDefault;
-      }
+      init[id] = applyEnteralBulkPlanToRow(init[id], r, selectedFacilityLinkKey, bulkGlobalMealSlot);
     }
     setBulkDraft(init);
     setResidentInputViewPersist('table');
@@ -2493,28 +2535,34 @@ export function RecordPage({
           const id = String(r.id);
           const cur = next[id];
           if (cur) {
-            next[id] = {
-              ...cur,
-              mealSlot: slot,
-              meal: false,
-              mealStapleForm: '',
-              mealStaple: '',
-              mealSideForm: '',
-              mealSide: '',
-              mealAmount: '',
-              waterMl: '',
-              medicationTaken: '',
-              ensurePortion: '',
-              solitaPortion: '',
-              enteralMenu: '',
-              mealExtras: '',
-            };
+            next[id] = applyEnteralBulkPlanToRow(
+              {
+                ...cur,
+                mealSlot: slot,
+                meal: false,
+                mealStapleForm: '',
+                mealStaple: '',
+                mealSideForm: '',
+                mealSide: '',
+                mealAmount: '',
+                waterMl: '',
+                medicationTaken: '',
+                ensurePortion: '',
+                solitaPortion: '',
+                enteralMenu: '',
+                enteralStatus: '',
+                mealExtras: '',
+              },
+              r,
+              selectedFacilityLinkKey,
+              slot
+            );
           }
         }
         return next;
       });
     },
-    [displayResidents]
+    [displayResidents, selectedFacilityLinkKey]
   );
 
   const patchBulkRow = useCallback((id, patch) => {
@@ -2566,6 +2614,7 @@ export function RecordPage({
       (Array.isArray(row.hourUrine) && row.hourUrine.some((v) => String(v ?? '').trim() !== '')) ||
       (Array.isArray(row.hourStool) && row.hourStool.some((v) => String(v ?? '').trim() !== '')) ||
       String(row.vitalHandwritingDataUrl ?? '').trim() !== '' ||
+      String(row.enteralStatus ?? '').trim() !== '' ||
       String(row.enteralMenu ?? '').trim() !== '' ||
       String(row.mealExtras ?? '').trim() !== ''
     );
@@ -2758,11 +2807,10 @@ export function RecordPage({
           }
           if (cur.ensurePortion === undefined) cur = { ...cur, ensurePortion: '' };
           if (cur.solitaPortion === undefined) cur = { ...cur, solitaPortion: '' };
-          if (cur.enteralMenu === undefined) cur = { ...cur, enteralMenu: '' };
-          if (!String(cur.enteralMenu ?? '').trim()) {
-            const def = defaultEnteralMenuForResident(r, selectedFacilityLinkKey);
-            if (def) cur = { ...cur, enteralMenu: def };
-          }
+          if (cur.enteralMenuPlan === undefined) cur = { ...cur, enteralMenuPlan: '' };
+          if (cur.enteralMenuMed === undefined) cur = { ...cur, enteralMenuMed: '' };
+          if (cur.enteralStatus === undefined) cur = { ...cur, enteralStatus: '' };
+          cur = applyEnteralBulkPlanToRow(cur, r, selectedFacilityLinkKey, bulkGlobalMealSlot);
           if (cur.mealExtras === undefined) cur = { ...cur, mealExtras: '' };
           if (cur.mealSlot === undefined || cur.mealSlot === '') {
             cur = { ...cur, mealSlot: bulkGlobalMealSlot };
@@ -5124,6 +5172,7 @@ export function RecordPage({
                       saveBulkAllWithInput={saveBulkAllWithInput}
                       saveBulkVitalsOnly={saveBulkVitalsOnly}
                       geminiApiKey={GEMINI_KEY}
+                      facilityLinkKey={selectedFacilityLinkKey}
                     />
                   ) : residentInputView === 'monitor' ? (
                     <ResidentMonitorBoard
@@ -5979,6 +6028,7 @@ export function RecordPage({
         facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
         sheetsApiKey={SHEETS_KEY}
         residents={displayResidents}
+        onImported={refreshBulkEnteralPlans}
       />
       <ResidentDailyScheduleModal
         open={Boolean(scheduleModalResident)}
