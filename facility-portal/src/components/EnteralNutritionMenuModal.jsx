@@ -18,6 +18,7 @@ import { importEnteralMenuFromSheet } from '../lib/enteralNutritionMenuSheetImpo
  *   facilityLabel: string;
  *   facilityLinkKey?: string;
  *   sheetsApiKey?: string;
+ *   onImported?: () => void;
  *   residents: Record<string, unknown>[];
  * }} props
  */
@@ -27,12 +28,13 @@ export function EnteralNutritionMenuModal({
   facilityLabel,
   facilityLinkKey = '',
   sheetsApiKey = '',
+  onImported,
   residents,
 }) {
   const [updatedYmd, setUpdatedYmd] = useState(() => currentYmd());
   const [footerNote, setFooterNote] = useState('');
   const [legendNote, setLegendNote] = useState('ロング　ショート　ピンク：朝日勤　オレンジ：夕日勤');
-  const [enteralOnly, setEnteralOnly] = useState(true);
+  const [enteralOnly, setEnteralOnly] = useState(false);
   const [rows, setRows] = useState(/** @type {import('../lib/enteralNutritionMenu.js').EnteralMenuRow[]} */ ([]));
   const [sheetImporting, setSheetImporting] = useState(false);
 
@@ -60,6 +62,7 @@ export function EnteralNutritionMenuModal({
         return;
       }
       initRows();
+      onImported?.();
       const extra =
         result.unmatched > 0 ? `\n名簿と一致しなかった行: ${result.unmatched} 件` : '';
       alert(

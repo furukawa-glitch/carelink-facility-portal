@@ -47,6 +47,11 @@ const DEFAULT_ROW = {
   ensurePortion: '',
   solitaPortion: '',
   enteralMenu: '',
+  /** 経管メニュー表から（朝昼夜で切替・編集不可） */
+  enteralMenuPlan: '',
+  enteralMenuMed: '',
+  /** '' | 'done' | 'not_done' */
+  enteralStatus: '',
   mealExtras: '',
   hourPatrol: null,
   hourUrine: null,
@@ -141,6 +146,7 @@ function emptySavedHourly() {
  *   saveBulkAllWithInput: () => void;
  *   saveBulkVitalsOnly: () => void;
  *   geminiApiKey?: string;
+ *   facilityLinkKey?: string;
  * }} props
  */
 export function ResidentBulkInputTable({
@@ -162,6 +168,7 @@ export function ResidentBulkInputTable({
   saveBulkAllWithInput,
   saveBulkVitalsOnly,
   geminiApiKey = '',
+  facilityLinkKey = '',
 }) {
   const [voiceTarget, setVoiceTarget] = React.useState({ id: '', name: '' });
   const [handTarget, setHandTarget] = React.useState({ id: '', name: '' });
@@ -227,7 +234,7 @@ export function ResidentBulkInputTable({
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-base font-black text-emerald-800">
           <Table2 className="h-4 w-4 shrink-0" aria-hidden />
-          バイタル・体重（月1回）・巡視・排尿・排便・食事（朝昼夜）・エンシュア・ソリタ・経管メニュー・間食など・水分・内服を一覧から
+          バイタル・体重（月1回）・巡視・排尿・排便・食事（朝昼夜）・エンシュア・ソリタ・間食など・経管メニュー・水分・内服を一覧から
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
           <button
@@ -298,7 +305,7 @@ export function ResidentBulkInputTable({
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
         下の表では<strong>食事形態（主食・副食）</strong>と<strong>摂取割</strong>を行ごとに入力します（食事区分は上で統一）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。
         <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>・<strong>ソリタ</strong>は割合を選ぶと食事メモに残ります（例: エンシュア1/2 ソリタ1/3）。
-        <strong className="text-slate-700"> 経管メニュー</strong>は経管実施ログ（算定・記録用の件数にも含まれます）。<strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。
+        <strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。<strong className="text-slate-700"> 経管メニュー</strong>はメニュー表の内容を表示し、<strong className="text-slate-700">実施／未実施</strong>だけ選ぶと記録されます（実施のみ算定ログに含まれます）。
         <span className="ml-1 text-slate-700">横移動は上の「← 左へ / 右へ →」か、Shift+ホイールでも可能です。</span>
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-amber-50 px-3 py-2.5 shadow-sm">
@@ -505,16 +512,16 @@ export function ResidentBulkInputTable({
                 ソリタ<span className="block text-[9px] font-bold normal-case">割合</span>
               </th>
               <th
-                className="border border-slate-200 bg-violet-950/10 px-0.5 py-1 whitespace-nowrap text-violet-950"
-                title="経管栄養の内容。保存すると「経管」ログとして残ります（製剤・量・本剤/水分など）"
-              >
-                経管メニュー<span className="block text-[9px] font-bold normal-case">自由記入</span>
-              </th>
-              <th
                 className="border border-slate-200 bg-amber-50 px-0.5 py-1 whitespace-nowrap text-amber-950"
                 title="間食・補助食・おやつなど。食事メモに連結して保存されます"
               >
                 間食・補助<span className="block text-[9px] font-bold normal-case">パン・バナナ等</span>
+              </th>
+              <th
+                className="border border-slate-200 bg-violet-950/10 px-0.5 py-1 whitespace-nowrap text-violet-950"
+                title="経管栄養の内容。保存すると「経管」ログとして残ります（製剤・量・本剤/水分など）"
+              >
+                経管メニュー<span className="block text-[9px] font-bold normal-case">実施／未実施</span>
               </th>
               <th
                 className="border border-slate-200 bg-orange-50/60 px-0.5 py-1 text-center text-orange-950"
@@ -1098,15 +1105,6 @@ export function ResidentBulkInputTable({
                       ))}
                     </select>
                   </td>
-                  <td className="border border-slate-200 bg-violet-950/5 p-0 align-top">
-                    <input
-                      value={String(row.enteralMenu ?? '')}
-                      onChange={(e) => patchBulkRow(id, { enteralMenu: e.target.value })}
-                      placeholder="例: Isocal 200ml、本剤のみ"
-                      className="w-full min-w-[7rem] bg-transparent px-1 py-1.5 text-xs font-bold text-violet-950 placeholder:font-normal placeholder:text-violet-400/90 sm:min-w-[9rem] sm:text-sm"
-                      aria-label={`${nm} 経管栄養メニュー`}
-                    />
-                  </td>
                   <td className="border border-slate-200 bg-amber-50/50 p-0 align-top">
                     <input
                       value={String(row.mealExtras ?? '')}
@@ -1115,6 +1113,68 @@ export function ResidentBulkInputTable({
                       className="w-full min-w-[7rem] bg-transparent px-1 py-1.5 text-xs font-bold text-amber-950 placeholder:font-normal placeholder:text-amber-600/80 sm:min-w-[9rem] sm:text-sm"
                       aria-label={`${nm} 間食・補助食メモ`}
                     />
+                  </td>
+                  <td className="border border-slate-200 bg-violet-950/5 p-1 align-top">
+                    {(() => {
+                      const plan =
+                        String(row.enteralMenuPlan ?? '').trim() ||
+                        String(row.enteralMenu ?? '').trim();
+                      const med = String(row.enteralMenuMed ?? '').trim();
+                      const st = String(row.enteralStatus ?? '').trim();
+                      if (!plan) {
+                        return (
+                          <p className="px-0.5 py-1 text-[10px] font-bold leading-snug text-violet-500">
+                            「経管栄養メニュー一覧」で表を更新
+                          </p>
+                        );
+                      }
+                      return (
+                        <div className="flex min-w-[7rem] flex-col gap-1 sm:min-w-[9rem]">
+                          <p className="text-[10px] font-bold leading-snug text-violet-950 sm:text-xs">{plan}</p>
+                          {med ? (
+                            <p className="text-[9px] font-bold text-violet-800">
+                              薬: <span className="font-black">{med}</span>
+                            </p>
+                          ) : null}
+                          <div className="flex flex-wrap gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                patchBulkRow(id, {
+                                  enteralStatus: st === 'done' ? '' : 'done',
+                                })
+                              }
+                              className={`rounded-lg border-2 px-2 py-1 text-[10px] font-black sm:text-xs ${
+                                st === 'done'
+                                  ? 'border-violet-800 bg-violet-700 text-white'
+                                  : 'border-violet-300 bg-white text-violet-900 hover:bg-violet-50'
+                              }`}
+                              aria-pressed={st === 'done'}
+                              aria-label={`${nm} 経管 実施`}
+                            >
+                              実施
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                patchBulkRow(id, {
+                                  enteralStatus: st === 'not_done' ? '' : 'not_done',
+                                })
+                              }
+                              className={`rounded-lg border-2 px-2 py-1 text-[10px] font-black sm:text-xs ${
+                                st === 'not_done'
+                                  ? 'border-slate-600 bg-slate-600 text-white'
+                                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                              }`}
+                              aria-pressed={st === 'not_done'}
+                              aria-label={`${nm} 経管 未実施`}
+                            >
+                              未実施
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="border border-slate-200 bg-orange-50/30 px-1 py-0.5 text-center font-mono text-sm sm:text-base">
                     {mealKind === 'meal' ? (

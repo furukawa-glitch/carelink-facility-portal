@@ -127,6 +127,86 @@ function findNameColumnIndex(headerRow) {
   return 0;
 }
 
+function looksLikePersonName(s) {
+  const t = normCell(s).replace(/様\s*$/u, '').trim();
+  if (!t || t.length < 2 || SKIP_NAME.test(t)) return false;
+  if (/^\d+$/.test(t)) return false;
+  if (/^[0-9]{1,2}[:：]/.test(t)) return false;
+  if (/^(月|火|水|木|金|土|日|曜)$/u.test(t)) return false;
+  return /[\u3040-\u30FF\u4E00-\u9FFF]/u.test(t);
+}
+
+/**
+ * @param {string[][]} grid
+ * @param {string} targetYmd
+ * @param {number} nameCol
+ */
+function findTodayColumnInGrid(grid, targetYmd, nameCol) {
+  for (let r = 0; r < Math.min(12, grid.length); r++) {
+    for (let c = 0; c < (grid[r] || []).length; c++) {
+      if (c === nameCol) continue;
+      if (headerMatchesYmd(normCell(grid[r][c]), targetYmd)) return c;
+    }
+  }
+  const { d } = ymdParts(targetYmd);
+  if (!d) return -1;
+  for (let r = 0; r < Math.min(15, grid.length); r++) {
+    const row = grid[r] || [];
+    let dayHits = 0;
+    for (const cell of row) {
+      const v = normCell(cell);
+      if (/^\d{1,2}$/.test(v) && Number(v) >= 1 && Number(v) <= 31) dayHits++;
+    }
+    if (dayHits < 5) continue;
+    for (let c = 0; c < row.length; c++) {
+      if (c === nameCol) continue;
+      if (normCell(row[c]) === String(d)) return c;
+    }
+  }
+  return -1;
+}
+
+/**
+ * @param {string[][]} grid
+ * @param {number} headerRowIdx
+ * @param {string[]} headerRow
+ */
+function findNameColumnInGrid(grid, headerRowIdx, headerRow) {
+  const fromHeader = findNameColumnIndex(headerRow);
+  if (fromHeader >= 0) {
+    let hits = 0;
+    for (let r = headerRowIdx + 1; r < Math.min(headerRowIdx + 30, grid.length); r++) {
+      if (looksLikePersonName(grid[r]?.[fromHeader])) hits++;
+    }
+    if (hits >= 2) return fromHeader;
+  }
+  for (let c = 0; c <= 4; c++) {
+    let hits = 0;
+    for (let r = 0; r < Math.min(45, grid.length); r++) {
+      if (looksLikePersonName(grid[r]?.[c])) hits++;
+    }
+    if (hits >= 3) return c;
+  }
+  return fromHeader >= 0 ? fromHeader : 1;
+}
+
+/**
+ * @param {string[][]} grid
+ */
+function dataStartRowAfterCalendarHeader(grid) {
+  let start = 1;
+  for (let r = 0; r < Math.min(15, grid.length); r++) {
+    const row = grid[r] || [];
+    let dayHits = 0;
+    for (const cell of row) {
+      const v = normCell(cell);
+      if (/^\d{1,2}$/.test(v) && Number(v) >= 1 && Number(v) <= 31) dayHits++;
+    }
+    if (dayHits >= 5) start = Math.max(start, r + 1);
+  }
+  return start;
+}
+
 /**
  * @param {string[][]} rows
  * @param {string} targetYmd
@@ -148,7 +228,7 @@ export function parseResidentScheduleSheetRows(rows, targetYmd) {
   if (headerRowIdx < 0) headerRowIdx = 0;
 
   const headerRow = (grid[headerRowIdx] || []).map(normCell);
-  const nameCol = findNameColumnIndex(headerRow);
+  const nameCol = findNameColumnInGrid(grid, headerRowIdx, headerRow);
 
   /** @type {{ col: number; time: string }[]} */
   const todayCols = [];
@@ -169,15 +249,20 @@ export function parseResidentScheduleSheetRows(rows, targetYmd) {
     }
   }
 
+  if (!todayCols.length) {
+    const calCol = findTodayColumnInGrid(grid, ymd, nameCol);
+    if (calCol >= 0) todayCols.push({ col: calCol, time: '' });
+  }
+
   const activeCols = todayCols.length ? todayCols : timeCols;
   const plansByName = new Map();
   const unmatchedSamples = [];
+  const dataStartRow = Math.max(headerRowIdx + 1, dataStartRowAfterCalendarHeader(grid));
 
-  for (let r = headerRowIdx + 1; r < grid.length; r++) {
+  for (let r = dataStartRow; r < grid.length; r++) {
     const row = grid[r] || [];
     const nameRaw = normCell(row[nameCol]);
-    if (!nameRaw || nameRaw.length < 2 || SKIP_NAME.test(nameRaw)) continue;
-    if (/^\d+$/.test(nameRaw) && nameRaw.length <= 3) continue;
+    if (!looksLikePersonName(nameRaw)) continue;
 
     /** @type {{ time: string; title: string }[]} */
     const items = [];
@@ -214,11 +299,12 @@ export function parseResidentScheduleSheetRows(rows, targetYmd) {
  */
 export function matchResidentScheduleImports(residents, plansByName) {
   const list = Array.isArray(residents) ? residents : [];
+  const byName = plansByName instanceof Map ? plansByName : new Map();
   /** @type {{ residentId: string; name: string; room: string; plans: { time: string; title: string; type: string; source: string }[] }[]} */
   const matched = [];
   let unmatched = 0;
 
-  for (const [nameKey, items] of plansByName.entries()) {
+  for (const [nameKey, items] of byName.entries()) {
     const res = findResidentByPersonNameCandidates(list, buildPersonNameMatchCandidates(nameKey));
     const plans = items.map((it) => ({
       time: String(it.time ?? '').trim(),
@@ -382,7 +468,11 @@ export async function importResidentScheduleFromSheet(linkKey, apiKey, targetYmd
     };
   }
   const anchorYmd = parseSheetAnchorYmd(rows, targetYmd);
-  const parsed = parseResidentScheduleSheetRows(rows, anchorYmd);
+  const useYmd = /^\d{4}-\d{2}-\d{2}$/.test(String(targetYmd ?? '')) ? String(targetYmd) : anchorYmd;
+  const parsed = parseResidentScheduleSheetRows(rows, useYmd);
+  if (!parsed?.plansByName) {
+    return { ok: false, error: 'お予定表の形式を読み取れませんでした（氏名列・本日の日付列を確認してください）' };
+  }
   return {
     ok: true,
     ymd: parsed.ymd,

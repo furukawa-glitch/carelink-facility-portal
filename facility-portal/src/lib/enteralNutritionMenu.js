@@ -101,6 +101,54 @@ export function enteralMenuBulkLineFromRow(row) {
   return parts.join(' ／ ');
 }
 
+const ENTERAL_SLOT_BY_MEAL = Object.freeze({
+  朝: 'morning',
+  昼: 'noon',
+  夜: 'evening',
+  夕: 'evening',
+});
+
+/** @param {string} facilityLinkKey @param {string} residentId @param {string} mealSlot */
+export function enteralMenuSlotContentForResident(facilityLinkKey, residentId, mealSlot) {
+  const draft = loadEnteralMenuDraft(facilityLinkKey);
+  const row = (draft.rows ?? []).find((r) => String(r.residentId) === String(residentId));
+  if (!row) return { content: '', medication: '' };
+  const sk = ENTERAL_SLOT_BY_MEAL[String(mealSlot ?? '').trim()];
+  if (sk && row[sk]) {
+    return {
+      content: String(row[sk].content ?? '').trim(),
+      medication: String(row[sk].medication ?? '').trim(),
+    };
+  }
+  return { content: enteralMenuBulkLineFromRow(row), medication: '' };
+}
+
+/**
+ * 一括表: 表示用メニュー文と薬（朝昼夜の区分に合わせる）
+ * @param {Record<string, unknown>} res
+ * @param {string} facilityLinkKey
+ * @param {string} mealSlot
+ */
+export function enteralBulkFieldsForResident(res, facilityLinkKey, mealSlot) {
+  const id = String(res?.id ?? '');
+  const slot = enteralMenuSlotContentForResident(facilityLinkKey, id, mealSlot);
+  const plan = slot.content || defaultEnteralMenuForResident(res, facilityLinkKey);
+  return { plan, medication: slot.medication };
+}
+
+/** @param {string} note */
+export function parseEnteralStatusFromLogNote(note) {
+  const n = String(note ?? '').trim();
+  if (!n) return { plan: '', status: '' };
+  if (/（未実施）$/.test(n)) {
+    return { plan: n.replace(/（未実施）$/, '').trim(), status: 'not_done' };
+  }
+  if (/（実施）$/.test(n)) {
+    return { plan: n.replace(/（実施）$/, '').trim(), status: 'done' };
+  }
+  return { plan: n, status: 'done' };
+}
+
 /** @param {string} facilityLinkKey @param {string} residentId */
 export function enteralMenuBulkDefaultForResident(facilityLinkKey, residentId) {
   const draft = loadEnteralMenuDraft(facilityLinkKey);
@@ -123,7 +171,8 @@ export function enteralMenuRowFromResident(res, saved, facilityLinkKey = '') {
   if (def && !base.morning.content && !base.noon.content && !base.evening.content) {
     base.morning = { ...base.morning, content: def };
   }
-  const isEnteral = Boolean(res?.isEnteral) || Boolean(def);
+  const hasSlotContent = !!(base.morning.content || base.noon.content || base.evening.content);
+  const isEnteral = Boolean(res?.isEnteral) || Boolean(def) || hasSlotContent;
   base.included = saved?.included !== undefined ? saved.included !== false : isEnteral;
   return base;
 }

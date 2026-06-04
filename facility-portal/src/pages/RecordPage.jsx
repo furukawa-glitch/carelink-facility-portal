@@ -2198,11 +2198,21 @@ export function RecordPage({
         alert(result.error ?? '取り込みに失敗しました');
         return;
       }
-      const applied = applyImportedResidentSchedules(lk, displayResidents, result.parsed);
-      setScheduleImportMsg(
-        `${residentScheduleSheetCfg.label}（${result.ymd}）: ${applied.applied}名に反映、名簿未一致 ${applied.unmatched}名`
-      );
+      const parsed = result.parsed;
+      if (!parsed?.plansByName) {
+        alert('お予定表は取得できましたが、予定データの形式を読み取れませんでした。');
+        return;
+      }
+      const applied = applyImportedResidentSchedules(lk, displayResidents, parsed);
+      const msg = `${residentScheduleSheetCfg.label}（${result.ymd}）: シート${parsed.plansByName.size}件 → 名簿一致 ${applied.applied}名、未一致 ${applied.unmatched}名`;
+      setScheduleImportMsg(msg);
+      setPlanRev((n) => n + 1);
       setTick((n) => n + 1);
+      if (applied.applied === 0) {
+        alert(
+          `${msg}\n\n本日（${result.ymd}）の列に予定が無いか、氏名が名簿と違う可能性があります。シートの日付列と名簿の氏名を確認してください。`
+        );
+      }
     } catch (e) {
       alert(e instanceof Error ? e.message : 'お予定表の取り込みに失敗しました');
     } finally {
@@ -2431,6 +2441,7 @@ export function RecordPage({
         facilitySheetTitle: fac,
         meta: { note, bulkEnteralMenu: true, enteralExecuted: true },
       });
+    }
 
     const hp = Array.isArray(hourPatrol) && hourPatrol.length === 24 ? hourPatrol : freshHourly24();
     const hu = normalizeHourlyText24(hourUrine);

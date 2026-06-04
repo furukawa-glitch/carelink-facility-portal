@@ -2092,7 +2092,7 @@ export function summarizeResidentMonthBilling(residentId, yearMonth) {
       else if (mt === '昼') mealLoggedBySlot['昼'] += 1;
       else if (mt === '夕' || mt === '夜') mealLoggedBySlot['夜'] += 1;
     }
-    if (e.type === 'enteral') enteralLogged++;
+    if (e.type === 'enteral' && e?.meta?.enteralExecuted !== false) enteralLogged++;
   }
   return { mealLogged, mealLoggedBySlot, enteralLogged };
 }

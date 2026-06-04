@@ -366,7 +366,10 @@ export function mapVoiceCareExtractToBulkRowPatch(extracted) {
   }
   if (typeof mIn.medicationDone === 'boolean') patch.medicationTaken = mIn.medicationDone ? 'yes' : 'no';
   if (typeof mIn.enteralExecuted === 'boolean' && mIn.enteralExecuted) {
-    patch.enteralMenu = String(mIn.enteralNote ?? '').trim() || '経管実施';
+    patch.enteralStatus = 'done';
+    patch.enteralMenuPlan = String(mIn.enteralNote ?? '').trim() || '経管実施';
+  } else if (typeof mIn.enteralExecuted === 'boolean' && !mIn.enteralExecuted) {
+    patch.enteralStatus = 'not_done';
   }
   return patch;
 }
