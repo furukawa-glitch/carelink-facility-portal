@@ -3,7 +3,7 @@
  * VITE_CARE_CLOUD_SYNC=1 のときのみ動作。未設定時は no-op（現状運用と同じ）。
  */
 
-const SYNC_DEBOUNCE_MS = 8_000;
+const SYNC_DEBOUNCE_MS = 3_000;
 const MAX_BATCH = 200;
 const DEFAULT_PULL_LIMIT = 1500;
 
@@ -13,7 +13,11 @@ let flushTimer = 0;
 let flushing = false;
 
 function isCloudSyncEnabled() {
-  return String(import.meta.env.VITE_CARE_CLOUD_SYNC ?? '').trim() === '1';
+  const flag = String(import.meta.env.VITE_CARE_CLOUD_SYNC ?? '').trim();
+  if (flag === '0') return false;
+  if (flag === '1') return true;
+  // 本番でシークレットと組織IDが揃っていれば自動ON（VITE_CARE_CLOUD_SYNC=1 がなくても同期）
+  return Boolean(syncSecret()) && Boolean(organizationId());
 }
 
 function syncSecret() {
@@ -104,6 +108,36 @@ export function isCareCloudSyncConfigured() {
   return isCloudSyncEnabled() && Boolean(syncSecret()) && Boolean(organizationId());
 }
 
+/** @returns {{ enabled: boolean; configured: boolean; label: string; hint: string }} */
+export function getCareCloudSyncStatus() {
+  const enabled = isCloudSyncEnabled();
+  const hasSecret = Boolean(syncSecret());
+  const hasOrg = Boolean(organizationId());
+  const configured = enabled && hasSecret && hasOrg;
+  if (!hasSecret || !hasOrg) {
+    return {
+      enabled: false,
+      configured: false,
+      label: 'クラウド同期オフ',
+      hint: '記録はこの端末のブラウザだけに保存されます。全PCで共有するには Vercel に CARE_SYNC_SECRET・組織ID・Supabase キーを設定してください。',
+    };
+  }
+  if (!enabled) {
+    return {
+      enabled: false,
+      configured: false,
+      label: 'クラウド同期オフ',
+      hint: '同期は無効化されています（VITE_CARE_CLOUD_SYNC=0）。記録はこの端末のみです。',
+    };
+  }
+  return {
+    enabled: true,
+    configured: true,
+    label: 'クラウド同期 ON（自動）',
+    hint: '保存すると自動でクラウドへ送り、他のPCも起動時・約1分ごとに自動で最新を取得します。手動操作は不要です。',
+  };
+}
+
 /**
  * クラウドからイベントを取得してローカルにマージ。
  * @param {{ sinceTs?: string; limit?: number }} [opts]
@@ -117,6 +151,34 @@ export async function pullCareEventsCloudSync(opts = {}) {
   const events = Array.isArray(result?.events) ? result.events : [];
   if (!events.length) return { ok: true, pulled: 0, merged: 0 };
   const report = await import('../services/ReportService.js');
-  const merged = Number(report.mergeCareEventsFromCloud(events) ?? 0);
-  return { ok: true, pulled: events.length, merged };
+  const merged = report.mergeCareEventsFromCloud(events);
+  return { ok: true, pulled: events.length, merged: Number(merged ?? 0) };
+}
+
+/** この端末の全記録をクラウドへ一括送信（初回移行・復旧用） */
+export async function pushAllLocalCareEventsCloud() {
+  if (!isCloudSyncEnabled()) return { ok: true, skipped: true, upserted: 0 };
+  const report = await import('../services/ReportService.js');
+  const all = report.getAllCareEvents();
+  if (!all.length) return { ok: true, upserted: 0 };
+  let upserted = 0;
+  for (let i = 0; i < all.length; i += MAX_BATCH) {
+    const batch = all.slice(i, i + MAX_BATCH);
+    const result = await postCareSync({ action: 'upsert_events', events: batch });
+    upserted += Number(result?.upserted ?? batch.length);
+  }
+  return { ok: true, upserted };
+}
+
+/**
+ * pull → ローカル反映 → UI 更新用
+ * @param {{ reload?: boolean }} [opts]
+ */
+export async function pullAndApplyCareEventsCloud(opts = {}) {
+  const result = await pullCareEventsCloudSync();
+  if (opts.reload !== false && (Number(result?.merged ?? 0) > 0 || Number(result?.pulled ?? 0) > 0)) {
+    const report = await import('../services/ReportService.js');
+    report.reloadCareEventsFromStorage();
+  }
+  return result;
 }

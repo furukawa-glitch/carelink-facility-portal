@@ -27,6 +27,7 @@ import {
   Stethoscope,
   Table2,
   Upload,
+  Utensils,
   Wind,
   X,
 } from 'lucide-react';
@@ -55,12 +56,20 @@ import {
   hasGoogleCalendarForFacility,
 } from '../config/facilityIntegrations.js';
 import {
-  composeEnsureLine,
   composeMealAmountForLog,
+  composeOralSupplementLines,
   getQuickCareMealEventKind,
   parseHourlyStoolCellValue,
 } from '../lib/careQuickCareFields.js';
-import { buildHourlyCareFromEvents, tokyoDateHourToIso, tokyoHourFromTs } from '../lib/hourlyCareGrid.js';
+import { CARE_EVENTS_SYNC_EVENT } from '../lib/careEventsRealtimeSync.js';
+import { flushCareEventsCloudSync } from '../lib/careEventsSupabaseSync.js';
+import {
+  buildHourlyCareFromEvents,
+  buildHourlyUrineCellsFromEvents,
+  computeDailyUrineTotalMlFromEvents,
+  tokyoDateHourToIso,
+  tokyoHourFromTs,
+} from '../lib/hourlyCareGrid.js';
 import { bulkCareEventTs, parseMealAmountFieldsFromLog } from '../lib/bulkCareEventTs.js';
 import { defaultEnteralMenuFromResident } from '../lib/residentDetailSeed.js';
 import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
@@ -74,15 +83,30 @@ import {
   matchInjuryDiseaseMapToResidents,
 } from '../lib/injuryDiseaseCsv.js';
 import { CareAutoBackupPanel } from '../components/CareAutoBackupPanel.jsx';
+import { CareCloudSyncPanel } from '../components/CareCloudSyncPanel.jsx';
+import { ResidentDailyScheduleModal } from '../components/ResidentDailyScheduleModal.jsx';
+import { residentScheduleSheetForFacility } from '../config/residentScheduleSheets.js';
+import {
+  applyImportedResidentSchedules,
+  formatResidentPlansShort,
+  importResidentScheduleFromSheet,
+} from '../lib/residentDailySchedule.js';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
-import { parsePharmacyMedicationPdf } from '../lib/pharmacyMedicationPdf.js';
+import { EnteralNutritionMenuModal } from '../components/EnteralNutritionMenuModal.jsx';
+import { mergeMedicineLists } from '../lib/pharmacyMedicineFormat.js';
+import { parsePharmacyMedicationPdfImport } from '../lib/pharmacyMedicationPdf.js';
 import {
   buildPersonNameMatchCandidates,
   findResidentByPersonNameCandidates,
+  findResidentForHomeVisitCalendarName,
 } from '../lib/residentNameMatch.js';
 import { STAY_STATUS_CHANGED_EVENT } from '../lib/residentStayStatus.js';
 import { ResidentStayStatusBadges } from '../components/ResidentStayStatusBadges.jsx';
 import { ResidentMonitorBoard } from '../components/ResidentMonitorBoard.jsx';
+import { formatCardMonitorAlertLine } from '../lib/residentMonitorAlertShort.js';
+
+/** 入居者一覧の表示モード（localStorage） */
+const RESIDENT_VIEW_LS = 'carelink_record_resident_view_v3';
 import { fetchHomeVisitCalendarFromPdf, readPdfFileAsDataUrl } from '../lib/visitCalendarPdf.js';
 import { normalizePatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { AccidentMonthlyAnalysisModal } from '../components/AccidentMonthlyAnalysisModal.jsx';
@@ -104,6 +128,50 @@ function residentNameWithoutSama(nameRaw) {
     .trim();
 }
 
+/** カード見出し用（大きい氏名1行のみ） */
+function residentCardDisplayName(nameRaw) {
+  let n = residentNameWithoutSama(nameRaw);
+  const compact = n.replace(/\s+/g, '');
+  if (compact.length >= 4 && compact.length % 2 === 0) {
+    const half = compact.length / 2;
+    if (compact.slice(0, half) === compact.slice(half)) {
+      n = n.slice(0, Math.ceil(n.length / 2)).trim();
+    }
+  }
+  return n ? `${n} 様` : '—';
+}
+
+function normalizePersonNameKey(nameRaw) {
+  return String(nameRaw ?? '')
+    .replace(/様\s*$/u, '')
+    .replace(/[\s\u3000]+/gu, '')
+    .trim();
+}
+
+/** 在宅医列に氏名が入っている名簿の誤マッピングをカード装飾に使わない */
+function homeDoctorLooksLikeResidentName(homeDoctorRaw, residentNameRaw) {
+  const a = normalizePersonNameKey(homeDoctorRaw);
+  const b = normalizePersonNameKey(residentNameRaw);
+  return Boolean(a && b && a === b);
+}
+
+/** 往診予定の紫【往診】→ FAX用往診ノート */
+function HomeVisitFaxBadge({ onClick, className = '' }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`rounded bg-violet-700 px-1.5 py-0.5 text-[9px] font-black text-white hover:bg-violet-900 focus:outline-none focus:ring-2 focus:ring-violet-400 ${className}`}
+      title="FAX用 往診ノートを作成"
+    >
+      往診
+    </button>
+  );
+}
+
 /** 一覧入力・保存後にクリアするケア項目（バイタル列は残す） */
 const BULK_CARE_RESET = Object.freeze({
   patrol: false,
@@ -114,17 +182,100 @@ const BULK_CARE_RESET = Object.freeze({
   stoolVolume: '',
   stoolCharacter: '',
   mealSlot: '',
+  mealStapleForm: '',
   mealStaple: '',
+  mealSideForm: '',
   mealSide: '',
+  mealAmount: '',
   waterMl: '',
   medicationTaken: '',
   toiletGuidance: false,
   ensurePortion: '',
+  /** ソリタ（経口補助栄養）の摂取割合 — 食事メモに「ソリタ1/2」等で残す */
+  solitaPortion: '',
   /** 経管栄養の内容（製剤・量・本剤/水分など）— 保存で enteral ログ */
   enteralMenu: '',
   /** 間食・補助食など自由記述（パン、バナナ等）— 食事メモに連結 */
   mealExtras: '',
 });
+
+const BULK_MEAL_FIELD_KEYS = [
+  'meal',
+  'mealSlot',
+  'mealStapleForm',
+  'mealStaple',
+  'mealSideForm',
+  'mealSide',
+  'mealAmount',
+  'waterMl',
+  'medicationTaken',
+  'ensurePortion',
+  'solitaPortion',
+  'enteralMenu',
+  'mealExtras',
+];
+
+/** 食事入力欄を空に（区分だけ指定可） */
+function bulkMealFieldsEmpty(mealSlot = '') {
+  return {
+    meal: false,
+    mealSlot: String(mealSlot ?? ''),
+    mealStapleForm: '',
+    mealStaple: '',
+    mealSideForm: '',
+    mealSide: '',
+    mealAmount: '',
+    waterMl: '',
+    medicationTaken: '',
+    ensurePortion: '',
+    solitaPortion: '',
+    enteralMenu: '',
+    mealExtras: '',
+  };
+}
+
+/** 保存ログから巡視・排泄だけ復元（食事入力欄には載せない） */
+function bulkNonMealCareFromSeed(seed) {
+  const s = seed && typeof seed === 'object' ? seed : {};
+  return {
+    patrol: Boolean(s.patrol),
+    patrolAt: String(s.patrolAt ?? ''),
+    excretion: Boolean(s.excretion),
+    urineVolume: String(s.urineVolume ?? ''),
+    stoolVolume: String(s.stoolVolume ?? ''),
+    stoolCharacter: String(s.stoolCharacter ?? ''),
+    toiletGuidance: Boolean(s.toiletGuidance),
+  };
+}
+
+/** 今日の未保存下書き（localStorage）から食事欄だけ復元 */
+function pickMealDraftFromStored(stored, mealSlot) {
+  const s = stored && typeof stored === 'object' ? stored : {};
+  const out = bulkMealFieldsEmpty(String(s.mealSlot ?? mealSlot ?? ''));
+  for (const k of BULK_MEAL_FIELD_KEYS) {
+    if (k === 'mealSlot') continue;
+    if (s[k] === undefined) continue;
+    out[k] = s[k];
+  }
+  return out;
+}
+
+/** 食事保存後: 入力欄は空、バイタル・24h・巡視排泄は維持 */
+function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident) {
+  const care = bulkCareSeedForResidentDay(residentId, ymd);
+  const base = {
+    ...(prevRow && typeof prevRow === 'object' ? prevRow : {}),
+    ...vitalSeedForBulkTableRow(residentId, ymd),
+    ...hourlyDraftSeedForResidentDay(residentId, ymd),
+    ...bulkMealFieldsEmpty(mealSlot),
+    ...bulkNonMealCareFromSeed(care),
+    vitalHandwritingDataUrl: '',
+  };
+  const def = defaultEnteralMenuFromResident(resident);
+  if (def && !String(base.enteralMenu ?? '').trim()) base.enteralMenu = def;
+  return base;
+}
+
 const BULK_DRAFT_LS_KEY = 'carelink_os_bulk_table_draft_v1';
 const AUTO_URINE_DAILY_TOTAL_LS_KEY = 'carelink_os_auto_urine_daily_total_v1';
 
@@ -163,15 +314,6 @@ function writeAutoUrineDailyTotalState(state) {
   } catch {
     // ignore
   }
-}
-
-function measuredUrineMlFromEvent(ev) {
-  const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
-  const measured = String(meta.measuredUrineMl ?? meta.catheterMl ?? '').trim();
-  if (/^\d+$/u.test(measured)) return parseInt(measured, 10);
-  const uv = String(meta.urineVolume ?? '').trim();
-  if (/^\d+$/u.test(uv)) return parseInt(uv, 10);
-  return 0;
 }
 
 function makeBulkDraftScopeKey(facilityLinkKey, selectedSheetTitle, ymd) {
@@ -464,10 +606,102 @@ function buildVitalsCsvDateFieldIndexes(headers) {
       ) || /^バイタル.*日/u.test(c)
     );
   });
+  /** @type {number[]} */
+  const timeCols = [];
+  for (let i = 0; i < h.length; i++) {
+    const c = h[i];
+    if (!c) continue;
+    if (/排便/u.test(c)) continue;
+    if (/終了/u.test(c) && !/開始/u.test(c)) continue;
+    if (
+      /^訪問開始/u.test(c) ||
+      /^提供開始/u.test(c) ||
+      /^サービス開始/u.test(c) ||
+      /^実施開始/u.test(c) ||
+      /^開始時刻$|^開始時間$|^開始時分$|^開始$/u.test(c) ||
+      /^訪問開始$|^開始時間$|^提供開始$|^サービス開始$/u.test(c) ||
+      /測定.*(時刻|時間)/u.test(c) ||
+      /^記録時刻$|^時刻$/u.test(c)
+    ) {
+      if (!timeCols.includes(i)) timeCols.push(i);
+    }
+  }
   const visitStart = ix((c) => /^訪問開始$|^開始時間$|^提供開始$|^サービス開始$/u.test(c));
   const measureTime = ix((c) => /測定.*(時刻|時間)|記録時刻|^時刻$/u.test(c));
-  const timeCol = measureTime >= 0 ? measureTime : visitStart >= 0 ? visitStart : -1;
-  return { dateCol, timeCol, datetimeCol };
+  const timeCol = timeCols[0] ?? (measureTime >= 0 ? measureTime : visitStart >= 0 ? visitStart : -1);
+  return { dateCol, timeCol, timeCols, datetimeCol };
+}
+
+/**
+ * @returns {{ iso: string | null; explicitTime: boolean }}
+ */
+function parseVitalsCsvRowTimestampDetail(dateCell, timeCell, defaultYm, datetimeCell = '') {
+  const datetimeStr = String(datetimeCell ?? '').trim();
+  if (datetimeStr) {
+    const fromCombined = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(datetimeStr, defaultYm));
+    if (fromCombined) {
+      return { iso: fromCombined, explicitTime: /\d{1,2}:\d{2}/.test(datetimeStr) };
+    }
+  }
+  const dateStr = String(dateCell ?? '').trim();
+  const timeStr = String(timeCell ?? '').trim();
+  if (dateStr && /\d{1,2}:\d{2}/.test(dateStr)) {
+    const iso = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(dateStr, defaultYm));
+    if (iso) return { iso, explicitTime: true };
+  }
+  const ymd = parseCsvDateCellToYmd(dateStr, defaultYm);
+  if (ymd) {
+    if (timeStr) {
+      const tm = /^(\d{1,2}):(\d{2})/.exec(timeStr);
+      if (tm) {
+        const [y, mo, d] = ymd.split('-').map(Number);
+        return {
+          iso: finalizeVitalsCsvTimestamp(
+            new Date(y, mo - 1, d, Number(tm[1]), Number(tm[2])).toISOString()
+          ),
+          explicitTime: true,
+        };
+      }
+      const tmJa = /^(\d{1,2})時(\d{1,2})分?/.exec(timeStr);
+      if (tmJa) {
+        const [y, mo, d] = ymd.split('-').map(Number);
+        return {
+          iso: finalizeVitalsCsvTimestamp(
+            new Date(y, mo - 1, d, Number(tmJa[1]), Number(tmJa[2])).toISOString()
+          ),
+          explicitTime: true,
+        };
+      }
+      const serial = Number(timeStr);
+      if (Number.isFinite(serial) && serial >= 0 && serial < 1) {
+        const mins = Math.round(serial * 24 * 60);
+        const [y, mo, d] = ymd.split('-').map(Number);
+        return {
+          iso: finalizeVitalsCsvTimestamp(
+            new Date(y, mo - 1, d, Math.floor(mins / 60), mins % 60).toISOString()
+          ),
+          explicitTime: true,
+        };
+      }
+      const fromTime = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(timeStr, defaultYm));
+      if (fromTime) return { iso: fromTime, explicitTime: /\d{1,2}:\d{2}/.test(timeStr) };
+    }
+    const [y, mo, d] = ymd.split('-').map(Number);
+    return {
+      iso: finalizeVitalsCsvTimestamp(new Date(y, mo - 1, d, 12, 0, 0).toISOString()),
+      explicitTime: false,
+    };
+  }
+  const fromTimeOnly =
+    finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(timeStr, defaultYm)) ||
+    finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(dateStr, defaultYm));
+  if (fromTimeOnly) {
+    return {
+      iso: fromTimeOnly,
+      explicitTime: /\d{1,2}:\d{2}/.test(`${dateStr} ${timeStr}`),
+    };
+  }
+  return { iso: null, explicitTime: false };
 }
 
 /**
@@ -478,52 +712,35 @@ function buildVitalsCsvDateFieldIndexes(headers) {
  * @param {string} [datetimeCell]
  */
 function parseVitalsCsvRowTimestamp(dateCell, timeCell, defaultYm, datetimeCell = '') {
-  const datetimeStr = String(datetimeCell ?? '').trim();
-  if (datetimeStr) {
-    const fromCombined = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(datetimeStr, defaultYm));
-    if (fromCombined) return fromCombined;
+  return parseVitalsCsvRowTimestampDetail(dateCell, timeCell, defaultYm, datetimeCell).iso;
+}
+
+/**
+ * 1行から訪問看護記録の測定日時を解決（開始時刻列を複数試行）
+ * @param {string[]} row
+ * @param {{ dateCol: number; timeCol: number; timeCols?: number[]; datetimeCol: number }} idx
+ * @param {(row: string[], i: number) => string} getCell
+ * @param {string} defaultYm
+ */
+function resolveVitalsCsvTimestampFromRow(row, idx, getCell, defaultYm) {
+  /** @type {{ iso: string; explicitTime: boolean } | null} */
+  let dateOnlyFallback = null;
+  if (idx.datetimeCol >= 0) {
+    const r = parseVitalsCsvRowTimestampDetail('', '', defaultYm, getCell(row, idx.datetimeCol));
+    if (r.iso && r.explicitTime) return r;
+    if (r.iso && !r.explicitTime) dateOnlyFallback = r;
   }
-  const dateStr = String(dateCell ?? '').trim();
-  const timeStr = String(timeCell ?? '').trim();
-  if (dateStr && /\d{1,2}:\d{2}/.test(dateStr)) {
-    const iso = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(dateStr, defaultYm));
-    if (iso) return iso;
+  const dateCell = idx.dateCol >= 0 ? getCell(row, idx.dateCol) : '';
+  const timeColList = [
+    ...(Array.isArray(idx.timeCols) ? idx.timeCols : []),
+    idx.timeCol,
+  ].filter((c, i, arr) => typeof c === 'number' && c >= 0 && arr.indexOf(c) === i);
+  for (const tc of timeColList) {
+    const r = parseVitalsCsvRowTimestampDetail(dateCell, getCell(row, tc), defaultYm, '');
+    if (r.iso && r.explicitTime) return r;
   }
-  const ymd = parseCsvDateCellToYmd(dateStr, defaultYm);
-  if (ymd) {
-    if (timeStr) {
-      const tm = /^(\d{1,2}):(\d{2})/.exec(timeStr);
-      if (tm) {
-        const [y, mo, d] = ymd.split('-').map(Number);
-        return finalizeVitalsCsvTimestamp(
-          new Date(y, mo - 1, d, Number(tm[1]), Number(tm[2])).toISOString()
-        );
-      }
-      const tmJa = /^(\d{1,2})時(\d{1,2})分?/.exec(timeStr);
-      if (tmJa) {
-        const [y, mo, d] = ymd.split('-').map(Number);
-        return finalizeVitalsCsvTimestamp(
-          new Date(y, mo - 1, d, Number(tmJa[1]), Number(tmJa[2])).toISOString()
-        );
-      }
-      const serial = Number(timeStr);
-      if (Number.isFinite(serial) && serial >= 0 && serial < 1) {
-        const mins = Math.round(serial * 24 * 60);
-        const [y, mo, d] = ymd.split('-').map(Number);
-        return finalizeVitalsCsvTimestamp(
-          new Date(y, mo - 1, d, Math.floor(mins / 60), mins % 60).toISOString()
-        );
-      }
-      const fromTime = finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(timeStr, defaultYm));
-      if (fromTime) return fromTime;
-    }
-    const [y, mo, d] = ymd.split('-').map(Number);
-    return finalizeVitalsCsvTimestamp(new Date(y, mo - 1, d, 12, 0, 0).toISOString());
-  }
-  return (
-    finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(timeStr, defaultYm)) ||
-    finalizeVitalsCsvTimestamp(parseCsvDateTimeCellToIso(dateStr, defaultYm))
-  );
+  if (dateOnlyFallback) return dateOnlyFallback;
+  return parseVitalsCsvRowTimestampDetail(dateCell, '', defaultYm, '');
 }
 
 /**
@@ -833,8 +1050,16 @@ function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
       if (meta.mealAmount != null && String(meta.mealAmount).trim() !== '') {
         seed.mealAmount = String(meta.mealAmount);
         const parsed = parseMealAmountFieldsFromLog(meta.mealAmount);
+        if (parsed.mealStapleForm) seed.mealStapleForm = parsed.mealStapleForm;
         if (parsed.mealStaple) seed.mealStaple = parsed.mealStaple;
+        if (parsed.mealSideForm) seed.mealSideForm = parsed.mealSideForm;
         if (parsed.mealSide) seed.mealSide = parsed.mealSide;
+      }
+      if (meta.mealStapleForm != null && String(meta.mealStapleForm).trim() !== '') {
+        seed.mealStapleForm = String(meta.mealStapleForm);
+      }
+      if (meta.mealSideForm != null && String(meta.mealSideForm).trim() !== '') {
+        seed.mealSideForm = String(meta.mealSideForm);
       }
       if (meta.waterMl != null && String(meta.waterMl).trim() !== '') seed.waterMl = String(meta.waterMl);
       if (meta.medicationTaken === 'yes' || meta.medicationTaken === 'no') seed.medicationTaken = meta.medicationTaken;
@@ -859,6 +1084,9 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
   };
   if (!rid) return out;
   const events = Report.getCareEventsForResidentDay(rid, ymd);
+  const urineCells = buildHourlyUrineCellsFromEvents(events, ymd);
+  out.hourUrine = urineCells.codes;
+  out.hourUrineMl = urineCells.mls;
   for (const ev of events) {
     const h = tokyoHourFromTs(ev?.ts);
     if (!Number.isFinite(h) || h < 0 || h > 23) continue;
@@ -871,17 +1099,8 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
     }
     if (typ !== 'hourly_excretion' && typ !== 'excretion') continue;
     const hourlyKind = String(meta.hourlyKind ?? '').trim();
-    const u = String(meta.urineVolume ?? '').trim();
     const sv = String(meta.stoolVolume ?? '').trim();
     const sc = String(meta.stoolCharacter ?? '').trim();
-    if (hourlyKind === 'urine' || /排尿（\d{2}時）/u.test(note)) {
-      out.hourUrine[h] = u || 'plain';
-      const cm = String(meta.measuredUrineMl ?? meta.catheterMl ?? '').trim();
-      if (cm) out.hourUrineMl[h] = cm;
-      else if ((u === 'カテ' || u === 'Ba' || u === '尿測') && /^\d+$/.test(String(meta.urineVolume ?? '').trim())) {
-        out.hourUrineMl[h] = String(meta.urineVolume).trim();
-      }
-    }
     if (hourlyKind === 'stool' || /排便（\d{2}時）/u.test(note)) {
       out.hourStool[h] = sv || sc ? `${sv || ''}\t${sc || ''}` : 'plain';
     }
@@ -988,6 +1207,10 @@ export function RecordPage({
   const [nearMissMonthlyOpen, setNearMissMonthlyOpen] = useState(false);
   const [nearMissAwarenessAdminOpen, setNearMissAwarenessAdminOpen] = useState(false);
   const [homeVisitNoteOpen, setHomeVisitNoteOpen] = useState(false);
+  const [enteralMenuOpen, setEnteralMenuOpen] = useState(false);
+  const [homeVisitNoteLaunch, setHomeVisitNoteLaunch] = useState(
+    /** @type {null | { visitDateYmd: string; residentIds: string[]; doctor?: string; visitType?: string }} */ (null)
+  );
   const [emergencyDraft, setEmergencyDraft] = useState(emptyEmergencyDraft);
   const [dictatingField, setDictatingField] = useState('');
   const dictationRef = useRef(/** @type {SpeechRecognition | null} */ (null));
@@ -998,17 +1221,21 @@ export function RecordPage({
   /** 'cards' | 'table' | 'monitor' — カード / 一覧表 / アラーム一覧（1画面） */
   const [residentInputView, setResidentInputView] = useState(() => {
     try {
-      const v = localStorage.getItem('carelink_record_resident_view_v1');
+      const v = localStorage.getItem(RESIDENT_VIEW_LS);
       if (v === 'table' || v === 'monitor' || v === 'cards') return v;
+      const v2 = localStorage.getItem('carelink_record_resident_view_v2');
+      if (v2 === 'table') return 'table';
+      if (v2 === 'monitor' || v2 === 'cards') return 'monitor';
     } catch {
       /* noop */
     }
-    return 'cards';
+    return 'monitor';
   });
   const setResidentInputViewPersist = useCallback((mode) => {
     setResidentInputView(mode);
     try {
-      localStorage.setItem('carelink_record_resident_view_v1', mode);
+      localStorage.setItem(RESIDENT_VIEW_LS, mode);
+      localStorage.removeItem('carelink_record_resident_view_v2');
     } catch {
       /* noop */
     }
@@ -1024,6 +1251,13 @@ export function RecordPage({
   const [bulkGlobalMealSlot, setBulkGlobalMealSlot] = useState('昼');
   /** 一覧表の24時間グリッド・時間別ログの対象日（ローカル暦） */
   const [bulkSheetDate, setBulkSheetDate] = useState(() => currentYmd());
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const today = currentYmd();
+      setBulkSheetDate((prev) => (String(prev ?? '').slice(0, 10) === today ? prev : today));
+    }, 30000);
+    return () => window.clearInterval(id);
+  }, []);
   const [bulkDraft, setBulkDraft] = useState(
     /** @type {Record<string, { temp: string; bpU: string; bpL: string; pulse: string; spo2: string; patrol: boolean; meal: boolean; excretion: boolean }>} */ ({})
   );
@@ -1063,6 +1297,15 @@ export function RecordPage({
   const facilityDayServiceMode = useMemo(
     () => dayServiceModeForFacilityLinkKey(selectedFacilityLinkKey),
     [selectedFacilityLinkKey]
+  );
+  const residentScheduleSheetCfg = useMemo(
+    () => residentScheduleSheetForFacility(selectedFacilityLinkKey),
+    [selectedFacilityLinkKey]
+  );
+  const [scheduleImportBusy, setScheduleImportBusy] = useState(false);
+  const [scheduleImportMsg, setScheduleImportMsg] = useState('');
+  const [scheduleModalResident, setScheduleModalResident] = useState(
+    /** @type {Record<string, unknown> | null} */ (null)
   );
 
   useEffect(() => {
@@ -1236,7 +1479,13 @@ export function RecordPage({
           const slot = String(meta.mealSlot ?? '').trim();
           if (slot !== '朝' && slot !== '昼' && slot !== '夜') continue;
           const amount = String(meta.mealAmount ?? '').trim();
-          slots[slot] = amount || '食事記録';
+          const wm = String(meta.waterMl ?? '').trim();
+          const med = meta.medicationTaken === 'yes';
+          const note = String(meta.note ?? '').trim();
+          if (!amount && !wm && !med) continue;
+          if (!amount && note === '食事確認（クイック）') continue;
+          const display = amount || [wm && `水分${wm}ml`, med && '内服済'].filter(Boolean).join(' ');
+          if (display) slots[slot] = display;
           continue;
         }
         if (typ === 'enteral') {
@@ -1245,6 +1494,21 @@ export function RecordPage({
         }
       }
       out[id] = slots;
+    }
+    return out;
+  }, [displayResidents, bulkSheetDate, tick]);
+
+  /** 一覧表: 24時間尿列の保存済み表示・日計 ml */
+  const bulkUrineDetailByResident = useMemo(() => {
+    const ymd = bulkTableYmd(bulkSheetDate);
+    const out = {};
+    for (const r of displayResidents) {
+      const id = String(r.id);
+      const events = Report.getCareEventsForResidentDay(id, ymd);
+      out[id] = {
+        hourly: buildHourlyUrineCellsFromEvents(events, ymd),
+        totalMl: computeDailyUrineTotalMlFromEvents(events, ymd),
+      };
     }
     return out;
   }, [displayResidents, bulkSheetDate, tick]);
@@ -1262,28 +1526,39 @@ export function RecordPage({
     const mealSlot = bulkGlobalMealSlotHydrateRef.current;
     const storedAll = readBulkDraftStore();
     const storedRows = storedAll[bulkDraftScopeKey] && typeof storedAll[bulkDraftScopeKey] === 'object' ? storedAll[bulkDraftScopeKey] : {};
-    setBulkDraft((prev) => {
-      const next = { ...prev };
-      const isPastDay = ymd < currentYmd();
+    const isToday = ymd === currentYmd();
+    const isPastDay = ymd < currentYmd();
+    setBulkDraft(() => {
+      const next = {};
       for (const r of list) {
         const id = String(r.id);
         const stored = !isPastDay && storedRows[id] && typeof storedRows[id] === 'object' ? storedRows[id] : {};
-        const saved = {
-          ...hourlyDraftSeedForResidentDay(id, ymd),
-          ...bulkCareSeedForResidentDay(id, ymd),
-          ...vitalSeedForBulkTableRow(id, ymd),
-        };
-        next[id] = {
-          ...(prev[id] || {}),
-          ...stored,
-          mealSlot: stored.mealSlot || mealSlot,
-          ...saved,
-          vitalHandwritingDataUrl: '',
-        };
-      }
-      const keep = new Set(list.map((x) => String(x.id)));
-      for (const k of Object.keys(next)) {
-        if (!keep.has(k)) delete next[k];
+        const vital = vitalSeedForBulkTableRow(id, ymd);
+        const hourly = hourlyDraftSeedForResidentDay(id, ymd);
+        const savedCare = bulkCareSeedForResidentDay(id, ymd);
+        let row;
+        if (isToday) {
+          row = {
+            ...vital,
+            ...hourly,
+            ...bulkNonMealCareFromSeed(savedCare),
+            ...pickMealDraftFromStored(stored, mealSlot),
+          };
+          if (!String(row.mealSlot ?? '').trim()) row = { ...row, mealSlot };
+          row.vitalHandwritingDataUrl = '';
+          const def = defaultEnteralMenuFromResident(r);
+          if (def && !String(row.enteralMenu ?? '').trim()) row.enteralMenu = def;
+        } else {
+          row = {
+            ...vital,
+            ...hourly,
+            ...savedCare,
+            mealSlot: stored.mealSlot || savedCare.mealSlot || mealSlot,
+            ...stored,
+            vitalHandwritingDataUrl: '',
+          };
+        }
+        next[id] = row;
       }
       return next;
     });
@@ -1709,6 +1984,49 @@ export function RecordPage({
     onResidentsSync?.(filteredResidents);
   }, [filteredResidents, onResidentsSync]);
 
+  /** 名簿読込後: 往診カレンダーの未一致氏名を再突合（表記ゆれ修正の反映） */
+  useEffect(() => {
+    const k = String(selectedFacilityLinkKey ?? '').trim();
+    if (!k || allResidents.length === 0) return;
+    const rec = Report.getHomeVisitCalendar(k);
+    if (!rec?.days?.some((d) => (d.unmatchedNames ?? []).length > 0)) return;
+
+    let changed = false;
+    const days = rec.days.map((day) => {
+      const entries = [...(day.entries ?? [])];
+      const unmatchedNames = [];
+      for (const rawName of day.unmatchedNames ?? []) {
+        const hit =
+          findResidentForHomeVisitCalendarName(filteredResidents, rawName) ??
+          findResidentForHomeVisitCalendarName(allResidents, rawName);
+        if (hit) {
+          const rid = String(hit.id);
+          if (!entries.some((e) => String(e.residentId) === rid)) {
+            entries.push({
+              residentId: rid,
+              name: residentNameWithoutSama(String(hit.name ?? rawName)),
+              room: String(hit.room ?? '').trim(),
+              rawName: String(rawName),
+            });
+          }
+          changed = true;
+        } else {
+          unmatchedNames.push(String(rawName));
+        }
+      }
+      if (unmatchedNames.length !== (day.unmatchedNames ?? []).length) changed = true;
+      return { ...day, entries, unmatchedNames };
+    });
+    if (!changed) return;
+    Report.saveHomeVisitCalendar(k, {
+      ...rec,
+      days,
+      updatedAt: new Date().toISOString(),
+    });
+    setHomeVisitCalendarRev((n) => n + 1);
+    setPlanRev((n) => n + 1);
+  }, [allResidents, filteredResidents, selectedFacilityLinkKey]);
+
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 15000);
     return () => clearInterval(id);
@@ -1719,6 +2037,33 @@ export function RecordPage({
     window.addEventListener(STAY_STATUS_CHANGED_EVENT, onStay);
     return () => window.removeEventListener(STAY_STATUS_CHANGED_EVENT, onStay);
   }, []);
+
+  const monitorAlarmCounts = useMemo(() => {
+    void tick;
+    void monitorMuteRev;
+    let critical = 0;
+    let warn = 0;
+    for (const res of displayResidents) {
+      const raw = Report.evaluateResidentMonitor(res, { ignoreMute: true });
+      if (raw.level === 'critical') critical += 1;
+      else if (raw.level === 'warn') warn += 1;
+    }
+    return { critical, warn, total: displayResidents.length };
+  }, [displayResidents, tick, monitorMuteRev]);
+
+  /** 20名以上の施設は初回表示をアラーム一覧へ（カードだと緊急が埋もれる） */
+  useEffect(() => {
+    if (displayResidents.length < 20) return;
+    const fac = String(selectedSheetTitle ?? '').trim() || '_';
+    const sk = `carelink_session_auto_monitor_${fac}`;
+    try {
+      if (sessionStorage.getItem(sk)) return;
+      sessionStorage.setItem(sk, '1');
+    } catch {
+      return;
+    }
+    setResidentInputViewPersist('monitor');
+  }, [displayResidents.length, selectedSheetTitle, setResidentInputViewPersist]);
 
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
@@ -1739,12 +2084,7 @@ export function RecordPage({
       const markKey = `${String(selectedSheetTitle ?? '')}::${rid}::${ymd}`;
       if (state[markKey]) continue;
       const events = Report.getCareEventsForResidentDay(rid, ymd);
-      let totalMl = 0;
-      for (const ev of events) {
-        const typ = String(ev?.type ?? '');
-        if (typ !== 'hourly_excretion' && typ !== 'excretion') continue;
-        totalMl += measuredUrineMlFromEvent(ev);
-      }
+      const totalMl = computeDailyUrineTotalMlFromEvents(events, ymd);
       if (totalMl > 0) {
         Report.logCareEvent({
           type: 'excretion',
@@ -1770,32 +2110,9 @@ export function RecordPage({
   }, [clock, displayResidents, selectedSheetTitle]);
 
   useEffect(() => {
-    let alive = true;
-    const pullOnce = async () => {
-      try {
-        const mod = await import('../lib/careEventsSupabaseSync.js');
-        const result = await mod.pullCareEventsCloudSync();
-        if (!alive) return;
-        if (Number(result?.merged ?? 0) > 0) setTick((n) => n + 1);
-      } catch {
-        // クラウド未設定・一時失敗時は黙って継続（ローカル運用を阻害しない）
-      }
-    };
-    void pullOnce();
-    const id = window.setInterval(() => {
-      void pullOnce();
-    }, 90_000);
-    const onFocus = () => {
-      void pullOnce();
-    };
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onFocus);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onFocus);
-    };
+    const onCloudSync = () => setTick((n) => n + 1);
+    window.addEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
+    return () => window.removeEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
   }, []);
 
   const openDaySvcExternalEditor = useCallback((res) => {
@@ -1822,6 +2139,34 @@ export function RecordPage({
     setResidentInputView('table');
   }, []);
 
+  const importResidentScheduleSheet = useCallback(async () => {
+    const lk = selectedFacilityLinkKey;
+    if (!lk || !residentScheduleSheetCfg) return;
+    const apiKey = String(SHEETS_KEY ?? '').trim();
+    if (!apiKey) {
+      alert('VITE_GOOGLE_SHEETS_API_KEY を .env に設定し、開発サーバーを再起動してください。');
+      return;
+    }
+    setScheduleImportBusy(true);
+    setScheduleImportMsg('');
+    try {
+      const result = await importResidentScheduleFromSheet(lk, apiKey, todayStrip);
+      if (!result.ok) {
+        alert(result.error ?? '取り込みに失敗しました');
+        return;
+      }
+      const applied = applyImportedResidentSchedules(displayResidents, result.parsed);
+      setScheduleImportMsg(
+        `${residentScheduleSheetCfg.label}（${result.ymd}）: ${applied.applied}名に反映、名簿未一致 ${applied.unmatched}名`
+      );
+      setTick((n) => n + 1);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'お予定表の取り込みに失敗しました');
+    } finally {
+      setScheduleImportBusy(false);
+    }
+  }, [selectedFacilityLinkKey, residentScheduleSheetCfg, displayResidents, todayStrip]);
+
   const applyCareQuickRecord = useCallback((res, row) => {
     const {
       temp = '',
@@ -1838,13 +2183,16 @@ export function RecordPage({
       stoolVolume = '',
       stoolCharacter = '',
       mealSlot = '',
+      mealStapleForm = '',
       mealStaple = '',
+      mealSideForm = '',
       mealSide = '',
       mealAmount = '',
       waterMl = '',
       medicationTaken = '',
       toiletGuidance = false,
       ensurePortion = '',
+      solitaPortion = '',
       enteralMenu = '',
       mealExtras = '',
       vitalHandwritingDataUrl = '',
@@ -1884,6 +2232,9 @@ export function RecordPage({
           pulse: snap?.pulse,
           spo2: snap?.spo2,
           weight: snap?.weight,
+          visitAt: vts,
+          measuredAt: vts,
+          measurementTimeFromVisitRecord: true,
           ...(String(vitalHandwritingDataUrl ?? '').trim()
             ? { handwrittenMemo: 'あり', handwrittenImage: String(vitalHandwritingDataUrl).trim() }
             : {}),
@@ -1959,10 +2310,13 @@ export function RecordPage({
         mealSlot,
         mealStaple,
         mealSide,
+        mealStapleForm,
+        mealSideForm,
         mealAmount,
         waterMl,
         medicationTaken,
         ensurePortion,
+        solitaPortion,
         mealExtras,
       },
       bulkGlobalMealSlot
@@ -1981,7 +2335,10 @@ export function RecordPage({
       });
     } else if (kind === 'meal') {
       const slot = String(mealSlot ?? '').trim();
-      const composedMeal = [composeMealAmountForLog(mealStaple, mealSide), composeEnsureLine(ensurePortion)]
+      const composedMeal = [
+        composeMealAmountForLog(mealStaple, mealSide, mealStapleForm, mealSideForm),
+        composeOralSupplementLines(ensurePortion, solitaPortion),
+      ]
         .filter(Boolean)
         .join(' ')
         .trim();
@@ -1992,23 +2349,21 @@ export function RecordPage({
       const med = medicationTaken === 'yes' ? 'yes' : '';
       const mts = bulkCareEventTs(ymdLog, 'meal', { mealSlot: slot });
       Report.removeCareEventsByResidentAtMinute(id, mts, ['meal']);
-      if (slot || maForLog || wm || med) {
+      if (maForLog || wm || med || meal) {
         Report.logCareEvent({
           type: 'meal',
           ts: mts,
           residentId: id,
           residentName: name,
           facilitySheetTitle: fac,
-          meta: { mealSlot: slot, mealAmount: maForLog, waterMl: wm, medicationTaken: med },
-        });
-      } else {
-        Report.logCareEvent({
-          type: 'meal',
-          ts: mts,
-          residentId: id,
-          residentName: name,
-          facilitySheetTitle: fac,
-          meta: { note: '食事確認（クイック）' },
+          meta: {
+            mealSlot: slot,
+            mealAmount: maForLog,
+            mealStapleForm: String(mealStapleForm ?? '').trim() || undefined,
+            mealSideForm: String(mealSideForm ?? '').trim() || undefined,
+            waterMl: wm,
+            medicationTaken: med,
+          },
         });
       }
     }
@@ -2057,7 +2412,10 @@ export function RecordPage({
           facilitySheetTitle: fac,
           meta: {
             note: `排尿（${String(h).padStart(2, '0')}時）`,
-            ...(uCode && uCode !== 'plain' ? { urineVolume: needsMeasuredMl && cMl ? cMl : uCode } : {}),
+            ...(uCode && uCode !== 'plain' ? { urineCode: uCode } : {}),
+            ...(uCode && uCode !== 'plain'
+              ? { urineVolume: needsMeasuredMl && cMl ? cMl : uCode }
+              : {}),
             ...(needsMeasuredMl && cMl ? { measuredUrineMl: cMl } : {}),
             hourlyKind: 'urine',
             hourlySheet: true,
@@ -2098,17 +2456,23 @@ export function RecordPage({
   const switchToTableInput = useCallback(() => {
     const init = {};
     const ymd = bulkTableYmd(bulkSheetDate);
+    const isToday = ymd === currentYmd();
     for (const r of displayResidents) {
       const id = String(r.id);
-      const enteralDefault = defaultEnteralMenuFromResident(r);
+      const savedCare = bulkCareSeedForResidentDay(id, ymd);
       init[id] = {
         ...vitalSeedForBulkTableRow(id, ymd),
-        ...bulkCareSeedForResidentDay(id, ymd),
-        mealSlot: bulkGlobalMealSlot,
         ...hourlyDraftSeedForResidentDay(id, ymd),
+        ...(isToday
+          ? {
+              ...bulkNonMealCareFromSeed(savedCare),
+              ...bulkMealFieldsEmpty(bulkGlobalMealSlot),
+            }
+          : { ...savedCare, mealSlot: bulkGlobalMealSlot }),
       };
-      if (!String(init[id].enteralMenu ?? '').trim() && enteralDefault) {
-        init[id].enteralMenu = enteralDefault;
+      if (!String(init[id].enteralMenu ?? '').trim()) {
+        const enteralDefault = defaultEnteralMenuFromResident(r);
+        if (enteralDefault) init[id].enteralMenu = enteralDefault;
       }
     }
     setBulkDraft(init);
@@ -2128,12 +2492,15 @@ export function RecordPage({
               ...cur,
               mealSlot: slot,
               meal: false,
+              mealStapleForm: '',
               mealStaple: '',
+              mealSideForm: '',
               mealSide: '',
               mealAmount: '',
               waterMl: '',
               medicationTaken: '',
               ensurePortion: '',
+              solitaPortion: '',
               enteralMenu: '',
               mealExtras: '',
             };
@@ -2147,17 +2514,21 @@ export function RecordPage({
 
   const patchBulkRow = useCallback((id, patch) => {
     setBulkDraft((prev) => {
+      const ymd = bulkTableYmd(bulkSheetDate);
+      const isToday = ymd === currentYmd();
+      const savedCare = bulkCareSeedForResidentDay(id, ymd);
       const base =
         prev[id] ??
-        (() => {
-          const ymd = bulkTableYmd(bulkSheetDate);
-          return {
-            ...vitalSeedForBulkTableRow(id, ymd),
-            ...bulkCareSeedForResidentDay(id, ymd),
-            mealSlot: bulkGlobalMealSlot,
-            ...hourlyDraftSeedForResidentDay(id, ymd),
-          };
-        })();
+        (() => ({
+          ...vitalSeedForBulkTableRow(id, ymd),
+          ...hourlyDraftSeedForResidentDay(id, ymd),
+          ...(isToday
+            ? {
+                ...bulkNonMealCareFromSeed(savedCare),
+                ...bulkMealFieldsEmpty(bulkGlobalMealSlot),
+              }
+            : { ...savedCare, mealSlot: bulkGlobalMealSlot }),
+        }))();
       return { ...prev, [id]: { ...base, ...patch } };
     });
   }, [bulkGlobalMealSlot, bulkSheetDate]);
@@ -2175,6 +2546,8 @@ export function RecordPage({
       String(row.urineVolume ?? '').trim() !== '' ||
       String(row.stoolVolume ?? '').trim() !== '' ||
       String(row.stoolCharacter ?? '').trim() !== '' ||
+      String(row.mealStapleForm ?? '').trim() !== '' ||
+      String(row.mealSideForm ?? '').trim() !== '' ||
       String(row.mealStaple ?? '').trim() !== '' ||
       String(row.mealSide ?? '').trim() !== '' ||
       String(row.mealAmount ?? '').trim() !== '' ||
@@ -2183,6 +2556,7 @@ export function RecordPage({
       row.medicationTaken === 'no' ||
       row.toiletGuidance ||
       String(row.ensurePortion ?? '').trim() !== '' ||
+      String(row.solitaPortion ?? '').trim() !== '' ||
       (Array.isArray(row.hourPatrol) && row.hourPatrol.some(Boolean)) ||
       (Array.isArray(row.hourUrine) && row.hourUrine.some((v) => String(v ?? '').trim() !== '')) ||
       (Array.isArray(row.hourStool) && row.hourStool.some((v) => String(v ?? '').trim() !== '')) ||
@@ -2214,15 +2588,10 @@ export function RecordPage({
       const ymd = bulkTableYmd(bulkSheetDate);
       setBulkDraft((prev) => ({
         ...prev,
-        [id]: {
-          ...prev[id],
-          ...vitalSeedForBulkTableRow(id, ymd),
-          ...bulkCareSeedForResidentDay(id, ymd),
-          mealSlot: bulkGlobalMealSlot,
-          ...hourlyDraftSeedForResidentDay(id, ymd),
-        },
+        [id]: bulkRowAfterMealSave(prev[id], id, ymd, bulkGlobalMealSlot, res),
       }));
       setTick((n) => n + 1);
+      void flushCareEventsCloudSync();
     },
     [bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate]
   );
@@ -2241,18 +2610,12 @@ export function RecordPage({
       const next = { ...prev };
       for (const res of toSave) {
         const id = String(res.id);
-        if (next[id])
-          next[id] = {
-            ...next[id],
-            ...vitalSeedForBulkTableRow(id, ymd),
-            ...bulkCareSeedForResidentDay(id, ymd),
-            mealSlot: bulkGlobalMealSlot,
-            ...hourlyDraftSeedForResidentDay(id, ymd),
-          };
+        if (next[id]) next[id] = bulkRowAfterMealSave(next[id], id, ymd, bulkGlobalMealSlot, res);
       }
       return next;
     });
     setTick((t) => t + 1);
+    void flushCareEventsCloudSync();
   }, [displayResidents, bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate]);
 
   /** バイタル列のみを全員一括保存（巡視・食事などは触らない） */
@@ -2389,6 +2752,7 @@ export function RecordPage({
             cur = { ...cur, hourStool: normalizeHourlyText24(cur.hourStool) };
           }
           if (cur.ensurePortion === undefined) cur = { ...cur, ensurePortion: '' };
+          if (cur.solitaPortion === undefined) cur = { ...cur, solitaPortion: '' };
           if (cur.enteralMenu === undefined) cur = { ...cur, enteralMenu: '' };
           if (!String(cur.enteralMenu ?? '').trim()) {
             const def = defaultEnteralMenuFromResident(r);
@@ -2649,6 +3013,7 @@ export function RecordPage({
           kana: headers.findIndex((h) => /利用者カナ|フリガナ|ふりがな|カナ/u.test(String(h ?? ''))),
           dateCol: dateIdx.dateCol,
           timeCol: dateIdx.timeCol,
+          timeCols: dateIdx.timeCols,
           datetimeCol: dateIdx.datetimeCol,
           temp: headers.findIndex((h) => {
             const hn = String(h);
@@ -2699,23 +3064,26 @@ export function RecordPage({
           if (idx.weight >= 0) patch.weight = getCell(row, idx.weight);
           if (idx.urine >= 0) patch.urineNote = getCell(row, idx.urine);
           if (Object.keys(patch).length === 0) continue;
-          const ts = parseVitalsCsvRowTimestamp(
-            getCell(row, idx.dateCol),
-            getCell(row, idx.timeCol),
-            defaultYm,
-            idx.datetimeCol >= 0 ? getCell(row, idx.datetimeCol) : ''
-          );
+          const { iso: ts, explicitTime } = resolveVitalsCsvTimestampFromRow(row, idx, getCell, defaultYm);
           if (!ts) {
             skippedNoDate += 1;
             continue;
           }
           const rid = String(hit.id);
           Report.removeCareEventsByResidentAtMinute(rid, ts, ['vital_snapshot']);
+          const vitalMeta = { ...patch };
+          if (explicitTime) {
+            vitalMeta.visitAt = ts;
+            vitalMeta.measuredAt = ts;
+            vitalMeta.measurementTimeFromVisitRecord = true;
+          } else {
+            vitalMeta.measurementTimeFromVisitRecord = false;
+          }
           Report.logVitalSnapshot(
             rid,
             String(hit.name ?? ''),
             String(hit.sourceSheetTitle ?? hit.facility ?? selectedSheetTitle),
-            { ...patch, visitAt: ts, measuredAt: ts },
+            vitalMeta,
             ts
           );
           affectedIds.add(rid);
@@ -3212,54 +3580,64 @@ export function RecordPage({
       let appliedFiles = 0;
       let matchedResidents = 0;
       let totalMeds = 0;
+      let multiSplitFiles = 0;
       /** @type {string[]} */
       const unmatched = [];
       /** @type {Map<string, number>} */
       const matchedFacilityCounts = new Map();
-      for (const file of files) {
-        let parsed;
-        try {
-          parsed = await parsePharmacyMedicationPdf(file, { geminiApiKey: GEMINI_KEY });
-        } catch {
-          continue;
-        }
-        appliedFiles += 1;
+
+      const applyPatientBlock = (patient, file) => {
         const hit = findResidentByPersonNameCandidates(
           residentPool,
-          parsed.patientNameCandidates?.length
-            ? parsed.patientNameCandidates
-            : buildPersonNameMatchCandidates(
-                parsed.patientName,
-                parsed.patientNameRaw,
-                parsed.patientNameKana
-              )
+          patient.patientNameCandidates?.length
+            ? patient.patientNameCandidates
+            : buildPersonNameMatchCandidates(patient.patientName, patient.patientNameRaw, patient.patientNameKana)
         );
         if (!hit) {
-          const label = String(parsed.patientNameRaw || parsed.patientName || file.name || '氏名不明').trim();
+          const label = String(patient.patientNameRaw || patient.patientName || file.name || '氏名不明').trim();
           if (label) unmatched.push(label);
-          continue;
+          return false;
         }
         const rid = String(hit.id);
         const prev = Report.getResidentMedicationProfile(rid);
-        const mergedMeds = Array.from(
-          new Set([...(prev?.medicines ?? []), ...(parsed.medicines ?? [])].map((s) => String(s ?? '').trim()).filter(Boolean))
-        );
+        const mergedItems = mergeMedicineLists(prev?.medicineItems ?? prev?.medicines, patient.medicineItems ?? patient.medicines);
         const mergedFiles = Array.from(
           new Set([...(prev?.sourceFiles ?? []), String(file.name ?? '').trim()].map((s) => String(s ?? '').trim()).filter(Boolean))
         );
         Report.setResidentMedicationProfile(rid, {
-          patientName: parsed.patientName || parsed.patientNameRaw || String(hit.name ?? ''),
-          dispensedOn: parsed.dispensedOn || String(prev?.dispensedOn ?? ''),
-          medicines: mergedMeds,
+          patientName: patient.patientName || patient.patientNameRaw || String(hit.name ?? ''),
+          dispensedOn: patient.dispensedOn || String(prev?.dispensedOn ?? ''),
+          medicineItems: mergedItems,
           sourceFiles: mergedFiles,
           importedAt: new Date().toISOString(),
         });
         matchedResidents += 1;
-        totalMeds += parsed.medicines.length;
+        totalMeds += patient.medicineItems?.length ?? patient.medicines?.length ?? 0;
         const facLabel = String(
           hit.sourceSheetTitle ?? hit.facility ?? facilityDefBySheetTitle(selectedSheetTitle)?.tabLabel ?? '施設不明'
         ).trim();
         matchedFacilityCounts.set(facLabel || '施設不明', (matchedFacilityCounts.get(facLabel || '施設不明') ?? 0) + 1);
+        return true;
+      };
+
+      for (const file of files) {
+        let imported;
+        try {
+          imported = await parsePharmacyMedicationPdfImport(file, { geminiApiKey: GEMINI_KEY });
+        } catch {
+          continue;
+        }
+        appliedFiles += 1;
+        if (imported.mode === 'multi' && imported.patients?.length) {
+          if (imported.patients.length > 1) multiSplitFiles += 1;
+          for (const patient of imported.patients) {
+            applyPatientBlock(patient, file);
+          }
+          continue;
+        }
+        const parsed = imported.single;
+        if (!parsed) continue;
+        applyPatientBlock(parsed, file);
       }
       setTick((n) => n + 1);
       const unmatchedPreview = unmatched.slice(0, 6).join('、');
@@ -3269,6 +3647,8 @@ export function RecordPage({
         .map(([k, n]) => `${k} ${n}名`)
         .join(' / ');
       const msg = `PDF ${appliedFiles}件解析 / 利用者一致 ${matchedResidents}名 / 薬剤抽出 ${totalMeds}件${
+        multiSplitFiles ? ` / 複数名振分 ${multiSplitFiles}件` : ''
+      }${
         unmatched.length ? ` / 未一致 ${unmatched.length}件（${unmatchedPreview}${unmatched.length > 6 ? '…' : ''}）` : ''
       }${facilitySummary ? ` / 施設内訳 ${facilitySummary}` : ''}`;
       setKaipokeImportStatus({
@@ -3326,7 +3706,9 @@ export function RecordPage({
           /** @type {string[]} */
           const unmatchedNames = [];
           for (const rawName of day.patientNames) {
-            const hit = findResidentForVitalsCsvName(residentPool, rawName);
+            const hit =
+              findResidentForHomeVisitCalendarName(filteredResidents, rawName) ??
+              findResidentForHomeVisitCalendarName(residentPool, rawName);
             if (hit) {
               entries.push({
                 residentId: String(hit.id),
@@ -3383,6 +3765,42 @@ export function RecordPage({
     if (!k) return null;
     return Report.getHomeVisitCalendar(k);
   }, [selectedFacilityLinkKey, homeVisitCalendarRev]);
+
+  const openHomeVisitNoteForVisit = useCallback(
+    (visit) => {
+      if (!visit) return;
+      const dateYmd = String(visit.date ?? visit.visitDateYmd ?? currentYmd()).slice(0, 10);
+      /** @type {string[]} */
+      const residentIds = [];
+      for (const r of visit.residents ?? []) {
+        const rid = String(r?.residentId ?? '').trim();
+        if (rid) {
+          residentIds.push(rid);
+          continue;
+        }
+        const hit = findResidentForHomeVisitCalendarName(filteredResidents, String(r?.name ?? ''));
+        if (hit) residentIds.push(String(hit.id));
+      }
+      setHomeVisitNoteLaunch({
+        visitDateYmd: dateYmd,
+        residentIds,
+        doctor: String(visit.doctor ?? '').trim() || undefined,
+        visitType: String(visit.visitType ?? '').trim() || undefined,
+      });
+      setHomeVisitNoteOpen(true);
+    },
+    [filteredResidents]
+  );
+
+  const openHomeVisitNotePlain = useCallback(() => {
+    setHomeVisitNoteLaunch(null);
+    setHomeVisitNoteOpen(true);
+  }, []);
+
+  const closeHomeVisitNote = useCallback(() => {
+    setHomeVisitNoteOpen(false);
+    setHomeVisitNoteLaunch(null);
+  }, []);
 
   const hdrBtn =
     'flex items-center gap-1 rounded-lg border-2 px-2 py-1.5 text-[11px] font-bold shadow-sm sm:gap-1.5 sm:px-2.5 sm:text-xs 2xl:px-3 2xl:text-sm';
@@ -3591,7 +4009,7 @@ export function RecordPage({
             type="button"
             onClick={() => medicationPdfInputRef.current?.click()}
             className={`${hdrBtn} border-indigo-800 bg-indigo-800 text-white hover:bg-indigo-700`}
-            title="薬局のお薬説明書PDF（同一書式）を複数まとめて取り込み。氏名で名簿に照合し、各利用者カードの薬情報に振り分けます。"
+            title="薬局のお薬説明書PDF（1ファイルに複数利用者でも可）を取り込み。氏名で名簿に照合し、朝・昼・夕の服用時刻付きで各利用者の薬情報に振り分けます。"
           >
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             薬局PDF
@@ -3605,6 +4023,22 @@ export function RecordPage({
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             往診カレンダーPDF
           </button>
+          {residentScheduleSheetCfg ? (
+            <button
+              type="button"
+              disabled={scheduleImportBusy}
+              onClick={() => void importResidentScheduleSheet()}
+              className={`${hdrBtn} border-purple-800 bg-purple-800 text-white hover:bg-purple-700 disabled:opacity-60`}
+              title="Googleスプレッドシート「利用者お予定表」から本日分を取り込み、各利用者カードに表示します。"
+            >
+              {scheduleImportBusy ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin sm:h-5 sm:w-5" />
+              ) : (
+                <CalendarClock className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
+              )}
+              お予定表を更新
+            </button>
+          ) : null}
           <div className="flex flex-wrap items-center gap-0.5 rounded-lg border border-slate-600 bg-slate-800 px-1.5 py-0.5">
             <input
               type="month"
@@ -3677,9 +4111,17 @@ export function RecordPage({
             </span>
           ) : null}
           <span className="text-indigo-700">
-            薬局PDF: 同一書式の「お薬説明書」を複数選択（スキャンPDFは OCR＋Gemini で氏名読取）。姓と名のスペースの有無は自動照合。名簿と一致すると「薬情報」に反映されます。
+            薬局PDF: 「お薬説明書」を複数選択可。1 PDF に複数利用者がまとまっていても氏名で自動振り分け。朝・昼・夕・就寝の服用時刻を薬情報に表示（Gemini 利用・要約なし）。姓と名のスペースの有無は自動照合。
           </span>
+          {residentScheduleSheetCfg ? (
+            <span className="text-purple-800">
+              利用者お予定表: 「お予定表を更新」でスプレッドシートから本日分を各カードに表示。カードの「本日の予定」から今後の日付もアプリで追加できます。
+            </span>
+          ) : null}
         </div>
+        {scheduleImportMsg ? (
+          <p className="mt-1 font-bold text-purple-800">{scheduleImportMsg}</p>
+        ) : null}
         {kaipokeImportStatus ? (
           <p className={`mt-1 ${kaipokeImportStatus.ok ? 'text-emerald-700' : 'text-rose-700'}`}>
             最終取り込み[
@@ -3772,13 +4214,17 @@ export function RecordPage({
                 </p>
                 <p className="mb-2 text-[11px] font-bold leading-snug text-teal-900/85">
                   公式LINEの面会予約が入った Google カレンダーの予定も、ここに自動で載ります（緑の Google 表示）。手入力の外出・受診なども下のフォームから追記できます。
-                  往診カレンダーPDFを取り込むと、往診日ごとに<strong className="font-black">対象利用者名</strong>が紫の「往診」表示で載ります。
+                  往診カレンダーPDFを取り込むと、往診日ごとに<strong className="font-black">対象利用者名</strong>が紫の「往診」表示で載ります。紫の<strong className="font-black">【往診】</strong>を押すと FAX用の往診ノート作成画面が開きます。
                 </p>
                 {todayHomeVisit ? (
                   <div className="mb-2 rounded-xl border-2 border-violet-500 bg-violet-50 px-3 py-2.5 shadow-sm">
                     <div className="flex flex-wrap items-center gap-2 text-violet-950">
                       <Stethoscope className="h-5 w-5 shrink-0" aria-hidden />
                       <span className="text-sm font-black sm:text-base">本日の往診</span>
+                      <HomeVisitFaxBadge
+                        className="text-[10px] sm:text-xs"
+                        onClick={() => openHomeVisitNoteForVisit({ ...todayHomeVisit, date: currentYmd() })}
+                      />
                       {[todayHomeVisit.doctor, todayHomeVisit.visitType].filter(Boolean).map((x) => (
                         <span
                           key={x}
@@ -3870,15 +4316,16 @@ export function RecordPage({
                                 }`}
                               >
                                 <div className="font-mono text-[11px] font-black text-teal-900">{p.time}</div>
-                                <span
-                                  className={`mt-0.5 inline-block rounded px-1 py-0.5 text-[9px] font-black text-white ${
-                                    String(p.source ?? '') === 'home_visit_calendar'
-                                      ? 'bg-violet-700'
-                                      : 'bg-teal-600/90'
-                                  }`}
-                                >
-                                  {p.type}
-                                </span>
+                                {String(p.source ?? '') === 'home_visit_calendar' ? (
+                                  <HomeVisitFaxBadge
+                                    className="mt-0.5"
+                                    onClick={() => openHomeVisitNoteForVisit({ ...p, date: day.date })}
+                                  />
+                                ) : (
+                                  <span className="mt-0.5 inline-block rounded bg-teal-600/90 px-1 py-0.5 text-[9px] font-black text-white">
+                                    {p.type}
+                                  </span>
+                                )}
                                 {String(p.source ?? '') === 'google_calendar' ? (
                                   <span className="ml-1 mt-0.5 inline-block rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-black text-white">
                                     {p.type === '面会' ? 'LINE/Google' : 'Google'}
@@ -4111,9 +4558,7 @@ export function RecordPage({
                         {String(item.source ?? '') === 'home_visit_calendar' ? (
                           <>
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="rounded bg-violet-700 px-1.5 py-0.5 text-[9px] font-black text-white">
-                                往診
-                              </span>
+                              <HomeVisitFaxBadge onClick={() => openHomeVisitNoteForVisit(item)} />
                               <span className="font-black leading-snug text-violet-950">
                                 {[item.doctor, item.visitType].filter(Boolean).join('・') || '往診'}
                               </span>
@@ -4371,6 +4816,7 @@ export function RecordPage({
               ) : null}
               <p className="mt-0.5 text-sm font-bold text-blue-700 sm:text-base">{headerResidentCountSubtitle}</p>
             </div>
+            {residentInputView !== 'monitor' || displayResidents.length < 20 ? (
             <div className="shrink-0 border-b border-slate-200 bg-slate-100/90 px-2 py-1.5 sm:px-3 sm:py-2">
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <div className="min-w-0 flex-1">
@@ -4454,8 +4900,15 @@ export function RecordPage({
                 </div>
               </div>
             </div>
+            ) : null}
 
-            <div className="flex min-w-0 flex-col p-2 sm:p-3">
+            <div
+              className={`flex min-w-0 flex-col ${
+                residentInputView === 'monitor' && displayResidents.length >= 20
+                  ? 'min-h-0 flex-1 p-1 sm:p-1.5'
+                  : 'p-2 sm:p-3'
+              }`}
+            >
               {loading ? (
                 <div className="flex h-40 flex-col items-center justify-center gap-4 text-slate-500">
                   <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
@@ -4494,7 +4947,11 @@ export function RecordPage({
                 </div>
               ) : (
                 <>
-                  <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 sm:px-3">
+                  <div
+                    className={`rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 sm:px-3 ${
+                      residentInputView === 'monitor' && displayResidents.length >= 20 ? 'mb-1' : 'mb-3'
+                    }`}
+                  >
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <label className="text-[11px] font-black text-slate-600 sm:text-xs">利用者検索</label>
                       <input
@@ -4547,7 +5004,27 @@ export function RecordPage({
                       </div>
                       <button
                         type="button"
-                        onClick={() => setHomeVisitNoteOpen(true)}
+                        onClick={() => setResidentInputViewPersist('monitor')}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border-2 px-3 py-2.5 text-sm font-black shadow-sm sm:px-4 ${
+                          residentInputView === 'monitor'
+                            ? 'border-red-700 bg-red-600 text-white'
+                            : monitorAlarmCounts.critical > 0
+                              ? 'border-red-500 bg-red-50 text-red-900 hover:bg-red-100'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="全利用者を小さく並べ、緊急・注意を1画面で確認（69床規模向け）"
+                      >
+                        <LayoutGrid className="h-5 w-5 shrink-0" aria-hidden />
+                        アラーム一覧
+                        {monitorAlarmCounts.critical > 0 ? (
+                          <span className="rounded-full bg-red-700 px-1.5 py-0.5 text-[10px] text-white">
+                            緊急{monitorAlarmCounts.critical}
+                          </span>
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openHomeVisitNotePlain}
                         className="inline-flex items-center gap-1.5 rounded-xl border-2 border-teal-500 bg-teal-50 px-3 py-2 text-xs font-black text-teal-950 hover:bg-teal-100"
                       >
                         <Stethoscope className="h-4 w-4 shrink-0" aria-hidden />
@@ -4555,16 +5032,12 @@ export function RecordPage({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setResidentInputViewPersist('monitor')}
-                        className={`inline-flex items-center gap-1.5 rounded-xl border-2 px-3 py-2 text-xs font-black sm:text-sm ${
-                          residentInputView === 'monitor'
-                            ? 'border-red-600 bg-red-600 text-white'
-                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
-                        }`}
-                        title="全利用者を小さく並べ、緊急・注意を1画面で確認（69床規模向け）"
+                        onClick={() => setEnteralMenuOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border-2 border-violet-500 bg-violet-50 px-3 py-2 text-xs font-black text-violet-950 hover:bg-violet-100"
+                        title="利用者別の経管栄養メニューを入力し、用紙どおり印刷"
                       >
-                        <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden />
-                        アラーム一覧
+                        <Utensils className="h-4 w-4 shrink-0" aria-hidden />
+                        経管栄養メニュー一覧
                       </button>
                       <button
                         type="button"
@@ -4590,16 +5063,38 @@ export function RecordPage({
                         一覧表で入力
                       </button>
                     </div>
-                    <p className="mt-2 text-[11px] font-bold leading-snug text-slate-600 sm:text-xs">
-                      <strong className="text-red-800">アラーム一覧</strong>
-                      は病院の床マップのように全員を小さく表示し、赤＝緊急・黄＝注意をスクロールなしで把握できます（愛西69床など向け）。カード表示は詳細確認用。一覧表は横スクロールで連続入力できます。
-                    </p>
+                    {residentInputView === 'cards' &&
+                    (monitorAlarmCounts.critical > 0 || monitorAlarmCounts.total >= 20) ? (
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-red-400 bg-red-50 px-3 py-2">
+                        <p className="text-xs font-bold text-red-950 sm:text-sm">
+                          緊急 <strong>{monitorAlarmCounts.critical}</strong> / 注意{' '}
+                          <strong>{monitorAlarmCounts.warn}</strong> — カード表示ではアラームが見えにくいです。
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setResidentInputViewPersist('monitor')}
+                          className="shrink-0 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-black text-white hover:bg-red-500"
+                        >
+                          アラーム一覧で全員表示
+                        </button>
+                      </div>
+                    ) : residentInputView === 'monitor' && displayResidents.length >= 20 ? (
+                      <p className="mt-1 text-[10px] font-bold text-slate-600">
+                        居室マスをタップで詳細。全員を1画面に表示中（スクロールなし）。
+                      </p>
+                    ) : (
+                      <p className="mt-2 text-[11px] font-bold leading-snug text-slate-600 sm:text-xs">
+                        まず <strong className="text-red-800">アラーム一覧</strong>
+                        で全員の緊急・注意を1画面確認。カード表示は詳細、一覧表は入力用です。
+                      </p>
+                    )}
                     <CareAutoBackupPanel
                       facilityLabel={selectedSheetTitle}
                       retentionSummary={careRetentionSummary}
                       onBackupDone={() => setTick((n) => n + 1)}
                       onOpenBulkForYmd={openBulkTableForYmd}
                     />
+                    <CareCloudSyncPanel onSyncApplied={() => setTick((n) => n + 1)} />
                   </div>
                   {residentInputView === 'table' ? (
                     <ResidentBulkInputTable
@@ -4612,6 +5107,7 @@ export function RecordPage({
                       onBulkSheetDateChange={setBulkSheetDate}
                       hourlySavedByResident={bulkHourlySavedByResident}
                       bulkMealSummaryByResident={bulkMealSummaryByResident}
+                      bulkUrineDetailByResident={bulkUrineDetailByResident}
                       residentNameWithoutSama={residentNameWithoutSama}
                       patchBulkRow={patchBulkRow}
                       setBulkPatrolForAllVisible={setBulkPatrolForAllVisible}
@@ -4646,7 +5142,6 @@ export function RecordPage({
                     const ded = Report.evaluateReimbursementDeductionAlerts(res, ev);
                     const critical = ev.level === 'critical';
                     const warn = ev.level === 'warn';
-                    const adviceShort = critical ? Report.fallbackRegulatoryAdvice(ev) : '';
                     const showMuteRow =
                       !muted &&
                       (rawEv.level === 'critical' || rawEv.level === 'warn' || ded.hasAlert);
@@ -4673,26 +5168,16 @@ export function RecordPage({
                         selectedDef?.linkKey === '一宮') &&
                       String(res.homeDoctor ?? '').trim();
                     const clinicRaw = String(res.homeDoctor ?? '').trim();
-                    const clinicBadge = (() => {
-                      if (!clinicRaw) return null;
-                      if (/田中/u.test(clinicRaw)) {
-                        return { label: `田中: ${clinicRaw}`, cls: 'border-blue-400 bg-blue-100 text-blue-900' };
-                      }
-                      if (/ひのとり/u.test(clinicRaw)) {
-                        return { label: `ひのとり: ${clinicRaw}`, cls: 'border-rose-400 bg-rose-100 text-rose-900' };
-                      }
-                      if (/北名古屋/u.test(clinicRaw)) {
-                        return { label: `北名古屋: ${clinicRaw}`, cls: 'border-amber-400 bg-amber-100 text-amber-900' };
-                      }
-                      return { label: clinicRaw, cls: 'border-slate-300 bg-slate-100 text-slate-800' };
-                    })();
+                    const clinicRawForTone = homeDoctorLooksLikeResidentName(clinicRaw, res.name) ? '' : clinicRaw;
                     const clinicCardTone = (() => {
-                      if (!clinicRaw) return '';
-                      if (/田中/u.test(clinicRaw)) return 'border-blue-300 bg-blue-50/40';
-                      if (/ひのとり/u.test(clinicRaw)) return 'border-rose-300 bg-rose-50/40';
-                      if (/北名古屋/u.test(clinicRaw)) return 'border-amber-300 bg-amber-50/40';
+                      if (!clinicRawForTone) return '';
+                      if (/田中/u.test(clinicRawForTone)) return 'border-blue-300 bg-blue-50/40';
+                      if (/ひのとり/u.test(clinicRawForTone)) return 'border-rose-300 bg-rose-50/40';
+                      if (/北名古屋/u.test(clinicRawForTone)) return 'border-amber-300 bg-amber-50/40';
                       return 'border-slate-200 bg-white';
                     })();
+                    const homeDoctorLine =
+                      showHomeDoctor && !homeDoctorLooksLikeResidentName(clinicRaw, res.name) ? clinicRaw : '';
                     const roomNotes = Report.getResidentRoomNotes(String(res.id));
                     const roomHandover = String(roomNotes.handover ?? '').trim();
                     const roomTreatment = String(roomNotes.treatment ?? '').trim();
@@ -4722,9 +5207,8 @@ export function RecordPage({
                         >
                           <div className="mb-2 flex items-start justify-between gap-2">
                             <div className="min-w-0 flex-1">
-                              <div className="line-clamp-2 text-2xl font-black leading-tight">
-                                {residentNameWithoutSama(res.name)}
-                                <span className="text-xl"> 様</span>
+                              <div className="line-clamp-1 text-2xl font-black leading-tight">
+                                {residentCardDisplayName(res.name)}
                               </div>
                               <div
                                 className={`mt-2 rounded-xl border-2 px-3 py-2 ${
@@ -4763,6 +5247,23 @@ export function RecordPage({
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-1">
                               {(() => {
+                                const todayPlansShort = residentScheduleSheetCfg
+                                  ? formatResidentPlansShort(
+                                      selectedFacilityLinkKey,
+                                      String(res.id),
+                                      todayStrip
+                                    )
+                                  : '';
+                                if (todayPlansShort) {
+                                  return (
+                                    <span
+                                      className="max-w-[11rem] rounded-lg bg-purple-700 px-2 py-1 text-[9px] font-black leading-snug text-white"
+                                      title={todayPlansShort}
+                                    >
+                                      本日 {todayPlansShort.length > 28 ? `${todayPlansShort.slice(0, 28)}…` : todayPlansShort}
+                                    </span>
+                                  );
+                                }
                                 const cell = Report.getDayServiceCell(String(res.id), todayStrip);
                                 if (!cell) return null;
                                 if (cell.kind === 'on_site')
@@ -4786,11 +5287,6 @@ export function RecordPage({
                               >
                                 {String(res.room)}
                               </span>
-                              {clinicBadge ? (
-                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${clinicBadge.cls}`}>
-                                  {clinicBadge.label}
-                                </span>
-                              ) : null}
                               <div className="flex shrink-0 gap-1">
                                 {critical && <AlertCircle className="h-6 w-6 text-white" />}
                                 {warn && !critical && <Clock className="h-5 w-5 animate-pulse text-amber-700" />}
@@ -4824,13 +5320,13 @@ export function RecordPage({
                               保険: {String(res.insuranceLabel)}
                             </div>
                           ) : null}
-                          {showHomeDoctor ? (
+                          {homeDoctorLine ? (
                             <div
                               className={`mt-1 line-clamp-1 text-[11px] font-black sm:text-xs ${
                                 critical ? 'text-red-100/90' : 'text-emerald-800'
                               }`}
                             >
-                              在宅医: {String(res.homeDoctor)}
+                              在宅医: {homeDoctorLine}
                             </div>
                           ) : null}
                           <div
@@ -4879,56 +5375,30 @@ export function RecordPage({
                               })()}
                             </div>
                           )}
-                          {ded.hasAlert && (
-                            <div
-                              className={`mt-2 rounded-xl border-2 px-2 py-1.5 text-[10px] font-bold leading-snug ${
-                                critical
-                                  ? 'border-white/80 bg-black/25 text-white'
-                                  : 'border-violet-600 bg-violet-100 text-violet-950'
+                          {(rawEv.level === 'critical' ||
+                            rawEv.level === 'warn' ||
+                            ev.vitalBad ||
+                            ev.stoolBad ||
+                            ev.urineBad ||
+                            ded.hasAlert) && (
+                            <p
+                              className={`mt-2 line-clamp-1 text-[11px] font-black leading-snug ${
+                                critical ? 'text-red-50' : 'text-amber-900'
                               }`}
+                              title={[
+                                ...rawEv.vitalFlags.map((f) => f.label),
+                                rawEv.stoolBad && rawEv.stoolHours != null
+                                  ? `排便 ${Math.round(rawEv.stoolHours)}時間`
+                                  : '',
+                                rawEv.urineBad && rawEv.urineHours != null
+                                  ? `排尿 ${Math.round(rawEv.urineHours)}時間`
+                                  : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' / ')}
                             >
-                              <span
-                                className={`flex items-center gap-1 font-black ${
-                                  critical ? 'text-white' : 'text-violet-900'
-                                }`}
-                              >
-                                <FileWarning className="h-3.5 w-3.5 shrink-0" />
-                                減算・監査 要確認
-                              </span>
-                              <ul
-                                className={`mt-1 list-inside list-disc ${
-                                  critical ? 'text-red-50' : 'text-violet-900'
-                                }`}
-                              >
-                                {ded.lines.map((line, i) => (
-                                  <li key={i}>{line}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                          {(ev.vitalBad || ev.stoolBad || ev.urineBad) && (
-                            <ul className={`mt-2 list-inside list-disc text-xs font-bold ${critical ? 'text-white' : ''}`}>
-                              {ev.vitalFlags.map((f) => (
-                                <li key={f.code}>{f.label}</li>
-                              ))}
-                              {ev.stoolBad && (
-                                <li>
-                                  排便 {ev.stoolHours != null ? `${Math.round(ev.stoolHours)}h` : '—'} 未記録相当（72h超）
-                                </li>
-                              )}
-                              {ev.urineBad && (
-                                <li>
-                                  排尿記録・トイレ誘導{' '}
-                                  {ev.urineHours != null ? `${Math.round(ev.urineHours)}h` : '—'} 間隔（{Report.VITAL_THRESHOLDS.urineHoursMax}h超）
-                                </li>
-                              )}
-                            </ul>
-                          )}
-                          {critical && adviceShort && (
-                            <div className="mt-2 flex items-start gap-1 rounded-lg bg-black/20 px-2 py-1.5 text-[10px] font-bold leading-snug text-white">
-                              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                              <span className="line-clamp-4">{adviceShort}</span>
-                            </div>
+                              {formatCardMonitorAlertLine(rawEv, ded) || '要確認'}
+                            </p>
                           )}
                           <div
                             className={`mt-2 space-y-1 border-t pt-2 text-[11px] font-bold sm:text-xs ${
@@ -5034,6 +5504,23 @@ export function RecordPage({
                           >
                             <CalendarClock className="h-4 w-4 shrink-0" />
                             外部デイの予定
+                          </button>
+                        ) : null}
+                        {residentScheduleSheetCfg ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setScheduleModalResident(res);
+                            }}
+                            className={`mt-2 flex w-full items-center justify-center gap-1 rounded-xl border-2 py-2 text-xs font-black ${
+                              critical
+                                ? 'border-purple-200/60 bg-purple-950/40 text-purple-100 hover:bg-purple-900/50'
+                                : 'border-purple-500 bg-purple-50 text-purple-950 hover:bg-purple-100'
+                            }`}
+                          >
+                            <CalendarClock className="h-4 w-4 shrink-0" />
+                            本日の予定・入力
                           </button>
                         ) : null}
                         <button
@@ -5469,13 +5956,29 @@ export function RecordPage({
       />
       <HomeVisitNoteModal
         open={homeVisitNoteOpen}
-        onClose={() => setHomeVisitNoteOpen(false)}
+        onClose={closeHomeVisitNote}
         facilityLabel={selectedDef?.tabLabel ?? selectedSheetTitle}
         facilitySheetTitle={selectedSheetTitle}
         facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
         sheetsApiKey={SHEETS_KEY}
         residents={displayResidents}
         nursingOfficeUi={nursingOfficeUi}
+        launchContext={homeVisitNoteLaunch}
+      />
+      <EnteralNutritionMenuModal
+        open={enteralMenuOpen}
+        onClose={() => setEnteralMenuOpen(false)}
+        facilityLabel={selectedDef?.tabLabel ?? selectedSheetTitle}
+        facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
+        residents={displayResidents}
+      />
+      <ResidentDailyScheduleModal
+        open={Boolean(scheduleModalResident)}
+        onClose={() => setScheduleModalResident(null)}
+        facilityLinkKey={selectedFacilityLinkKey}
+        resident={scheduleModalResident ?? {}}
+        residentNameFmt={residentNameWithoutSama}
+        onSaved={() => setTick((n) => n + 1)}
       />
     </div>
   );

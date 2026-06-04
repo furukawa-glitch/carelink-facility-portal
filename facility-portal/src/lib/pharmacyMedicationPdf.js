@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { createWorker } from 'tesseract.js';
+import { normalizeMedicineList, normalizeMedicineRow } from './pharmacyMedicineFormat.js';
 import { buildPersonNameMatchCandidates, normalizePersonNameForMatch } from './residentNameMatch.js';
 import { readPdfFileAsDataUrl } from './visitCalendarPdf.js';
 
@@ -214,31 +215,31 @@ function augmentLinesForSplitTitles(lines) {
   return Array.from(new Set([...norm, ...extra]));
 }
 
+const GEMINI_MEDICINE_RULES = `各薬剤は名称と服用タイミングをセットで返す（要約文は作らない）。
+- timing には PDF の「用法・用量」表や一包化欄の朝・昼・夕・就寝前・起床時など、実際に記載されている文言をそのまま（例: 朝食後、朝夕、就寝前）。
+- 朝昼夕の欄が空なら timing は空文字。
+- 薬剤名は商品名・規格を含む1行（例: デエビゴ錠5mg）。`;
+
 /**
- * スキャンPDF向け: Gemini で氏名・薬剤を読み取り
  * @param {string} apiKey
  * @param {File} file
+ * @returns {Promise<string>}
  */
-async function fetchPharmacyMedicationFromPdfGemini(apiKey, file) {
+async function readPdfBase64ForGemini(file) {
   const dataUrl = await readPdfFileAsDataUrl(file);
   let b64 = String(dataUrl ?? '').trim();
   if (b64.includes(',')) b64 = String(b64.split(',').pop() ?? '').trim();
   b64 = b64.replace(/\s/g, '');
   if (!b64) throw new Error('PDFのデータが空です');
-
-  const prompt = `添付は薬局の「お薬説明書」PDFです。利用者1名分として次のJSONオブジェクト1つだけ返してください（説明文・Markdown禁止）。
-
-{
-  "patientName": "利用者氏名（様・さんは除く。姓と名の間にスペースがあってもそのまま）",
-  "patientNameKana": "フリガナがあれば（なければ空文字）",
-  "dispensedOn": "調剤日（例: 2026年6月3日。読めなければ空文字）",
-  "medicines": ["薬剤名の行のみの配列"]
+  return b64;
 }
 
-ルール:
-- 表題の「○○様のお薬説明書」から patientName を最優先。
-- カナと漢字が並ぶ場合は漢字氏名を patientName、カナを patientNameKana。
-- 推測で氏名を補完しない。`;
+/**
+ * @param {string} apiKey
+ * @param {string} b64
+ * @param {string} prompt
+ */
+async function callGeminiPdfJson(apiKey, b64, prompt) {
   const body = {
     contents: [
       {
@@ -249,7 +250,7 @@ async function fetchPharmacyMedicationFromPdfGemini(apiKey, file) {
         ],
       },
     ],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 8192, responseMimeType: 'application/json' },
+    generationConfig: { temperature: 0.1, maxOutputTokens: 16384, responseMimeType: 'application/json' },
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
   const res = await fetch(url, {
@@ -263,15 +264,113 @@ async function fetchPharmacyMedicationFromPdfGemini(apiKey, file) {
     const msg = data?.error?.message || res.statusText || 'Gemini API エラー';
     throw new Error(msg);
   }
-  const parsed = JSON.parse(stripJsonFence(text));
-  const patientName = String(parsed?.patientName ?? '').trim();
-  const patientNameKana = String(parsed?.patientNameKana ?? '').trim();
-  const dispensedOn = String(parsed?.dispensedOn ?? '').trim();
-  const medicines = Array.isArray(parsed?.medicines)
-    ? parsed.medicines.map((m) => normalizeLine(String(m ?? ''))).filter(Boolean)
-    : [];
+  return JSON.parse(stripJsonFence(text));
+}
+
+/**
+ * @param {unknown} raw
+ */
+function parseGeminiMedicineList(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const row = normalizeMedicineRow(normalizeLine(item));
+      if (row) out.push(row);
+      continue;
+    }
+    const row = normalizeMedicineRow(item);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+/**
+ * @param {Record<string, unknown>} block
+ */
+function buildPatientParseFromGemini(block) {
+  const patientName = String(block?.patientName ?? '').trim();
+  const patientNameKana = String(block?.patientNameKana ?? '').trim();
+  const dispensedOn = String(block?.dispensedOn ?? '').trim();
+  const medicineItems = parseGeminiMedicineList(block?.medicines);
   const patientNameRaw = [patientNameKana, patientName].filter(Boolean).join(' ').trim() || patientName;
-  return { patientName, patientNameRaw, patientNameKana, dispensedOn, medicines };
+  const patientNameNorm = pickLikelyResidentName(patientNameRaw);
+  const patientNameCandidates = buildPersonNameMatchCandidates(
+    patientNameNorm,
+    patientNameRaw,
+    patientNameKana,
+    pickLikelyResidentName(patientNameRaw.replace(/[ァ-ヶー\s]+/gu, ' ').trim())
+  );
+  return {
+    patientName: patientNameNorm,
+    patientNameRaw,
+    patientNameKana,
+    patientNameCandidates,
+    dispensedOn,
+    medicineItems,
+    medicines: medicineItems.map((m) => m.name),
+  };
+}
+
+/**
+ * 1 PDF 内に複数利用者（「○○様のお薬説明書」が複数）を振り分け
+ * @param {string} apiKey
+ * @param {File} file
+ */
+async function fetchPharmacyMedicationMultiFromPdfGemini(apiKey, file) {
+  const b64 = await readPdfBase64ForGemini(file);
+  const prompt = `添付は薬局の「お薬説明書」PDFです。PDF内の利用者ごとに1件ずつ patients 配列へ入れて、次のJSONオブジェクト1つだけ返してください（説明文・Markdown禁止）。
+
+{
+  "patients": [
+    {
+      "patientName": "利用者氏名（様・さんは除く）",
+      "patientNameKana": "フリガナ（なければ空文字）",
+      "dispensedOn": "その利用者分の調剤日（例: 2023年9月11日。読めなければ空文字）",
+      "medicines": [
+        { "name": "薬剤名", "timing": "朝・昼・夕・就寝前などPDF記載のまま" }
+      ]
+    }
+  ]
+}
+
+ルール:
+- 「○○様のお薬説明書」など見出しごとに別の patient として分ける。1名だけなら patients は長さ1。
+- カナと漢字が並ぶ場合は漢字を patientName、カナを patientNameKana。
+- 推測で氏名を補完しない。
+${GEMINI_MEDICINE_RULES}`;
+  const parsed = await callGeminiPdfJson(apiKey, b64, prompt);
+  const patients = Array.isArray(parsed?.patients) ? parsed.patients : [];
+  return patients
+    .map((p) => (p && typeof p === 'object' ? buildPatientParseFromGemini(/** @type {Record<string, unknown>} */ (p)) : null))
+    .filter((p) => p && (p.patientNameRaw || p.medicineItems?.length));
+}
+
+/**
+ * スキャンPDF向け: Gemini で氏名・薬剤を読み取り（1名）
+ * @param {string} apiKey
+ * @param {File} file
+ */
+async function fetchPharmacyMedicationFromPdfGemini(apiKey, file) {
+  const b64 = await readPdfBase64ForGemini(file);
+  const prompt = `添付は薬局の「お薬説明書」PDFです。利用者1名分として次のJSONオブジェクト1つだけ返してください（説明文・Markdown禁止）。
+
+{
+  "patientName": "利用者氏名（様・さんは除く。姓と名の間にスペースがあってもそのまま）",
+  "patientNameKana": "フリガナがあれば（なければ空文字）",
+  "dispensedOn": "調剤日（例: 2026年6月3日。読めなければ空文字）",
+  "medicines": [
+    { "name": "薬剤名", "timing": "朝・昼・夕・就寝前などPDF記載のまま" }
+  ]
+}
+
+ルール:
+- 表題の「○○様のお薬説明書」から patientName を最優先。
+- カナと漢字が並ぶ場合は漢字氏名を patientName、カナを patientNameKana。
+- 推測で氏名を補完しない。
+${GEMINI_MEDICINE_RULES}`;
+  const parsed = await callGeminiPdfJson(apiKey, b64, prompt);
+  return buildPatientParseFromGemini(parsed);
 }
 
 /**
@@ -321,13 +420,19 @@ export async function parsePharmacyMedicationPdf(file, options = {}) {
     else if (!medicines.length) medicines = extractMedicineNameLines(ocrPool);
   }
 
+  /** @type {import('./pharmacyMedicineFormat.js').PharmacyMedicineRow[]} */
+  let medicineItems = medicines.map((name) => ({ name, timing: '', doseNote: '' }));
+
   if (geminiApiKey && (scanned || !patientNameRaw || medicines.length === 0)) {
     try {
       const gem = await fetchPharmacyMedicationFromPdfGemini(geminiApiKey, file);
       if (gem.patientNameRaw) patientNameRaw = gem.patientNameRaw;
       if (gem.patientNameKana) patientNameKana = gem.patientNameKana;
       if (gem.dispensedOn) dispensedOn = gem.dispensedOn;
-      if (gem.medicines?.length) medicines = gem.medicines;
+      if (gem.medicineItems?.length) {
+        medicineItems = gem.medicineItems;
+        medicines = gem.medicines;
+      } else if (gem.medicines?.length) medicines = gem.medicines;
       source = 'gemini';
     } catch {
       /* OCR/テキスト結果を維持 */
@@ -349,8 +454,48 @@ export async function parsePharmacyMedicationPdf(file, options = {}) {
     patientNameCandidates,
     dispensedOn,
     medicines,
+    medicineItems,
     pages: doc.numPages,
     fileName: String(file?.name ?? ''),
     source,
   };
+}
+
+/**
+ * 薬局PDF取り込み用（Gemini ありなら複数利用者の振り分け + 朝昼夕）
+ * @param {File} file
+ * @param {{ geminiApiKey?: string }} [options]
+ * @returns {Promise<
+ *   | { mode: 'multi'; patients: ReturnType<typeof buildPatientParseFromGemini>[]; pages: number; fileName: string; source: string }
+ *   | { mode: 'single'; single: Awaited<ReturnType<typeof parsePharmacyMedicationPdf>> }
+ * >}
+ */
+export async function parsePharmacyMedicationPdfImport(file, options = {}) {
+  const geminiApiKey = String(options?.geminiApiKey ?? '').trim();
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const meta = { pages: doc.numPages, fileName: String(file?.name ?? '') };
+
+  if (geminiApiKey) {
+    try {
+      const patients = await fetchPharmacyMedicationMultiFromPdfGemini(geminiApiKey, file);
+      if (patients.length > 0) {
+        return { mode: 'multi', patients, ...meta, source: 'gemini_multi' };
+      }
+    } catch {
+      /* 1名 Gemini へ */
+    }
+    try {
+      const gem = await fetchPharmacyMedicationFromPdfGemini(geminiApiKey, file);
+      return {
+        mode: 'single',
+        single: { ...gem, ...meta, source: 'gemini' },
+      };
+    } catch {
+      /* テキスト/OCR へ */
+    }
+  }
+
+  const single = await parsePharmacyMedicationPdf(file, options);
+  return { mode: 'single', single: { ...single, ...meta } };
 }

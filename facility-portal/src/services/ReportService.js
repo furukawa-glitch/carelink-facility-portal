@@ -8,6 +8,11 @@ import { buildNearMissReportHtml, NEAR_MISS_CATEGORY_LABELS } from './nearMissRe
 import { CARELINK_FACILITIES, facilityDefBySheetTitle } from '../config/carelinkFacilities.js';
 import { deleteAllResidentPdfs } from '../lib/residentInfoProvisionIdb.js';
 import { isAllowedProvisionMime, mimeFromDataUrl } from '../lib/provisionDocumentMime.js';
+import {
+  formatMedicineDisplayLine,
+  medicineItemsFromStoredProfile,
+  normalizeMedicineList,
+} from '../lib/pharmacyMedicineFormat.js';
 import { tokyoYmdFromTs } from '../lib/hourlyCareGrid.js';
 import {
   buildResidentStayStatusBadges,
@@ -1819,11 +1824,23 @@ export function reloadCareEventsFromStorage() {
  */
 export function mergeCareEventsFromCloud(cloudEvents) {
   const local = getAllCareEvents();
-  const merged = mergeCareEventsById(local, Array.isArray(cloudEvents) ? cloudEvents : []);
-  const delta = Math.max(0, merged.length - local.length);
+  const incoming = Array.isArray(cloudEvents) ? cloudEvents : [];
+  const localById = new Map(local.map((e) => [String(e?.id ?? ''), e]));
+  let changed = 0;
+  for (const e of incoming) {
+    const id = String(e?.id ?? '').trim();
+    if (!id) continue;
+    const prev = localById.get(id);
+    if (!prev) {
+      changed++;
+      continue;
+    }
+    if (JSON.stringify(prev) !== JSON.stringify(e)) changed++;
+  }
+  const merged = mergeCareEventsById(local, incoming);
   persistCareEventsList(merged);
   applyHandoverStoresFromEvents(merged);
-  return delta;
+  return changed;
 }
 
 export function getCareRecordRetentionSummary() {
@@ -1903,9 +1920,10 @@ export function getCareEventsForResidentMonth(residentId, yearMonth) {
     .sort((a, b) => new Date(a.ts) - new Date(b.ts));
 }
 
-/** vital_snapshot の表示・集計用測定時刻（訪問日時を優先） */
+/** vital_snapshot の表示・集計用測定時刻（訪問日時を優先。日付のみ取込の仮12:00は表示しない） */
 function resolveVitalMeasuredAt(meta, eventTs) {
   const m = meta && typeof meta === 'object' ? meta : {};
+  if (m.measurementTimeFromVisitRecord === false) return '';
   for (const key of ['visitAt', 'measuredAt', 'visitStartAt', 'visitStart']) {
     const raw = String(m[key] ?? '').trim();
     if (!raw) continue;
@@ -1914,7 +1932,12 @@ function resolveVitalMeasuredAt(meta, eventTs) {
   }
   const ts = String(eventTs ?? '').trim();
   const t = new Date(ts).getTime();
-  return Number.isFinite(t) ? ts : '';
+  if (!Number.isFinite(t)) return '';
+  if (m.measurementTimeFromVisitRecord !== true && !m.visitAt && !m.measuredAt) {
+    const d = new Date(ts);
+    if (d.getHours() === 12 && d.getMinutes() === 0 && d.getSeconds() === 0) return '';
+  }
+  return ts;
 }
 
 function careEventTsForResidentDay(e) {
@@ -3398,7 +3421,7 @@ export function setResidentMonthlyReportImportLines(residentId, yearMonth, lines
 /**
  * 利用者の薬情報（薬局PDFから抽出）を取得
  * @param {string} residentId
- * @returns {{ patientName?: string; dispensedOn?: string; medicines?: string[]; sourceFiles?: string[]; importedAt?: string } | null}
+ * @returns {{ patientName?: string; dispensedOn?: string; medicines?: string[]; medicineItems?: { name: string; timing?: string; doseNote?: string }[]; sourceFiles?: string[]; importedAt?: string } | null}
  */
 export function getResidentMedicationProfile(residentId) {
   const id = String(residentId ?? '').trim();
@@ -3406,9 +3429,8 @@ export function getResidentMedicationProfile(residentId) {
   const all = readJson(LS.residentMedicationProfile, {});
   const row = all?.[id];
   if (!row || typeof row !== 'object') return null;
-  const meds = Array.isArray(row.medicines)
-    ? row.medicines.map((s) => String(s ?? '').trim()).filter(Boolean).slice(0, MAX_MEDICATION_LINES_PER_RESIDENT)
-    : [];
+  const medicineItems = medicineItemsFromStoredProfile(row).slice(0, MAX_MEDICATION_LINES_PER_RESIDENT);
+  const meds = medicineItems.map((m) => formatMedicineDisplayLine(m));
   const files = Array.isArray(row.sourceFiles)
     ? row.sourceFiles.map((s) => String(s ?? '').trim()).filter(Boolean).slice(0, 20)
     : [];
@@ -3416,6 +3438,7 @@ export function getResidentMedicationProfile(residentId) {
     patientName: String(row.patientName ?? '').trim(),
     dispensedOn: String(row.dispensedOn ?? '').trim(),
     medicines: meds,
+    medicineItems,
     sourceFiles: files,
     importedAt: String(row.importedAt ?? '').trim(),
   };
@@ -3424,7 +3447,7 @@ export function getResidentMedicationProfile(residentId) {
 /**
  * 利用者の薬情報（薬局PDFから抽出）を保存
  * @param {string} residentId
- * @param {{ patientName?: string; dispensedOn?: string; medicines?: string[]; sourceFiles?: string[]; importedAt?: string } | null | undefined} profile
+ * @param {{ patientName?: string; dispensedOn?: string; medicines?: unknown[]; medicineItems?: unknown[]; sourceFiles?: string[]; importedAt?: string } | null | undefined} profile
  */
 export function setResidentMedicationProfile(residentId, profile) {
   const id = String(residentId ?? '').trim();
@@ -3437,10 +3460,12 @@ export function setResidentMedicationProfile(residentId, profile) {
     }
     return;
   }
-  const meds = (Array.isArray(profile.medicines) ? profile.medicines : [])
-    .map((s) => String(s ?? '').trim())
-    .filter(Boolean)
-    .slice(0, MAX_MEDICATION_LINES_PER_RESIDENT);
+  const medicineItems = (
+    Array.isArray(profile.medicineItems) && profile.medicineItems.length
+      ? normalizeMedicineList(profile.medicineItems)
+      : normalizeMedicineList(profile.medicines)
+  ).slice(0, MAX_MEDICATION_LINES_PER_RESIDENT);
+  const meds = medicineItems.map((m) => formatMedicineDisplayLine(m));
   const files = (Array.isArray(profile.sourceFiles) ? profile.sourceFiles : [])
     .map((s) => String(s ?? '').trim())
     .filter(Boolean)
@@ -3448,6 +3473,7 @@ export function setResidentMedicationProfile(residentId, profile) {
   all[id] = {
     patientName: String(profile.patientName ?? '').trim(),
     dispensedOn: String(profile.dispensedOn ?? '').trim(),
+    medicineItems,
     medicines: meds,
     sourceFiles: files,
     importedAt: String(profile.importedAt ?? nowJapanIsoString()).trim() || nowJapanIsoString(),
@@ -3789,11 +3815,16 @@ export function buildEmergencySummaryHtml(resident, evalResult, aiAdvice, contac
   const careNotes = String(draft.careNotes ?? '').trim();
   const other = String(draft.other ?? '').trim();
   const medDispensedOn = String(med?.dispensedOn ?? '').trim();
-  const medList = Array.isArray(med?.medicines) ? med.medicines.map((x) => String(x ?? '').trim()).filter(Boolean) : [];
+  const medItems = medicineItemsFromStoredProfile(med);
   const medFiles = Array.isArray(med?.sourceFiles) ? med.sourceFiles.map((x) => String(x ?? '').trim()).filter(Boolean) : [];
-  const medRows = medList.length
-    ? medList.map((m, i) => `<tr><td style="width:50px">${i + 1}</td><td>${escapeHtml(m)}</td></tr>`).join('')
-    : '<tr><td colspan="2">薬局PDF取り込みデータなし</td></tr>';
+  const medRows = medItems.length
+    ? medItems
+        .map((row, i) => {
+          const timing = String(row.timing ?? '').trim();
+          return `<tr><td style="width:50px">${i + 1}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(timing || '—')}</td></tr>`;
+        })
+        .join('')
+    : '<tr><td colspan="3">薬局PDF取り込みデータなし</td></tr>';
 
   return `
 <!DOCTYPE html><html><head><meta charset="utf-8"/><title>救急搬送サマリー ${name}</title>
@@ -3850,7 +3881,7 @@ export function buildEmergencySummaryHtml(resident, evalResult, aiAdvice, contac
     <tr><th style="width:160px">調剤日</th><td>${escapeHtml(medDispensedOn || '（未入力）')}</td></tr>
     <tr><th>取り込み元PDF</th><td>${escapeHtml(medFiles.join(' / ') || '（未入力）')}</td></tr>
   </table>
-  <table><thead><tr><th style="width:50px">No.</th><th>薬剤名</th></tr></thead><tbody>${medRows}</tbody></table>
+  <table><thead><tr><th style="width:50px">No.</th><th>薬剤名</th><th>服用（朝・昼・夕等）</th></tr></thead><tbody>${medRows}</tbody></table>
   <h2>直近1週間 バイタル記録ログ</h2>
   <table><thead><tr><th>日時</th><th>内容</th></tr></thead><tbody>${rows || '<tr><td colspan="2">記録なし（記録蓄積後に表示）</td></tr>'}</tbody></table>
   <h2>現在の自動検知</h2>

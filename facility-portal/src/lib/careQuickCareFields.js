@@ -7,8 +7,17 @@ export const STOOL_CHARACTER_OPTIONS = ['', '普通便', '硬便', '軟便', '�
 /** 主食・副食の摂取割合 */
 export const MEAL_WARI_OPTIONS = ['', '10割', '9割', '8割', '7割', '6割', '5割', '4割', '3割', '2割', '1割', '0割'];
 
-/** エンシュア等の経口栄養（缶・割合）一覧入力用 */
+/** 主食の食事形態（発注・記録用） */
+export const MEAL_STAPLE_FORM_OPTIONS = ['', '普通食', '軟飯', 'おかゆ', '経管栄養', '点滴'];
+
+/** 副食の食事形態（発注・記録用） */
+export const MEAL_SIDE_FORM_OPTIONS = ['', '普通食', '刻み', '極刻み', 'ムース', '経管栄養', '点滴'];
+
+/** エンシュア・ソリタ等の経口栄養（缶・割合）一覧入力用 */
 export const ENSURE_PORTION_OPTIONS = ['', '1/3', '1/2', '2/3', '1缶'];
+
+/** @deprecated 別名。ENSURE_PORTION_OPTIONS と同じ */
+export const ORAL_SUPPLEMENT_PORTION_OPTIONS = ENSURE_PORTION_OPTIONS;
 
 /**
  * @param {unknown} portion ENSURE_PORTION_OPTIONS の値
@@ -19,6 +28,38 @@ export function composeEnsureLine(portion) {
   return p ? `エンシュア${p}` : '';
 }
 
+/**
+ * @param {unknown} portion ORAL_SUPPLEMENT_PORTION_OPTIONS の値
+ * @returns {string} ログ用（例: ソリタ1/2）
+ */
+export function composeSolitaLine(portion) {
+  const p = String(portion ?? '').trim();
+  return p ? `ソリタ${p}` : '';
+}
+
+/**
+ * @param {unknown} ensurePortion
+ * @param {unknown} solitaPortion
+ * @returns {string}
+ */
+export function composeOralSupplementLines(ensurePortion, solitaPortion) {
+  return [composeEnsureLine(ensurePortion), composeSolitaLine(solitaPortion)].filter(Boolean).join(' ').trim();
+}
+
+/**
+ * 保存済み食事メモからエンシュア・ソリタの割合を復元
+ * @param {unknown} mealAmount
+ */
+export function parseOralSupplementsFromMealLog(mealAmount) {
+  const s = String(mealAmount ?? '').trim();
+  const ensureM = s.match(/エンシュア(1\/3|1\/2|2\/3|1缶)/u);
+  const solitaM = s.match(/ソリタ(1\/3|1\/2|2\/3|1缶)/u);
+  return {
+    ensurePortion: ensureM ? ensureM[1] : '',
+    solitaPortion: solitaM ? solitaM[1] : '',
+  };
+}
+
 function normVoiceChars(s) {
   return String(s ?? '')
     .trim()
@@ -27,17 +68,93 @@ function normVoiceChars(s) {
 }
 
 /**
- * @param {string} staple
- * @param {string} side
- * @returns {string} ログ用 1 行（例: 主食8割 副食7割）
+ * @param {string} stapleWari
+ * @param {string} sideWari
+ * @param {string} [stapleForm]
+ * @param {string} [sideForm]
+ * @returns {string} ログ用 1 行（例: 主食(普通食)8割 副食(ムース)7割）
  */
-export function composeMealAmountForLog(staple, side) {
-  const s = String(staple ?? '').trim();
-  const d = String(side ?? '').trim();
+export function composeMealAmountForLog(stapleWari, sideWari, stapleForm, sideForm) {
+  const sw = String(stapleWari ?? '').trim();
+  const dw = String(sideWari ?? '').trim();
+  const sf = String(stapleForm ?? '').trim();
+  const df = String(sideForm ?? '').trim();
   const parts = [];
-  if (s) parts.push(`主食${s}`);
-  if (d) parts.push(`副食${d}`);
+  if (sf || sw) {
+    parts.push(sf ? `主食(${sf})${sw}` : `主食${sw}`);
+  }
+  if (df || dw) {
+    parts.push(df ? `副食(${df})${dw}` : `副食${dw}`);
+  }
   return parts.join(' ');
+}
+
+/**
+ * @param {string} mealAmount
+ * @returns {{ mealStaple: string; mealSide: string; mealStapleForm: string; mealSideForm: string }}
+ */
+export function parseMealLogFields(mealAmount) {
+  const s = String(mealAmount ?? '').trim();
+  if (!s) {
+    return { mealStaple: '', mealSide: '', mealStapleForm: '', mealSideForm: '' };
+  }
+  const staple = s.match(/主食(?:\(([^)]+)\))?(\d{1,2}割)?/u);
+  const side = s.match(/副食(?:\(([^)]+)\))?(\d{1,2}割)?/u);
+  return {
+    mealStapleForm: String(staple?.[1] ?? '').trim(),
+    mealStaple: String(staple?.[2] ?? '').trim(),
+    mealSideForm: String(side?.[1] ?? '').trim(),
+    mealSide: String(side?.[2] ?? '').trim(),
+  };
+}
+
+/**
+ * 発注集計: 対象区分の食事形態を解決（入力中＞保存済み）
+ * @param {object} row 一覧表の行
+ * @param {string} slot 朝・昼・夜
+ * @param {string} savedMealAmount 保存済み mealAmount
+ */
+export function resolveMealFormsForSlot(row, slot, savedMealAmount = '') {
+  const rowSlot = String(row?.mealSlot ?? '').trim() || slot;
+  const draftApplies = rowSlot === slot;
+  const parsed = parseMealLogFields(savedMealAmount);
+  return {
+    mealStapleForm: draftApplies ? String(row?.mealStapleForm ?? '').trim() || parsed.mealStapleForm : parsed.mealStapleForm,
+    mealStaple: draftApplies ? String(row?.mealStaple ?? '').trim() || parsed.mealStaple : parsed.mealStaple,
+    mealSideForm: draftApplies ? String(row?.mealSideForm ?? '').trim() || parsed.mealSideForm : parsed.mealSideForm,
+    mealSide: draftApplies ? String(row?.mealSide ?? '').trim() || parsed.mealSide : parsed.mealSide,
+  };
+}
+
+/** 欠食（0割）なら発注カウントから除外 */
+export function mealWariCountsForOrder(wari) {
+  return String(wari ?? '').trim() !== '0割';
+}
+
+/**
+ * @param {Record<string, unknown>[]} residents
+ * @param {Record<string, object>} bulkDraft
+ * @param {string} slot
+ * @param {Record<string, Record<string, string>>} savedByResident
+ * @param {(name: unknown) => string} nameFmt
+ */
+export function countMealOrdersForSlot(residents, bulkDraft, slot, savedByResident, nameFmt) {
+  const regular = [];
+  const mousse = [];
+  for (const res of residents) {
+    const id = String(res.id);
+    const row = bulkDraft[id] ?? {};
+    const saved = String(savedByResident?.[id]?.[slot] ?? '').trim();
+    const forms = resolveMealFormsForSlot(row, slot, saved);
+    const nm = nameFmt(res.name);
+    if (forms.mealStapleForm === '普通食' && mealWariCountsForOrder(forms.mealStaple)) {
+      regular.push({ id, name: nm, room: String(res.room ?? '') });
+    }
+    if (forms.mealSideForm === 'ムース' && mealWariCountsForOrder(forms.mealSide)) {
+      mousse.push({ id, name: nm, room: String(res.room ?? '') });
+    }
+  }
+  return { regular, mousse };
 }
 
 /**
@@ -46,19 +163,19 @@ export function composeMealAmountForLog(staple, side) {
  * @param {string} [globalMealSlot] 一覧の共通「朝・昼・夜」が行に未反映のときの補正
  * @returns {'none' | 'fluid_intake' | 'meal'}
  */
-export function getQuickCareMealEventKind(row, globalMealSlot = '') {
+export function getQuickCareMealEventKind(row, _globalMealSlot = '') {
   const meal = Boolean(row?.meal);
-  const mealSlot = String(row?.mealSlot ?? globalMealSlot ?? '').trim();
-  const composed = composeMealAmountForLog(row?.mealStaple, row?.mealSide);
-  const ensureLine = composeEnsureLine(row?.ensurePortion);
+  const composed = composeMealAmountForLog(row?.mealStaple, row?.mealSide, row?.mealStapleForm, row?.mealSideForm);
+  const supplementLine = composeOralSupplementLines(row?.ensurePortion, row?.solitaPortion);
   const extras = String(row?.mealExtras ?? '').trim();
-  const ma = composed || String(row?.mealAmount ?? '').trim() || ensureLine || extras;
+  const hasForm = String(row?.mealStapleForm ?? '').trim() || String(row?.mealSideForm ?? '').trim();
+  const ma = composed || String(row?.mealAmount ?? '').trim() || supplementLine || extras;
   const wm = String(row?.waterMl ?? '').trim();
   const med = row?.medicationTaken === 'yes' ? row.medicationTaken : '';
-  const waterOnly = Boolean(wm && !ma && !med && !meal);
+  const hasMealBody = Boolean(ma || hasForm || med || meal);
+  const waterOnly = Boolean(wm && !hasMealBody);
   if (waterOnly) return 'fluid_intake';
-  if (mealSlot || ma || wm || med) return 'meal';
-  if (meal) return 'meal';
+  if (hasMealBody || wm) return 'meal';
   return 'none';
 }
 
@@ -140,17 +257,14 @@ export function parseVoiceToMealWari(text) {
   return '';
 }
 
-/** 一覧表・個人カードの水分量（50ml刻み） */
-export const WATER_ML_50_OPTIONS = Object.freeze(
-  (() => {
-    /** @type {{ value: string; label: string }[]} */
-    const out = [{ value: '', label: '—' }];
-    for (let ml = 50; ml <= 1000; ml += 50) {
-      out.push({ value: String(ml), label: `${ml}ml` });
-    }
-    return out;
-  })()
-);
+/** 一覧表・個人カードの水分量（50〜500ml、項目を絞り込み） */
+export const WATER_ML_50_OPTIONS = Object.freeze([
+  { value: '', label: '—' },
+  ...[50, 100, 150, 200, 250, 300, 400, 500].map((ml) => ({
+    value: String(ml),
+    label: `${ml}ml`,
+  })),
+]);
 
 /** 水分 ml 用（数字を拾う） */
 export function parseVoiceToWaterMl(text) {

@@ -12,6 +12,10 @@ export function normalizePersonNameForMatch(raw) {
   s = s
     .replace(/様\s*$/u, '')
     .replace(/さん\s*$/u, '')
+    .replace(/[（(][^）)]*[）)]/gu, '')
+    .replace(/[※＊*]+/gu, '')
+    .replace(/^[\s※＊*]*\d{1,4}[A-Za-z]?[\s\u3000]+/u, '')
+    .replace(/[\s\u3000]+\d{1,4}[A-Za-z]?[\s]*$/u, '')
     .replace(/[\s\u3000\t]+/g, ' ')
     .trim();
   return s;
@@ -74,6 +78,131 @@ function namesLikelySame(aKey, bKey) {
   if (aKey.length < 3 || bKey.length < 3) return false;
   if (aKey.includes(bKey) || bKey.includes(aKey)) return true;
   return false;
+}
+
+function namesLikelySameLoose(aKey, bKey) {
+  if (!aKey || !bKey) return false;
+  if (aKey === bKey) return true;
+  if (aKey.length >= 2 && bKey.length >= 2 && (aKey.includes(bKey) || bKey.includes(aKey))) return true;
+  return namesLikelySame(aKey, bKey);
+}
+
+/** 同一文字数で漢字1文字だけ違う（OCR・旧字体など） */
+function oneKanjiVariantDiff(a, b) {
+  if (a.length !== b.length || a.length < 4) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) diff++;
+    if (diff > 1) return false;
+  }
+  return diff === 1;
+}
+
+/** 往診カレンダーPDFなどから取った氏名の表記ゆれを広めに許容 */
+function expandHomeVisitNameVariants(raw) {
+  const s = String(raw ?? '').trim();
+  /** @type {string[]} */
+  const out = [];
+  const add = (x) => {
+    const t = String(x ?? '').trim();
+    if (!t || out.includes(t)) return;
+    out.push(t);
+  };
+  add(s);
+  add(s.replace(/[（(][^）)]*[）)]/gu, '').replace(/\s+/g, ' ').trim());
+  add(s.replace(/^[\s※＊*]*\d{1,4}[A-Za-z]?[\s\u3000]*/u, '').trim());
+  add(s.replace(/[\s\u3000]+\d{1,4}[A-Za-z]?[\s※＊*]*$/u, '').trim());
+  let t = s.replace(/[（(][^）)]*[）)]/gu, '').trim();
+  t = t.replace(/^[\s※＊*]*\d{1,4}[A-Za-z]?[\s\u3000]*/u, '').trim();
+  add(t);
+  const n = normalizePersonNameForMatch(s);
+  const parts = n.split(/\s+/).filter(Boolean);
+  if (parts.length === 2) {
+    add(`${parts[1]} ${parts[0]}`);
+    add(`${parts[1]}${parts[0]}`);
+  }
+  return out;
+}
+
+/**
+ * @param {Record<string, unknown>[]} residents
+ * @param {string} rawName
+ * @returns {Record<string, unknown> | null}
+ */
+function findResidentByUniqueLooseName(residents, rawName) {
+  const targetKey = personNameMatchKey(rawName);
+  if (!targetKey || targetKey.length < 2) return null;
+
+  /** @type {Record<string, unknown>[]} */
+  const hits = [];
+  for (const res of residents) {
+    const fields = [res.name, res.kana, res.nameKana, res.namePhonetic];
+    let matched = false;
+    for (const raw of fields) {
+      const nk = personNameMatchKey(String(raw ?? ''));
+      if (!nk) continue;
+      if (
+        nk === targetKey ||
+        namesLikelySameLoose(targetKey, nk) ||
+        oneKanjiVariantDiff(targetKey, nk)
+      ) {
+        matched = true;
+        break;
+      }
+      if (targetKey.length >= 2 && nk.includes(targetKey)) {
+        matched = true;
+        break;
+      }
+      if (nk.length >= 3 && targetKey.includes(nk)) {
+        matched = true;
+        break;
+      }
+    }
+    if (matched) hits.push(res);
+  }
+
+  const uniq = [];
+  const seen = new Set();
+  for (const r of hits) {
+    const id = String(r.id ?? '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    uniq.push(r);
+  }
+  if (uniq.length === 1) return uniq[0];
+
+  if (targetKey.length >= 2 && targetKey.length <= 6) {
+    const bySuffix = residents.filter((r) => {
+      const nk = personNameMatchKey(String(r.name ?? ''));
+      return nk && (nk.endsWith(targetKey) || nk.startsWith(targetKey));
+    });
+    const deduped = [];
+    const seen2 = new Set();
+    for (const r of bySuffix) {
+      const id = String(r.id ?? '');
+      if (!id || seen2.has(id)) continue;
+      seen2.add(id);
+      deduped.push(r);
+    }
+    if (deduped.length === 1) return deduped[0];
+  }
+
+  return null;
+}
+
+/**
+ * 往診カレンダーPDFの氏名 → 名簿（括弧・居室番号・姓のみ・1文字OCR差）
+ * @param {Record<string, unknown>[]} residents
+ * @param {string} rawName
+ * @returns {Record<string, unknown> | null}
+ */
+export function findResidentForHomeVisitCalendarName(residents, rawName) {
+  const list = Array.isArray(residents) ? residents : [];
+  for (const v of expandHomeVisitNameVariants(rawName)) {
+    const hit = findResidentByPersonNameCandidates(list, buildPersonNameMatchCandidates(v));
+    if (hit) return hit;
+  }
+  return findResidentByUniqueLooseName(list, rawName);
 }
 
 /**

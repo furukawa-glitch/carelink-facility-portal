@@ -4,7 +4,7 @@
  */
 
 import { getSupabaseBrowserClient } from './supabaseClient.js';
-import { isCareCloudSyncConfigured, pullCareEventsCloudSync } from './careEventsSupabaseSync.js';
+import { isCareCloudSyncConfigured, pullAndApplyCareEventsCloud } from './careEventsSupabaseSync.js';
 
 export const CARE_EVENTS_SYNC_EVENT = 'carelink-care-events-sync';
 
@@ -29,7 +29,7 @@ async function pullAndNotify(onApplied) {
   if (pulling) return;
   pulling = true;
   try {
-    const result = await pullCareEventsCloudSync();
+    const result = await pullAndApplyCareEventsCloud();
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(CARE_EVENTS_SYNC_EVENT, { detail: result }));
     }

@@ -4,6 +4,7 @@ import * as Report from '../services/ReportService.js';
 import { facilityDefBySheetTitle } from '../config/carelinkFacilities.js';
 import { addMoveInOutLog } from '../services/moveInOutLogService.js';
 import { ResidentInfoProvisionModal } from './ResidentInfoProvisionModal.jsx';
+import { timingBadgeLabels } from '../lib/pharmacyMedicineFormat.js';
 
 function nameNoSama(nameRaw) {
   return String(nameRaw ?? '')
@@ -167,7 +168,12 @@ export function ResidentAdministrativeModals({ overlay, onClose, resident, porta
 
   if (overlay === 'med') {
     const prof = Report.getResidentMedicationProfile(rid);
-    const meds = prof && Array.isArray(prof.medicines) ? prof.medicines : [];
+    const medicineItems =
+      prof && Array.isArray(prof.medicineItems) && prof.medicineItems.length
+        ? prof.medicineItems
+        : prof && Array.isArray(prof.medicines)
+          ? prof.medicines.map((name) => ({ name: String(name ?? ''), timing: '' }))
+          : [];
     const dispensedOn = String(prof?.dispensedOn ?? '').trim();
     const sourceFiles = prof && Array.isArray(prof.sourceFiles) ? prof.sourceFiles : [];
     return (
@@ -194,18 +200,47 @@ export function ResidentAdministrativeModals({ overlay, onClose, resident, porta
             <div>調剤日: {dispensedOn || '—'}</div>
             <div className="mt-1">取り込み元PDF: {sourceFiles.join(' / ') || '—'}</div>
           </div>
-          {meds.length === 0 ? (
+          {medicineItems.length === 0 ? (
             <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-bold text-slate-700">
               まだデータがありません。利用者一覧に戻り、画面上部の「薬局PDF」からお薬説明書を取り込んでください。
             </p>
           ) : (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-2">
               <ul className="max-h-[52vh] space-y-1.5 overflow-y-auto">
-                {meds.map((m, i) => (
-                  <li key={`${i}-${m}`} className="rounded-lg bg-white px-3 py-2 text-sm font-bold text-slate-900">
-                    {m}
-                  </li>
-                ))}
+                {medicineItems.map((row, i) => {
+                  const name = String(row?.name ?? '').trim();
+                  const timing = String(row?.timing ?? '').trim();
+                  const badges = timingBadgeLabels(timing);
+                  const badgeClass = (label) => {
+                    if (label === '朝') return 'bg-amber-100 text-amber-900 border-amber-300';
+                    if (label === '昼') return 'bg-sky-100 text-sky-900 border-sky-300';
+                    if (label === '夕') return 'bg-orange-100 text-orange-900 border-orange-300';
+                    if (label === '就寝') return 'bg-indigo-100 text-indigo-900 border-indigo-300';
+                    return 'bg-slate-100 text-slate-800 border-slate-300';
+                  };
+                  return (
+                    <li key={`${i}-${name}-${timing}`} className="rounded-lg bg-white px-3 py-2">
+                      <div className="text-sm font-bold text-slate-900">{name}</div>
+                      {timing ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                          {badges.map((b) => (
+                            <span
+                              key={b}
+                              className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] font-black ${badgeClass(b)}`}
+                            >
+                              {b}
+                            </span>
+                          ))}
+                          {badges.length === 1 && badges[0] === timing ? null : (
+                            <span className="text-[10px] font-bold text-slate-500">{timing}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-1 text-[10px] font-bold text-slate-400">服用時刻: PDFに記載なし（再取込で反映される場合あり）</p>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

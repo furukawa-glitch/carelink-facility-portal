@@ -1,12 +1,15 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { Mic, PenLine, Table2 } from 'lucide-react';
 import {
   HOURLY_URINE_OPTIONS,
   STOOL_VOLUME_OPTIONS,
   STOOL_CHARACTER_OPTIONS,
   MEAL_WARI_OPTIONS,
+  MEAL_STAPLE_FORM_OPTIONS,
+  MEAL_SIDE_FORM_OPTIONS,
   ENSURE_PORTION_OPTIONS,
   WATER_ML_50_OPTIONS,
+  countMealOrdersForSlot,
   parseHourlyStoolCellValue,
   getQuickCareMealEventKind,
   mapVoiceCareExtractToBulkRowPatch,
@@ -33,13 +36,16 @@ const DEFAULT_ROW = {
   stoolVolume: '',
   stoolCharacter: '',
   mealSlot: '',
+  mealStapleForm: '',
   mealStaple: '',
+  mealSideForm: '',
   mealSide: '',
   mealAmount: '',
   waterMl: '',
   medicationTaken: '',
   toiletGuidance: false,
   ensurePortion: '',
+  solitaPortion: '',
   enteralMenu: '',
   mealExtras: '',
   hourPatrol: null,
@@ -53,7 +59,13 @@ const HOURLY_STOOL_DELIM = '\t';
 function fmtMeasuredAtJa(isoLike) {
   const t = new Date(String(isoLike ?? ''));
   if (!Number.isFinite(t.getTime())) return '';
-  return t.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return t.toLocaleString('ja-JP', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
 function fmtVitalFrontLabelFromMeta(meta) {
@@ -119,6 +131,7 @@ function emptySavedHourly() {
  *   onBulkSheetDateChange: (ymd: string) => void;
  *   hourlySavedByResident: Record<string, { patrol: boolean[]; urine: boolean[]; stool: boolean[] }>;
  *   bulkMealSummaryByResident: Record<string, { 朝?: string; 昼?: string; 夜?: string }>;
+ *   bulkUrineDetailByResident: Record<string, { hourly: { codes: string[]; mls: string[] }; totalMl: number }>;
  *   residentNameWithoutSama: (nameRaw: unknown) => string;
  *   patchBulkRow: (id: string, patch: Partial<typeof DEFAULT_ROW>) => void;
  *   setBulkPatrolForAllVisible: (checked: boolean) => void;
@@ -139,6 +152,7 @@ export function ResidentBulkInputTable({
   onBulkSheetDateChange,
   hourlySavedByResident,
   bulkMealSummaryByResident,
+  bulkUrineDetailByResident = {},
   residentNameWithoutSama,
   patchBulkRow,
   setBulkPatrolForAllVisible,
@@ -194,12 +208,26 @@ export function ResidentBulkInputTable({
     scroller.scrollTo({ left: targetLeft, behavior: 'smooth' });
   }, []);
 
+  const [orderDetail, setOrderDetail] = useState(/** @type {null | 'regular' | 'mousse'} */ (null));
+
+  const mealOrderCounts = useMemo(
+    () =>
+      countMealOrdersForSlot(
+        filteredResidents,
+        bulkDraft,
+        bulkGlobalMealSlot,
+        bulkMealSummaryByResident,
+        residentNameWithoutSama
+      ),
+    [filteredResidents, bulkDraft, bulkGlobalMealSlot, bulkMealSummaryByResident, residentNameWithoutSama]
+  );
+
   return (
     <div className="min-w-0 pb-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-base font-black text-emerald-800">
           <Table2 className="h-4 w-4 shrink-0" aria-hidden />
-          バイタル・体重（月1回）・巡視・排尿・排便・食事（朝昼夜）・エンシュア・経管メニュー・間食など・水分・内服を一覧から
+          バイタル・体重（月1回）・巡視・排尿・排便・食事（朝昼夜）・エンシュア・ソリタ・経管メニュー・間食など・水分・内服を一覧から
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
           <button
@@ -268,9 +296,9 @@ export function ResidentBulkInputTable({
         </div>
       </div>
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
-        下の表では<strong>主食・副食の割</strong>だけ行ごとに入力します（食事区分は上で統一）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。
-        <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>は割合を選ぶと食事メモに残ります。
-        <strong className="text-slate-700"> 経管メニュー</strong>は経管実施ログ（算定・記録用の件数にも含まれます）。<strong>間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。
+        下の表では<strong>食事形態（主食・副食）</strong>と<strong>摂取割</strong>を行ごとに入力します（食事区分は上で統一）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。
+        <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>・<strong>ソリタ</strong>は割合を選ぶと食事メモに残ります（例: エンシュア1/2 ソリタ1/3）。
+        <strong className="text-slate-700"> 経管メニュー</strong>は経管実施ログ（算定・記録用の件数にも含まれます）。<strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。
         <span className="ml-1 text-slate-700">横移動は上の「← 左へ / 右へ →」か、Shift+ホイールでも可能です。</span>
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-amber-50 px-3 py-2.5 shadow-sm">
@@ -284,6 +312,7 @@ export function ResidentBulkInputTable({
                 type="button"
                 onClick={() => {
                   onBulkGlobalMealSlotChange(slot);
+                  setOrderDetail(null);
                   requestAnimationFrame(() => scrollToMealInputs());
                 }}
                 className={`min-w-[3.5rem] rounded-xl border-2 px-4 py-2 text-sm font-black transition sm:min-w-[4rem] sm:px-5 sm:text-base ${
@@ -297,7 +326,43 @@ export function ResidentBulkInputTable({
             );
           })}
         </div>
+        <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto" role="group" aria-label="食事発注集計">
+          <span className="text-xs font-black text-orange-900">発注（{bulkGlobalMealSlot || '—'}）</span>
+          {[
+            { key: 'regular', label: '普通食', count: mealOrderCounts.regular.length, cls: 'border-emerald-600 bg-emerald-50 text-emerald-950 hover:bg-emerald-100' },
+            { key: 'mousse', label: 'ムース', count: mealOrderCounts.mousse.length, cls: 'border-pink-600 bg-pink-50 text-pink-950 hover:bg-pink-100' },
+          ].map(({ key, label, count, cls }) => {
+            const active = orderDetail === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setOrderDetail((prev) => (prev === key ? null : /** @type {'regular'|'mousse'} */ (key)))}
+                className={`rounded-xl border-2 px-3 py-2 text-xs font-black transition sm:text-sm ${cls} ${
+                  active ? 'ring-2 ring-orange-400 shadow-md' : ''
+                }`}
+                title={`${label}の人数と内訳を表示（主食普通食／副食ムース）`}
+              >
+                {label} <span className="font-mono text-base">{count}</span>名
+              </button>
+            );
+          })}
+        </div>
       </div>
+      {orderDetail ? (
+        <div className="mb-3 rounded-xl border-2 border-orange-200 bg-white px-3 py-2 shadow-sm">
+          <p className="mb-1 text-xs font-black text-orange-950">
+            {orderDetail === 'regular' ? '普通食（主食）' : 'ムース（副食）'} — {bulkGlobalMealSlot} の内訳（0割は除く）
+          </p>
+          <p className="text-sm font-bold leading-relaxed text-slate-800">
+            {(orderDetail === 'regular' ? mealOrderCounts.regular : mealOrderCounts.mousse).length === 0
+              ? '該当者なし（食事形態を選ぶか、保存済みデータを確認してください）'
+              : (orderDetail === 'regular' ? mealOrderCounts.regular : mealOrderCounts.mousse)
+                  .map((p) => `${p.room ? `${p.room} ` : ''}${p.name}`)
+                  .join('、')}
+          </p>
+        </div>
+      ) : null}
       <div className="mb-3 flex flex-wrap items-center gap-3 rounded-2xl border-2 border-cyan-300 bg-gradient-to-r from-cyan-50 to-sky-50 px-3 py-2.5 shadow-sm">
         <label className="flex flex-wrap items-center gap-2 text-sm font-black text-cyan-950 sm:text-base">
           24時間表・時間別ログの日付
@@ -333,7 +398,7 @@ export function ResidentBulkInputTable({
           })}
         </div>
         <p className="max-w-xl text-xs font-bold leading-snug text-cyan-900 sm:text-sm">
-          日付は<strong>日本時間の暦日</strong>で集計します。保存済みの記録は日付を変えると<strong>自動で読み込み</strong>ます（バイタル・食事・巡視・尿便すべて）。巡視マスは<strong>チェック</strong>で入力（未保存は水色・保存済みは濃い緑・空は白の点線枠）。
+          日付は<strong>日本時間の暦日</strong>で集計します。<strong>今日</strong>の食事入力欄は空から始まり、保存済みは各行の<strong>朝・昼・夜プレビュー</strong>に表示されます（昨日以前を選ぶとその日の記録を入力欄に読み込みます）。巡視マスは<strong>チェック</strong>で入力（未保存は水色・保存済みは濃い緑・空は白の点線枠）。
         </p>
       </div>
       <div
@@ -364,7 +429,9 @@ export function ResidentBulkInputTable({
               <th className="border border-slate-200 bg-orange-50/70 px-0.5 py-1 whitespace-nowrap text-orange-900">食事</th>
               <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
               <th className="border border-slate-200 bg-violet-50/70 px-0.5 py-1 whitespace-nowrap text-violet-900">内服</th>
-              <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">尿回数</th>
+              <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900" title="排尿回数と一日の尿量合計（ml）">
+                尿回数<span className="block text-[9px] font-bold normal-case">／日計ml</span>
+              </th>
               <th className="border border-slate-200 bg-amber-50/70 px-0.5 py-1 whitespace-nowrap text-amber-900">便回数</th>
               <th className="border border-slate-200 bg-slate-50 px-0 py-0 text-center align-bottom">
                 <div className="min-w-[28.5rem] px-0.5 py-1">
@@ -411,11 +478,18 @@ export function ResidentBulkInputTable({
               <th
                 ref={mealInputHeaderRef}
                 className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950"
+                title="主食の食事形態"
+              >
+                主食形態
+              </th>
+              <th
+                className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950"
                 title="上の「朝・昼・夜」が保存時に入ります"
               >
-                主食<span className="block text-[9px] font-bold normal-case">（区分は上）</span>
+                主食割<span className="block text-[9px] font-bold normal-case">（区分は上）</span>
               </th>
-              <th className="border border-slate-200 px-0.5 py-1">副食</th>
+              <th className="border border-slate-200 px-0.5 py-1 whitespace-nowrap">副食形態</th>
+              <th className="border border-slate-200 px-0.5 py-1">副食割</th>
               <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
               <th className="border border-slate-200 bg-violet-50/70 px-0.5 py-1 whitespace-nowrap text-violet-900">内服</th>
               <th
@@ -423,6 +497,12 @@ export function ResidentBulkInputTable({
                 title="経口栄養（例: エンシュア）摂取割合"
               >
                 エンシュア等
+              </th>
+              <th
+                className="border border-slate-200 bg-teal-50 px-0.5 py-1 whitespace-nowrap text-teal-950"
+                title="ソリタ（経口補助栄養）の摂取割合。食事メモに残ります"
+              >
+                ソリタ<span className="block text-[9px] font-bold normal-case">割合</span>
               </th>
               <th
                 className="border border-slate-200 bg-violet-950/10 px-0.5 py-1 whitespace-nowrap text-violet-950"
@@ -458,7 +538,18 @@ export function ResidentBulkInputTable({
               const hu = ensureHour24Str(row.hourUrine);
               const hum = ensureHour24Str(row.hourUrineMl);
               const hs = ensureHour24Str(row.hourStool);
-              const urineCount = hu.filter((v) => String(v ?? '').trim() !== '').length + (String(row.urineVolume ?? '').trim() ? 1 : 0);
+              const urineDetail = bulkUrineDetailByResident[id] ?? { hourly: { codes: [], mls: [] }, totalMl: 0 };
+              const urineSavedCodes = urineDetail.hourly?.codes ?? [];
+              const urineSavedMls = urineDetail.hourly?.mls ?? [];
+              const dayUrineMl = Number(urineDetail.totalMl ?? 0) || 0;
+              let urineCount = 0;
+              for (let uh = 0; uh < 24; uh++) {
+                const savedCode = String(urineSavedCodes[uh] ?? '').trim();
+                const draftCode = String(hu[uh] ?? '').trim();
+                const hourSaved = Boolean(hourlySaved.urine[uh]);
+                if (savedCode || (!hourSaved && draftCode)) urineCount++;
+              }
+              if (String(row.urineVolume ?? '').trim()) urineCount++;
               const stoolCount =
                 hs.filter((v) => String(v ?? '').trim() !== '').length +
                 (String(row.stoolVolume ?? '').trim() || String(row.stoolCharacter ?? '').trim() ? 1 : 0);
@@ -477,16 +568,25 @@ export function ResidentBulkInputTable({
                 .join(' ・ ');
               const vitalFrontLabel = vitalDraftLabel || vitalSavedLabel;
               const mealSlotLabel = String(row.mealSlot ?? '').trim() || String(bulkGlobalMealSlot ?? '').trim();
+              const staplePart = [String(row.mealStapleForm ?? '').trim(), String(row.mealStaple ?? '').trim()]
+                .filter(Boolean)
+                .join('');
+              const sidePart = [String(row.mealSideForm ?? '').trim(), String(row.mealSide ?? '').trim()]
+                .filter(Boolean)
+                .join('');
               const mealMainLabel = [
-                String(row.mealStaple ?? '').trim() ? `主${String(row.mealStaple).trim()}` : '',
-                String(row.mealSide ?? '').trim() ? `副${String(row.mealSide).trim()}` : '',
+                staplePart ? `主${staplePart}` : '',
+                sidePart ? `副${sidePart}` : '',
               ]
                 .filter(Boolean)
                 .join(' ');
               const mealFallback = String(row.mealAmount ?? '').trim();
               const ensureLabel = String(row.ensurePortion ?? '').trim() ? `エンシュア${String(row.ensurePortion).trim()}` : '';
+              const solitaLabel = String(row.solitaPortion ?? '').trim() ? `ソリタ${String(row.solitaPortion).trim()}` : '';
               const extrasLabel = String(row.mealExtras ?? '').trim();
-              const draftMealLabel = [mealMainLabel || mealFallback, ensureLabel, extrasLabel].filter(Boolean).join(' ');
+              const draftMealLabel = [mealMainLabel || mealFallback, ensureLabel, solitaLabel, extrasLabel]
+                .filter(Boolean)
+                .join(' ');
               const savedMealSlots = bulkMealSummaryByResident[id] ?? {};
               const mealFrontBySlot = {
                 朝: String(savedMealSlots['朝'] ?? '').trim() || '—',
@@ -571,7 +671,8 @@ export function ResidentBulkInputTable({
                     {row.medicationTaken === 'yes' ? '済' : row.medicationTaken === 'no' ? '未' : '—'}
                   </td>
                   <td className="border border-slate-200 bg-sky-50/50 px-1 py-1 text-center font-mono text-[11px] font-bold text-sky-900 sm:text-xs">
-                    {urineCount}
+                    <div>{urineCount}</div>
+                    {dayUrineMl > 0 ? <div className="text-[9px] font-black text-sky-700">{dayUrineMl}ml</div> : null}
                   </td>
                   <td className="border border-slate-200 bg-amber-50/50 px-1 py-1 text-center font-mono text-[11px] font-bold text-amber-900 sm:text-xs">
                     {stoolCount}
@@ -598,9 +699,12 @@ export function ResidentBulkInputTable({
                                   : isStoolChar
                                     ? stoolParts.char
                                     : String(hr.arr[h] ?? '');
+                              const savedUrineCode = isUrine ? String(urineSavedCodes[h] ?? '').trim() : '';
+                              const savedUrineMl = isUrine ? String(urineSavedMls[h] ?? '').trim() : '';
+                              const urineDisplayCell = isUrine && saved ? savedUrineCode || cell : cell;
                               const draftPatrolOn = isPatrol && hr.arr[h] === true;
-                              const filled = isPatrol ? saved || draftPatrolOn : saved || Boolean(cell);
-                              const urineNeedsMl = isUrine && (cell === 'カテ' || cell === 'Ba' || cell === '尿測');
+                              const filled = isPatrol ? saved || draftPatrolOn : saved || Boolean(isUrine ? urineDisplayCell || savedUrineMl : cell);
+                              const urineNeedsMl = isUrine && (urineDisplayCell === 'カテ' || urineDisplayCell === 'Ba' || urineDisplayCell === '尿測');
                               return (
                                 <td key={`${hr.key}-${h}`} className={`border border-slate-300 p-0 text-center ${hr.tdBg}`}>
                                   {isPatrol ? (
@@ -641,6 +745,15 @@ export function ResidentBulkInputTable({
                                       />
                                     </label>
                                   ) : isUrine ? (
+                                    saved ? (
+                                      <div
+                                        className="flex min-h-[1.4rem] flex-col justify-center px-0 py-0.5 text-[8px] font-black leading-tight text-slate-900"
+                                        title="保存済み"
+                                      >
+                                        <span>{savedUrineCode || '—'}</span>
+                                        {savedUrineMl ? <span className="text-sky-800">{savedUrineMl}ml</span> : null}
+                                      </div>
+                                    ) : (
                                     <div className="flex min-h-[1.4rem] flex-col">
                                       <select
                                         disabled={saved}
@@ -678,6 +791,7 @@ export function ResidentBulkInputTable({
                                         />
                                       ) : null}
                                     </div>
+                                    )
                                   ) : (
                                     <select
                                       disabled={saved}
@@ -878,10 +992,24 @@ export function ResidentBulkInputTable({
                   ) : null}
                   <td className="border border-slate-200 bg-orange-50/40 p-0">
                     <select
+                      value={row.mealStapleForm}
+                      onChange={(e) => patchBulkRow(id, { mealStapleForm: e.target.value })}
+                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-xs font-bold sm:text-sm"
+                      aria-label={`${nm} 主食形態`}
+                    >
+                      {MEAL_STAPLE_FORM_OPTIONS.map((opt) => (
+                        <option key={opt || 'sf-empty'} value={opt}>
+                          {opt || '—'}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="border border-slate-200 bg-orange-50/30 p-0">
+                    <select
                       value={row.mealStaple}
                       onChange={(e) => patchBulkRow(id, { mealStaple: e.target.value })}
                       className="w-full min-w-[3.25rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 主食`}
+                      aria-label={`${nm} 主食割`}
                     >
                       {MEAL_WARI_OPTIONS.map((opt) => (
                         <option key={opt || 'st-empty'} value={opt}>
@@ -892,10 +1020,24 @@ export function ResidentBulkInputTable({
                   </td>
                   <td className="border border-slate-200 p-0">
                     <select
+                      value={row.mealSideForm}
+                      onChange={(e) => patchBulkRow(id, { mealSideForm: e.target.value })}
+                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-xs font-bold sm:text-sm"
+                      aria-label={`${nm} 副食形態`}
+                    >
+                      {MEAL_SIDE_FORM_OPTIONS.map((opt) => (
+                        <option key={opt || 'df-empty'} value={opt}>
+                          {opt || '—'}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="border border-slate-200 p-0">
+                    <select
                       value={row.mealSide}
                       onChange={(e) => patchBulkRow(id, { mealSide: e.target.value })}
                       className="w-full min-w-[3.25rem] bg-white px-1 py-1.5 text-sm font-bold sm:text-base"
-                      aria-label={`${nm} 副食`}
+                      aria-label={`${nm} 副食割`}
                     >
                       {MEAL_WARI_OPTIONS.map((opt) => (
                         <option key={`${opt}-side`} value={opt}>
@@ -937,6 +1079,20 @@ export function ResidentBulkInputTable({
                     >
                       {ENSURE_PORTION_OPTIONS.map((opt) => (
                         <option key={opt || 'ens-empty'} value={opt}>
+                          {opt === '' ? '—' : opt === '1缶' ? '1缶（全量）' : `${opt} 相当`}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="border border-slate-200 bg-teal-50/50 p-0">
+                    <select
+                      value={String(row.solitaPortion ?? '')}
+                      onChange={(e) => patchBulkRow(id, { solitaPortion: e.target.value })}
+                      className="w-full min-w-[4.5rem] bg-white px-1 py-1.5 text-xs font-bold text-teal-950 sm:text-sm"
+                      aria-label={`${nm} ソリタの摂取量`}
+                    >
+                      {ENSURE_PORTION_OPTIONS.map((opt) => (
+                        <option key={opt || 'sol-empty'} value={opt}>
                           {opt === '' ? '—' : opt === '1缶' ? '1缶（全量）' : `${opt} 相当`}
                         </option>
                       ))}

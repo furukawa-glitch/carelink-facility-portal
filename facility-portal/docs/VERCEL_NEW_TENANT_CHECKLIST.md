@@ -20,6 +20,7 @@
 
 ### 2.1 必ずこの会社用に揃えるもの（典型）
 
+- [ ] **生活記録クラウド同期（複数PCで記録を共有）** — `VITE_CARELINK_ORGANIZATION_ID`、`VITE_CARE_SYNC_SECRET`、`VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`、Vercel 側 `SUPABASE_SERVICE_ROLE_KEY` / `CARE_SYNC_SECRET`（`facility-portal/.env.example` 参照）。揃えれば**全PCで自動同期**（現場の手動送信・取得は不要）。未設定の間は各PCのブラウザのみ。
 - [ ] **利用者名簿** — `VITE_GOOGLE_SHEET_ID` / `VITE_GOOGLE_SHEET_GID`（必要なら `VITE_CSV_DEFAULT_SHEET_TITLE`）。
 - [ ] **部署別売上・経営シート** — `VITE_DEPARTMENT_SALES_SHEET_ID` 等、運用しているブック ID・タブ。
 - [ ] **HR・求人スプレッドシート** — `VITE_HR_SPREADSHEET_ID`（シフト・名簿連携を使う場合）。

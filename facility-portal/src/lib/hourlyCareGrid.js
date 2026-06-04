@@ -128,3 +128,86 @@ export function buildHourlyCareFromEvents(events, ymd) {
   }
   return { patrol, urine, stool };
 }
+
+const HOURLY_URINE_CODES = new Set(['トイレ', '尿器', '少量', '中量', '多量', 'Ba', '尿測', 'カテ']);
+
+/**
+ * @param {Record<string, unknown>} meta
+ * @returns {{ code: string; ml: string }}
+ */
+export function resolveHourlyUrineCodeAndMl(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const codeRaw = String(m.urineCode ?? '').trim();
+  const measured = String(m.measuredUrineMl ?? m.catheterMl ?? '').trim();
+  const uv = String(m.urineVolume ?? '').trim();
+  if (codeRaw) {
+    return { code: codeRaw, ml: measured || (/^\d+$/u.test(uv) ? uv : '') };
+  }
+  if (HOURLY_URINE_CODES.has(uv)) {
+    return { code: uv, ml: measured };
+  }
+  if (/^\d+$/u.test(uv)) {
+    return { code: measured ? 'カテ' : '', ml: uv };
+  }
+  return { code: uv === 'plain' ? '' : uv, ml: measured };
+}
+
+/** @param {{ meta?: Record<string, unknown> }} ev */
+export function measuredUrineMlFromEvent(ev) {
+  const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+  if (meta.autoUrineDailyTotal) return 0;
+  const measured = String(meta.measuredUrineMl ?? meta.catheterMl ?? '').trim();
+  if (/^\d+$/u.test(measured)) return parseInt(measured, 10);
+  const { ml } = resolveHourlyUrineCodeAndMl(meta);
+  if (/^\d+$/u.test(ml)) return parseInt(ml, 10);
+  const uv = String(meta.urineVolume ?? '').trim();
+  if (/^\d+$/u.test(uv)) return parseInt(uv, 10);
+  return 0;
+}
+
+/**
+ * 24時間表の尿列（コード・ml）をイベントから復元
+ * @param {Array<{ ts?: string; type?: string; meta?: Record<string, unknown> }>} events
+ * @param {string} ymd
+ */
+export function buildHourlyUrineCellsFromEvents(events, ymd) {
+  const codes = Array(24).fill('');
+  const mls = Array(24).fill('');
+  const day = String(ymd ?? '').trim();
+  if (!day) return { codes, mls };
+
+  for (const ev of events || []) {
+    if (tokyoYmdFromTs(ev?.ts) !== day) continue;
+    const h = tokyoHourFromTs(ev?.ts);
+    if (h < 0 || h > 23) continue;
+    const typ = String(ev?.type ?? '');
+    if (typ !== 'excretion' && typ !== 'hourly_excretion') continue;
+    const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+    const note = String(meta.note ?? '').trim();
+    const hourlyKind = String(meta.hourlyKind ?? '').trim();
+    if (hourlyKind !== 'urine' && !/排尿（\d{2}時）/u.test(note)) continue;
+    const { code, ml } = resolveHourlyUrineCodeAndMl(meta);
+    if (code) codes[h] = code;
+    else if (ml) codes[h] = 'カテ';
+    if (ml) mls[h] = ml;
+  }
+  return { codes, mls };
+}
+
+/**
+ * 対象日の尿量合計（ml）。23:59 自動日計イベントは二重計上しない。
+ * @param {Array<{ ts?: string; type?: string; meta?: Record<string, unknown> }>} events
+ * @param {string} ymd
+ */
+export function computeDailyUrineTotalMlFromEvents(events, ymd) {
+  const day = String(ymd ?? '').trim();
+  if (!day) return 0;
+  let total = 0;
+  for (const ev of events || []) {
+    if (tokyoYmdFromTs(ev?.ts) !== day) continue;
+    const typ = String(ev?.type ?? '');
+    if (typ !== 'hourly_excretion' && typ !== 'excretion') continue;
+    total += measuredUrineMlFromEvent(ev);
+  }
+  return total;
+}

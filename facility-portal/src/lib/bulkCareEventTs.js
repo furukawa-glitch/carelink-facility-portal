@@ -34,11 +34,18 @@ export function bulkCareEventTs(ymd, kind, opts = {}) {
   return tokyoDateHourToIso(day, defaultHour ?? 12);
 }
 
-/** ログ文字列「主食8割 副食7割」から一覧表列を復元 */
+/** ログ文字列から一覧表の食事列を復元（旧形式「主食8割」も可） */
 export function parseMealAmountFieldsFromLog(mealAmount) {
   const s = String(mealAmount ?? '').trim();
-  if (!s) return { mealStaple: '', mealSide: '' };
-  const staple = s.match(/主食(\d{1,2}割)/u)?.[1] ?? '';
-  const side = s.match(/副食(\d{1,2}割)/u)?.[1] ?? '';
-  return { mealStaple: staple, mealSide: side };
+  if (!s) {
+    return { mealStaple: '', mealSide: '', mealStapleForm: '', mealSideForm: '' };
+  }
+  const staple = s.match(/主食(?:\(([^)]+)\))?(\d{1,2}割)?/u);
+  const side = s.match(/副食(?:\(([^)]+)\))?(\d{1,2}割)?/u);
+  return {
+    mealStapleForm: String(staple?.[1] ?? '').trim(),
+    mealStaple: String(staple?.[2] ?? '').trim(),
+    mealSideForm: String(side?.[1] ?? '').trim(),
+    mealSide: String(side?.[2] ?? '').trim(),
+  };
 }

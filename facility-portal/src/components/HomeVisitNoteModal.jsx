@@ -21,6 +21,15 @@ import {
 } from '../lib/homeVisitNote.js';
 
 /**
+ * @typedef {{
+ *   visitDateYmd?: string;
+ *   residentIds?: string[];
+ *   doctor?: string;
+ *   visitType?: string;
+ * }} HomeVisitNoteLaunch
+ */
+
+/**
  * @param {{
  *   open: boolean;
  *   onClose: () => void;
@@ -30,6 +39,7 @@ import {
  *   sheetsApiKey?: string;
  *   residents: Record<string, unknown>[];
  *   nursingOfficeUi?: boolean;
+ *   launchContext?: HomeVisitNoteLaunch | null;
  * }} props
  */
 export function HomeVisitNoteModal({
@@ -41,6 +51,7 @@ export function HomeVisitNoteModal({
   sheetsApiKey = '',
   residents,
   nursingOfficeUi = false,
+  launchContext = null,
 }) {
   const [weekEndYmd, setWeekEndYmd] = useState(currentYmd);
   const [filterMode, setFilterMode] = useState(/** @type {'all' | 'visit_nursing'} */ ('all'));
@@ -66,35 +77,59 @@ export function HomeVisitNoteModal({
     return list.filter((r) => Report.residentHasVisitNursingSpecial(r));
   }, [residents, filterMode, nursingOfficeUi]);
 
-  const initRows = useCallback(() => {
-    const draft = loadHomeVisitNoteDraft(facilitySheetTitle);
-    if (draft?.weekEndYmd) setWeekEndYmd(String(draft.weekEndYmd));
-    if (draft?.facilityMemo != null) setFacilityMemo(String(draft.facilityMemo));
-    if (draft?.headerTitle != null) setHeaderTitle(String(draft.headerTitle));
-    if (draft?.filterMode === 'visit_nursing' || draft?.filterMode === 'all') {
-      setFilterMode(draft.filterMode);
-    }
-    const draftRows = Array.isArray(draft?.rows) ? draft.rows : null;
-    const byId = new Map((draftRows ?? []).map((r) => [String(r.residentId), r]));
-    const next = roster.map((res) => {
-      const id = String(res?.id ?? '').trim();
-      const saved = byId.get(id);
-      if (saved) {
-        return {
-          ...homeVisitRowFromResident(res, { included: saved.included !== false }),
-          ...saved,
-          residentId: id,
-        };
+  const initRows = useCallback(
+    (launch = null) => {
+      const fromVisit = launch && typeof launch === 'object';
+      let endYmd = currentYmd();
+
+      const draft = !fromVisit ? loadHomeVisitNoteDraft(facilitySheetTitle) : null;
+      if (!fromVisit && draft) {
+        if (draft.weekEndYmd) endYmd = String(draft.weekEndYmd);
+        if (draft.facilityMemo != null) setFacilityMemo(String(draft.facilityMemo));
+        if (draft.headerTitle != null) setHeaderTitle(String(draft.headerTitle));
+        if (draft.filterMode === 'visit_nursing' || draft.filterMode === 'all') {
+          setFilterMode(draft.filterMode);
+        }
+      } else if (fromVisit) {
+        endYmd = String(launch.visitDateYmd ?? '').slice(0, 10) || currentYmd();
+        const memoParts = [launch.doctor, launch.visitType].filter(Boolean);
+        setFacilityMemo(memoParts.length ? memoParts.join('・') : '');
       }
-      return homeVisitRowFromResident(res);
-    });
-    setRows(next);
-  }, [facilitySheetTitle, roster]);
+      setWeekEndYmd(endYmd);
+
+      const visitIdSet = fromVisit
+        ? new Set((launch.residentIds ?? []).map((id) => String(id).trim()).filter(Boolean))
+        : null;
+
+      const draftRows = !fromVisit && Array.isArray(draft?.rows) ? draft.rows : null;
+      const byId = new Map((draftRows ?? []).map((r) => [String(r.residentId), r]));
+
+      let next = roster.map((res) => {
+        const id = String(res?.id ?? '').trim();
+        if (fromVisit) {
+          const included = visitIdSet && visitIdSet.size > 0 ? visitIdSet.has(id) : true;
+          return homeVisitRowFromResident(res, { included });
+        }
+        const saved = byId.get(id);
+        if (saved) {
+          return {
+            ...homeVisitRowFromResident(res, { included: saved.included !== false }),
+            ...saved,
+            residentId: id,
+          };
+        }
+        return homeVisitRowFromResident(res);
+      });
+      next = applyLatestVitalsToHomeVisitRows(next, endYmd);
+      setRows(next);
+    },
+    [facilitySheetTitle, roster]
+  );
 
   useEffect(() => {
     if (!open) return;
-    initRows();
-  }, [open, initRows, filterMode]);
+    initRows(launchContext ?? null);
+  }, [open, initRows, filterMode, launchContext]);
 
   useEffect(() => {
     if (!open || !rows.length) return;
@@ -181,8 +216,13 @@ export function HomeVisitNoteModal({
           <div>
             <h2 id="home-visit-note-title" className="flex items-center gap-2 text-base font-black text-slate-900 sm:text-lg">
               <Stethoscope className="h-5 w-5 text-teal-700" aria-hidden />
-              往診ノート（週次）
+              {launchContext ? 'FAX用 往診ノート' : '往診ノート（週次）'}
             </h2>
+            {launchContext ? (
+              <p className="mt-0.5 text-[11px] font-bold text-violet-800">
+                往診予定から起動 — 対象者のみチェック済み・最新バイタル反映済み。印刷してFAX送付できます。
+              </p>
+            ) : null}
             <p className="mt-0.5 text-xs font-bold text-slate-600">
               {facilityLabel} ／{' '}
               {aisaiLayout ? toReiwaDateLabel(weekEndYmd) : `対象週: ${weekRangeLabelFromEndYmd(weekEndYmd)}`} ／ 出力{' '}

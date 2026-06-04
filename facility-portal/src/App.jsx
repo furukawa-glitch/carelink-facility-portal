@@ -55,7 +55,7 @@ import { vitalStateFromSaved, careStateFromTodayEvents } from './lib/residentDet
 import { residentDiseaseLabel } from './lib/residentDiseaseLabel.js';
 import { WATER_ML_50_OPTIONS } from './lib/careQuickCareFields.js';
 import { WeeklyFlowSheet } from './components/WeeklyFlowSheet.jsx';
-import { startCareEventsRealtimeSync } from './lib/careEventsRealtimeSync.js';
+import { startCareEventsAutoSync } from './lib/careEventsAutoSync.js';
 
 /** 施設向けの画面ロック。未設定のときはロックなし。設定時は全画面の前にパスワード必須。 */
 const VITE_FACILITY_PORTAL_PASSWORD = String(
@@ -1163,8 +1163,12 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    return startCareEventsRealtimeSync((result) => {
-      if (Number(result?.merged ?? 0) > 0 || Number(result?.pulled ?? 0) > 0) {
+    return startCareEventsAutoSync((result) => {
+      if (
+        Number(result?.merged ?? 0) > 0 ||
+        Number(result?.pulled ?? 0) > 0 ||
+        Number(result?.upserted ?? 0) > 0
+      ) {
         setCareSyncRev((n) => n + 1);
         setPanoramaNursingRev((n) => n + 1);
       }
@@ -1607,6 +1611,9 @@ const App = () => {
       bpUpper: vitals.bpUpper,
       bpLower: vitals.bpLower,
       weight: vitals.weight,
+      visitAt: targetTs,
+      measuredAt: targetTs,
+      measurementTimeFromVisitRecord: true,
     }, targetTs);
     Report.setResidentVitalSnapshot(id, {
       temp: vitals.temp,
@@ -2439,7 +2446,7 @@ const App = () => {
               >
                 {WATER_ML_50_OPTIONS.map((opt) => (
                   <option key={opt.value || 'empty'} value={opt.value}>
-                    {opt.label === '—' ? '選択（50ml刻み）' : opt.label}
+                    {opt.label === '—' ? '選択' : opt.label}
                   </option>
                 ))}
               </select>
