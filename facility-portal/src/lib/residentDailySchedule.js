@@ -11,6 +11,7 @@ import {
 
 const LS_KEY = 'carelink_os_resident_daily_plans_v1';
 const LS_META_KEY = 'carelink_os_resident_daily_plans_meta_v1';
+const LS_RECURRING_KEY = 'carelink_os_resident_recurring_plans_v1';
 
 const NAME_HEADER_HINTS = ['氏名', '名前', '利用者', '入居者', 'フリガナ', '部屋', '居室', '号室'];
 const SKIP_NAME = /^(合計|計|備考|メモ|時間|予定表|利用者|入居者|氏名|フリガナ|部屋|居室|—|-)$/u;
@@ -89,6 +90,9 @@ function headerMatchesYmd(header, targetYmd) {
     const yy = Number(full[1]);
     return yy === y && Number(full[2]) === mo && Number(full[3]) === d;
   }
+
+  const slashMd = h.match(/^(\d{1,2})[\/／](\d{1,2})$/u);
+  if (slashMd && Number(slashMd[1]) === mo && Number(slashMd[2]) === d) return true;
 
   const short = h.match(/^(\d{1,2})[\/月\-\.](\d{1,2})(?:日|\(|（|火|月|水|木|金|土|日)?/u);
   if (short && Number(short[1]) === mo && Number(short[2]) === d) return true;
@@ -364,30 +368,33 @@ function sanitizePlansForResident(plans, residentName) {
 }
 
 /**
+ * カレンダー形式: 上段の「2026/6/4」や下段の「4」などから対象日の列を特定
  * @param {string[][]} grid
  * @param {string} targetYmd
  * @param {number} nameCol
  */
 function findTodayColumnInGrid(grid, targetYmd, nameCol) {
-  for (let r = 0; r < Math.min(12, grid.length); r++) {
+  for (let r = 0; r < Math.min(20, grid.length); r++) {
     for (let c = 0; c < (grid[r] || []).length; c++) {
       if (c === nameCol) continue;
       if (headerMatchesYmd(normCell(grid[r][c]), targetYmd)) return c;
     }
   }
-  const { d } = ymdParts(targetYmd);
+  const { y, mo, d } = ymdParts(targetYmd);
   if (!d) return -1;
-  for (let r = 0; r < Math.min(15, grid.length); r++) {
+  for (let r = 0; r < Math.min(20, grid.length); r++) {
     const row = grid[r] || [];
     let dayHits = 0;
     for (const cell of row) {
       const v = normCell(cell);
       if (/^\d{1,2}$/.test(v) && Number(v) >= 1 && Number(v) <= 31) dayHits++;
     }
-    if (dayHits < 5) continue;
+    if (dayHits < 4) continue;
     for (let c = 0; c < row.length; c++) {
       if (c === nameCol) continue;
-      if (normCell(row[c]) === String(d)) return c;
+      const v = normCell(row[c]);
+      if (v === String(d)) return c;
+      if (mo && v === `${mo}/${d}`) return c;
     }
   }
   return -1;
@@ -407,13 +414,19 @@ function findNameColumnInGrid(grid, headerRowIdx, headerRow) {
     }
     if (hits >= 2) return fromHeader;
   }
-  for (let c = 0; c <= 4; c++) {
+  let bestCol = fromHeader >= 0 ? fromHeader : 1;
+  let bestHits = 0;
+  for (let c = 0; c <= 6; c++) {
     let hits = 0;
     for (let r = 0; r < Math.min(45, grid.length); r++) {
       if (looksLikePersonName(grid[r]?.[c])) hits++;
     }
-    if (hits >= 3) return c;
+    if (hits > bestHits) {
+      bestHits = hits;
+      bestCol = c;
+    }
   }
+  if (bestHits >= 2) return bestCol;
   return fromHeader >= 0 ? fromHeader : 1;
 }
 
@@ -481,7 +494,7 @@ export function parseResidentScheduleSheetRows(rows, targetYmd) {
     if (calCol >= 0) todayCols.push({ col: calCol, time: '' });
   }
 
-  const activeCols = todayCols.length ? todayCols : timeCols;
+  let activeCols = todayCols.length ? todayCols : timeCols;
   const plansByName = new Map();
   const unmatchedSamples = [];
   const dataStartRow = Math.max(headerRowIdx + 1, dataStartRowAfterCalendarHeader(grid));
@@ -499,12 +512,21 @@ export function parseResidentScheduleSheetRows(rows, targetYmd) {
   for (let r = dataStartRow; r < grid.length; r++) {
     if (looksLikePersonName(grid[r]?.[nameCol])) personRows++;
   }
-  const calendarLayout = calendarDayHeaders >= 5 && personRows < 4 && activeCols.length > 0;
+  const calendarLayout =
+    activeCols.length > 0 && (calendarDayHeaders >= 4 || personRows < 4);
 
-  if (calendarLayout) {
+  if (calendarLayout && activeCols.length) {
     for (const { col, time } of activeCols) {
-      for (let r = 0; r < grid.length; r++) {
-        appendPlansFromCell(plansByName, '', grid[r]?.[col], time);
+      for (let r = dataStartRow; r < grid.length; r++) {
+        const row = grid[r] || [];
+        const nameRaw = normCell(row[nameCol]);
+        const rowKey = looksLikePersonName(nameRaw) ? nameRaw.replace(/様\s*$/u, '').trim() : '';
+        appendPlansFromCell(plansByName, rowKey, row[col], time);
+      }
+      if (plansByName.size === 0) {
+        for (let r = 0; r < grid.length; r++) {
+          appendPlansFromCell(plansByName, '', grid[r]?.[col], time);
+        }
       }
     }
     for (const key of plansByName.keys()) {
@@ -591,6 +613,142 @@ function inferPlanType(title) {
  * @param {string} ymd
  * @returns {{ id: string; time: string; title: string; type: string; source: string; note?: string }[]}
  */
+function readRecurringStore() {
+  try {
+    const raw = localStorage.getItem(LS_RECURRING_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRecurringStore(all) {
+  try {
+    localStorage.setItem(LS_RECURRING_KEY, JSON.stringify(all && typeof all === 'object' ? all : {}));
+  } catch {
+    /* ignore */
+  }
+}
+
+function weekdayMon0FromYmd(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? '').trim());
+  if (!m) return -1;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return (d.getDay() + 6) % 7;
+}
+
+/**
+ * @param {string} linkKey
+ * @param {string} residentId
+ */
+export function getResidentRecurringPlans(linkKey, residentId) {
+  const fk = String(linkKey ?? '').trim();
+  const rid = String(residentId ?? '').trim();
+  if (!fk || !rid) return [];
+  const all = readRecurringStore();
+  const list = all[fk]?.[rid];
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((p) => normalizeRecurringItem(p))
+    .filter(Boolean)
+    .sort((a, b) => String(a.time).localeCompare(String(b.time), 'ja'));
+}
+
+function normalizeRecurringItem(p) {
+  if (!p || typeof p !== 'object') return null;
+  const title = String(p.title ?? '').trim();
+  if (!title) return null;
+  const weekdaysMon0 = Array.isArray(p.weekdaysMon0)
+    ? [...new Set(p.weekdaysMon0.map((n) => Number(n)).filter((n) => n >= 0 && n <= 6))]
+    : [];
+  if (!weekdaysMon0.length) return null;
+  return {
+    id: String(p.id ?? '').trim() || `rec_${Date.now()}`,
+    weekdaysMon0,
+    time: String(p.time ?? '').trim(),
+    title,
+    type: String(p.type ?? 'その他').trim() || 'その他',
+    source: 'app_recurring',
+  };
+}
+
+/**
+ * @param {string} linkKey
+ * @param {string} residentId
+ * @param {{ weekdaysMon0: number[]; time?: string; title: string; type?: string }} plan
+ */
+export function addResidentRecurringPlan(linkKey, residentId, plan) {
+  const fk = String(linkKey ?? '').trim();
+  const rid = String(residentId ?? '').trim();
+  const title = String(plan?.title ?? '').trim();
+  if (!fk || !rid || !title) return false;
+  const weekdaysMon0 = Array.isArray(plan.weekdaysMon0)
+    ? [...new Set(plan.weekdaysMon0.map((n) => Number(n)).filter((n) => n >= 0 && n <= 6))]
+    : [];
+  if (!weekdaysMon0.length) return false;
+
+  const all = readRecurringStore();
+  if (!all[fk] || typeof all[fk] !== 'object') all[fk] = {};
+  const list = Array.isArray(all[fk][rid]) ? [...all[fk][rid]] : [];
+  list.push({
+    id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    weekdaysMon0,
+    time: String(plan?.time ?? '').trim(),
+    title,
+    type: String(plan?.type ?? inferPlanType(title)).trim() || 'その他',
+    source: 'app_recurring',
+  });
+  all[fk][rid] = list;
+  writeRecurringStore(all);
+  return true;
+}
+
+export function removeResidentRecurringPlan(linkKey, residentId, planId) {
+  const fk = String(linkKey ?? '').trim();
+  const rid = String(residentId ?? '').trim();
+  const pid = String(planId ?? '').trim();
+  if (!fk || !rid || !pid) return false;
+  const all = readRecurringStore();
+  const list = Array.isArray(all[fk]?.[rid]) ? all[fk][rid] : [];
+  const next = list.filter((p) => String(p?.id ?? '') !== pid);
+  if (next.length === list.length) return false;
+  all[fk][rid] = next;
+  writeRecurringStore(all);
+  return true;
+}
+
+function expandRecurringForDay(recurring, ymd) {
+  const w = weekdayMon0FromYmd(ymd);
+  if (w < 0) return [];
+  return recurring
+    .filter((r) => r.weekdaysMon0.includes(w))
+    .map((r) => ({
+      id: `recurring:${r.id}:${ymd}`,
+      time: r.time,
+      title: r.title,
+      type: r.type,
+      source: 'app_recurring',
+      note: '毎週',
+    }));
+}
+
+/** @param {string} monthYm YYYY-MM */
+export function daysInCalendarMonth(monthYm) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(monthYm ?? '').trim());
+  if (!m) return [];
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const last = new Date(y, mo, 0).getDate();
+  /** @type {string[]} */
+  const out = [];
+  for (let d = 1; d <= last; d++) {
+    out.push(`${y}-${pad2(mo)}-${pad2(d)}`);
+  }
+  return out;
+}
+
 export function getResidentDailyPlans(linkKey, residentId, ymd, residentName = '') {
   const fk = String(linkKey ?? '').trim();
   const rid = String(residentId ?? '').trim();
@@ -600,12 +758,14 @@ export function getResidentDailyPlans(linkKey, residentId, ymd, residentName = '
   const row = bucket[rid];
   if (!row || typeof row !== 'object') return [];
   const arr = row[y];
-  if (!Array.isArray(arr)) return [];
-  const normalized = arr
-    .map((p) => normalizePlanItem(p))
-    .filter(Boolean)
-    .sort((a, b) => String(a.time).localeCompare(String(b.time), 'ja'));
-  return sanitizePlansForResident(normalized, residentName);
+  const explicit = Array.isArray(arr)
+    ? arr.map((p) => normalizePlanItem(p)).filter(Boolean)
+    : [];
+  const recurring = expandRecurringForDay(getResidentRecurringPlans(fk, rid), y);
+  const merged = [...explicit, ...recurring].sort((a, b) =>
+    String(a.time).localeCompare(String(b.time), 'ja')
+  );
+  return sanitizePlansForResident(merged, residentName);
 }
 
 /**
@@ -683,7 +843,9 @@ export function setResidentDailyPlans(linkKey, residentId, ymd, plans, opts = {}
           ...prevDay.filter((p) => String(p?.source ?? '') !== 'facility_sheet'),
           ...incoming,
         ]
-      : incoming;
+      : opts.merge === 'merge_r8'
+        ? [...prevDay.filter((p) => String(p?.source ?? '') !== 'r8_calendar'), ...incoming]
+        : incoming;
   prevRow[y] = merged.sort((a, b) => String(a.time).localeCompare(String(b.time), 'ja'));
   bucket[rid] = prevRow;
   persistFacilityBucket(all, k, bucket);
@@ -698,7 +860,12 @@ export function setResidentDailyPlans(linkKey, residentId, ymd, plans, opts = {}
 export function addResidentDailyPlan(linkKey, residentId, ymd, plan) {
   const title = String(plan?.title ?? '').trim();
   if (!title) return false;
-  const existing = getResidentDailyPlans(linkKey, residentId, ymd);
+  const fk = String(linkKey ?? '').trim();
+  const rid = String(residentId ?? '').trim();
+  const y = String(ymd ?? '').trim();
+  const { bucket } = facilityBucket(fk);
+  const row = bucket[rid] && typeof bucket[rid] === 'object' ? bucket[rid] : {};
+  const existing = Array.isArray(row[y]) ? row[y].map((p) => normalizePlanItem(p)).filter(Boolean) : [];
   existing.push({
     id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     time: String(plan?.time ?? '').trim(),
@@ -717,9 +884,16 @@ export function removeResidentDailyPlan(linkKey, residentId, ymd, planId) {
   const y = String(ymd ?? '').trim();
   const pid = String(planId ?? '').trim();
   if (!fk || !rid || !y || !pid) return false;
-  const existing = getResidentDailyPlans(linkKey, residentId, ymd);
-  const next = existing.filter((p) => p.id !== pid);
-  if (next.length === existing.length) return false;
+  if (pid.startsWith('recurring:')) {
+    const baseId = pid.split(':')[1];
+    if (baseId) return removeResidentRecurringPlan(fk, rid, baseId);
+    return false;
+  }
+  const { bucket } = facilityBucket(fk);
+  const row = bucket[rid];
+  const arr = row && Array.isArray(row[y]) ? row[y] : [];
+  const next = arr.filter((p) => String(p?.id ?? '') !== pid);
+  if (next.length === arr.length) return false;
   setResidentDailyPlans(linkKey, residentId, ymd, next);
   return true;
 }

@@ -98,6 +98,7 @@ import {
   getResidentDailyPlansForFacilityCalendar,
   importResidentScheduleFromSheet,
 } from '../lib/residentDailySchedule.js';
+import { importR8VisitCalendarFromBuffer } from '../lib/r8VisitCalendarImport.js';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
 import { EnteralNutritionMenuModal } from '../components/EnteralNutritionMenuModal.jsx';
 import { BathingScheduleModal } from '../components/BathingScheduleModal.jsx';
@@ -1303,6 +1304,7 @@ export function RecordPage({
   const injuryDiseaseCsvInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const medicationPdfInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const visitCalendarPdfInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
+  const r8CalendarXlsxInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const [homeVisitCalendarRev, setHomeVisitCalendarRev] = useState(0);
   const [daySvcExternalFor, setDaySvcExternalFor] = useState(/** @type {Record<string, unknown> | null} */ (null));
   const [daySvcExternalDraft, setDaySvcExternalDraft] = useState(/** @type {Record<string, boolean>} */ ({}));
@@ -1336,6 +1338,7 @@ export function RecordPage({
 
   const [scheduleImportBusy, setScheduleImportBusy] = useState(false);
   const [scheduleImportMsg, setScheduleImportMsg] = useState('');
+  const [r8ImportBusy, setR8ImportBusy] = useState(false);
   const [scheduleModalResident, setScheduleModalResident] = useState(
     /** @type {Record<string, unknown> | null} */ (null)
   );
@@ -2239,6 +2242,38 @@ export function RecordPage({
       setScheduleImportBusy(false);
     }
   }, [selectedFacilityLinkKey, residentScheduleSheetCfg, displayResidents, todayStrip]);
+
+  const importR8CalendarXlsx = useCallback(
+    async (file) => {
+      const lk = selectedFacilityLinkKey;
+      if (!lk || !file) return;
+      const monthYm = todayStrip.slice(0, 7);
+      setR8ImportBusy(true);
+      try {
+        const buf = await file.arrayBuffer();
+        const result = importR8VisitCalendarFromBuffer(buf, lk, displayResidents, monthYm);
+        if (!result.ok) {
+          alert(result.error ?? 'R8カレンダーの取り込みに失敗しました');
+          return;
+        }
+        setPlanRev((n) => n + 1);
+        setTick((n) => n + 1);
+        alert(
+          `R8カレンダー（${result.monthYm}）を取り込みました。\n` +
+            `名簿に一致した利用者: ${result.residentsTouched}名\n` +
+            `登録した日付×利用者: ${result.planDays}件\n` +
+            `読み取り ${result.rawCells}件 / 名簿不一致 ${result.skipped}件\n\n` +
+            `今後は各カードの「予定・入力」から1か月単位で編集できます。`
+        );
+      } catch (e) {
+        alert(e instanceof Error ? e.message : 'R8カレンダーの取り込みに失敗しました');
+      } finally {
+        setR8ImportBusy(false);
+        if (r8CalendarXlsxInputRef.current) r8CalendarXlsxInputRef.current.value = '';
+      }
+    },
+    [selectedFacilityLinkKey, displayResidents, todayStrip]
+  );
 
   const applyCareQuickRecord = useCallback((res, row) => {
     const {
@@ -4052,6 +4087,16 @@ export function RecordPage({
               e.target.value = '';
             }}
           />
+          <input
+            ref={r8CalendarXlsxInputRef}
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importR8CalendarXlsx(f);
+            }}
+          />
           <button
             type="button"
             onClick={() => kaipokeCsvInputRef.current?.click()}
@@ -4108,6 +4153,22 @@ export function RecordPage({
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             往診カレンダーPDF
           </button>
+          {selectedFacilityLinkKey === '千音寺' ? (
+            <button
+              type="button"
+              disabled={r8ImportBusy}
+              onClick={() => r8CalendarXlsxInputRef.current?.click()}
+              className={`${hdrBtn} border-rose-800 bg-rose-800 text-white hover:bg-rose-700 disabled:opacity-60`}
+              title={`R8「訪問マッサージ・リハビリ・入浴カレンダー」xlsx を今月（${todayStrip.slice(0, 7)}）だけ取り込みます。今後はアプリで予定を入力してください。`}
+            >
+              {r8ImportBusy ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin sm:h-5 sm:w-5" />
+              ) : (
+                <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
+              )}
+              R8カレンダー（今月）
+            </button>
+          ) : null}
           {residentScheduleSheetCfg ? (
             <button
               type="button"
@@ -4200,7 +4261,7 @@ export function RecordPage({
           </span>
           {residentScheduleSheetCfg ? (
             <span className="text-purple-800">
-              利用者お予定表: 「お予定表を更新」でスプレッドシートから本日分を各カードに表示。カードの「本日の予定」から今後の日付もアプリで追加できます。
+              予定: 千音寺は「R8カレンダー（今月）」で xlsx を一度取込。各カードの「予定・入力」で1か月表示・毎週の決まった予定も登録できます。
             </span>
           ) : null}
         </div>
@@ -5658,7 +5719,7 @@ export function RecordPage({
                             }`}
                           >
                             <CalendarClock className="h-4 w-4 shrink-0" />
-                            本日の予定・入力
+                            予定・入力（1か月）
                           </button>
                         ) : null}
                         <button
