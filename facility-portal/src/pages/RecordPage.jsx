@@ -3,6 +3,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Ambulance,
+  Bath,
   Baby,
   BarChart3,
   CalendarClock,
@@ -99,6 +100,8 @@ import {
 } from '../lib/residentDailySchedule.js';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
 import { EnteralNutritionMenuModal } from '../components/EnteralNutritionMenuModal.jsx';
+import { BathingScheduleModal } from '../components/BathingScheduleModal.jsx';
+import { formatBathPlanShort } from '../lib/bathingSchedule.js';
 import { mergeMedicineLists } from '../lib/pharmacyMedicineFormat.js';
 import { parsePharmacyMedicationPdfImport } from '../lib/pharmacyMedicationPdf.js';
 import {
@@ -1233,6 +1236,7 @@ export function RecordPage({
   const [nearMissAwarenessAdminOpen, setNearMissAwarenessAdminOpen] = useState(false);
   const [homeVisitNoteOpen, setHomeVisitNoteOpen] = useState(false);
   const [enteralMenuOpen, setEnteralMenuOpen] = useState(false);
+  const [bathScheduleOpen, setBathScheduleOpen] = useState(false);
 
   const [homeVisitNoteLaunch, setHomeVisitNoteLaunch] = useState(
     /** @type {null | { visitDateYmd: string; residentIds: string[]; doctor?: string; visitType?: string }} */ (null)
@@ -5130,6 +5134,15 @@ export function RecordPage({
                       </button>
                       <button
                         type="button"
+                        onClick={() => setBathScheduleOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border-2 border-cyan-500 bg-cyan-50 px-3 py-2 text-xs font-black text-cyan-950 hover:bg-cyan-100"
+                        title="週間の入浴予定を一覧で入力（カードの本日予定にも反映）"
+                      >
+                        <Bath className="h-4 w-4 shrink-0" aria-hidden />
+                        入浴予定表
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setResidentInputViewPersist('cards')}
                         className={`rounded-xl border-2 px-3 py-2 text-xs font-black sm:text-sm ${
                           residentInputView === 'cards'
@@ -5307,32 +5320,51 @@ export function RecordPage({
                               <div className="text-2xl font-black leading-tight">
                                 {residentCardDisplayName(res.name)}
                               </div>
-                              {residentScheduleSheetCfg
-                                ? (() => {
-                                    const scheduleYmd = getFacilityScheduleDisplayYmd(
-                                      selectedFacilityLinkKey,
-                                      todayStrip
-                                    );
-                                    const todayPlansShort = formatResidentPlansShort(
+                              {(() => {
+                                const scheduleYmd = getFacilityScheduleDisplayYmd(
+                                  selectedFacilityLinkKey,
+                                  todayStrip
+                                );
+                                const todayPlansShort = residentScheduleSheetCfg
+                                  ? formatResidentPlansShort(
                                       selectedFacilityLinkKey,
                                       String(res.id),
                                       scheduleYmd,
                                       String(res.name ?? '')
-                                    );
-                                    if (!todayPlansShort) return null;
-                                    return (
+                                    )
+                                  : '';
+                                const bathShort = formatBathPlanShort(
+                                  selectedFacilityLinkKey,
+                                  String(res.id),
+                                  scheduleYmd
+                                );
+                                if (!todayPlansShort && !bathShort) return null;
+                                return (
+                                  <>
+                                    {todayPlansShort ? (
                                       <div
                                         className="mt-1.5 rounded-lg border border-purple-400 bg-purple-800 px-2 py-1.5 text-[10px] font-bold leading-snug text-white sm:text-[11px]"
                                         title={todayPlansShort}
                                       >
                                         <span className="mr-1 font-black opacity-90">
-                                          本日{scheduleYmd !== todayStrip ? `(${scheduleYmd.slice(5)})` : ''}
+                                          本日
+                                          {scheduleYmd !== todayStrip ? `(${scheduleYmd.slice(5)})` : ''}
                                         </span>
                                         {todayPlansShort}
                                       </div>
-                                    );
-                                  })()
-                                : null}
+                                    ) : null}
+                                    {bathShort && !/入浴/u.test(todayPlansShort) ? (
+                                      <div
+                                        className="mt-1.5 rounded-lg border border-cyan-300 bg-cyan-700 px-2 py-1.5 text-[10px] font-bold leading-snug text-white sm:text-[11px]"
+                                        title={bathShort}
+                                      >
+                                        <span className="mr-1 font-black opacity-90">入浴</span>
+                                        {bathShort}
+                                      </div>
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
                               <div
                                 className={`mt-2 rounded-xl border-2 px-3 py-2 ${
                                   critical ? 'border-white/50 bg-black/25' : 'border-slate-300 bg-slate-50'
@@ -6082,6 +6114,14 @@ export function RecordPage({
         sheetsApiKey={SHEETS_KEY}
         residents={displayResidents}
         onImported={refreshBulkEnteralPlans}
+      />
+      <BathingScheduleModal
+        open={bathScheduleOpen}
+        onClose={() => setBathScheduleOpen(false)}
+        facilityLabel={selectedDef?.tabLabel ?? selectedSheetTitle}
+        facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
+        residents={displayResidents}
+        onSaved={() => setTick((n) => n + 1)}
       />
       <ResidentDailyScheduleModal
         open={Boolean(scheduleModalResident)}
