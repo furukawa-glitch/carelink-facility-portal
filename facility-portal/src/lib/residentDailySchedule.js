@@ -363,12 +363,24 @@ export async function importResidentScheduleFromSheet(linkKey, apiKey, targetYmd
     return { ok: false, error: 'VITE_GOOGLE_SHEETS_API_KEY が未設定です' };
   }
 
-  const rows = await fetchSpreadsheetValuesByGid(
-    cfg.spreadsheetId,
-    key,
-    cfg.sheetGid,
-    cfg.rangeA1 ?? 'A1:ZZ150'
-  );
+  let rows;
+  try {
+    rows = await fetchSpreadsheetValuesByGid(
+      cfg.spreadsheetId,
+      key,
+      cfg.sheetGid,
+      cfg.rangeA1 ?? 'A1:ZZ150'
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      error:
+        msg.includes('お予定表') || msg.includes('スプレッドシート') || msg.includes('CSV')
+          ? msg
+          : `${msg}（Excel の場合は Google スプレッドシートに変換するか、共有を「閲覧可」にしてください）`,
+    };
+  }
   const anchorYmd = parseSheetAnchorYmd(rows, targetYmd);
   const parsed = parseResidentScheduleSheetRows(rows, anchorYmd);
   return {

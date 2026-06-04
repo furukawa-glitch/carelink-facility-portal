@@ -1753,13 +1753,21 @@ export async function fetchSpreadsheetValuesByGid(
   sheetGid,
   rangeA1WithinSheet = 'A1:Z200'
 ) {
-  const tabs = await fetchSpreadsheetTabs(spreadsheetId, apiKey);
   const gidNum = Number(sheetGid);
-  const tab = tabs.find((t) => t.sheetId === gidNum);
-  if (!tab) {
-    throw new Error(`gid=${sheetGid} のタブが見つかりません（URL の #gid= を確認してください）`);
+  try {
+    const tabs = await fetchSpreadsheetTabs(spreadsheetId, apiKey);
+    const tab = tabs.find((t) => t.sheetId === gidNum);
+    if (!tab) {
+      throw new Error(`gid=${sheetGid} のタブが見つかりません（URL の #gid= を確認してください）`);
+    }
+    return fetchAnySheetValues(spreadsheetId, apiKey, tab.title, rangeA1WithinSheet);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isGoogleOfficeSheetError(msg)) {
+      return fetchSpreadsheetValuesViaCsvExport(spreadsheetId, gidNum);
+    }
+    throw e;
   }
-  return fetchAnySheetValues(spreadsheetId, apiKey, tab.title, rangeA1WithinSheet);
 }
 
 /**
@@ -1922,6 +1930,43 @@ export async function fetchResidentsSingleTabBySheetId(apiKey, sheetIdNum) {
 
 function csvProxyUrl(sheetId, gid) {
   return `/spreadsheet-export/spreadsheets/d/${sheetId}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+}
+
+/** Google ドライブ上の Excel（.xlsx）など Sheets API 非対応か */
+function isGoogleOfficeSheetError(message) {
+  return /Office file|not supported for this document|FAILED_PRECONDITION/i.test(String(message ?? ''));
+}
+
+/**
+ * Sheets API が使えないファイル（Excel アップロード等）を CSV エクスポートで読む
+ * @param {string} spreadsheetId
+ * @param {number} sheetGid
+ * @returns {Promise<string[][]>}
+ */
+export async function fetchSpreadsheetValuesViaCsvExport(spreadsheetId, sheetGid) {
+  const id = String(spreadsheetId ?? '').trim();
+  if (!id) throw new Error('スプレッドシート ID が空です');
+  const url = csvProxyUrl(id, sheetGid);
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(
+      `お予定表の取得に失敗しました（HTTP ${res.status}）。` +
+        'ファイルを Google スプレッドシート形式に変換するか、「リンクを知っている全員が閲覧可」にしてください。'
+    );
+  }
+  const text = await res.text();
+  const head = text.trimStart().slice(0, 200).toLowerCase();
+  if (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('<!DOCTYPE')) {
+    throw new Error(
+      'お予定表の取得に失敗しました。Google ドライブで「共有」→「リンクを知っている全員が閲覧可」にし、' +
+        '可能なら「ファイル」→「Googleスプレッドシートとして保存」に変換してください。'
+    );
+  }
+  const rows = parseCsv(text);
+  if (!rows.length) {
+    throw new Error('お予定表が空か、CSV の形式を読み取れませんでした。');
+  }
+  return rows;
 }
 
 /** API キー未設定時: 公開シートの CSV エクスポート（dev/preview のプロキシ経由） */

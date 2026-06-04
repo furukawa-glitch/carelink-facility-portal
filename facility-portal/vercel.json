@@ -1,4 +1,10 @@
 {
+  "rewrites": [
+    {
+      "source": "/spreadsheet-export/:path*",
+      "destination": "https://docs.google.com/:path*"
+    }
+  ],
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [
