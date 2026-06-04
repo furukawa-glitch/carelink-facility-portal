@@ -138,17 +138,17 @@ export function ResidentMonitorBoard({
         <div className="flex flex-wrap items-center justify-between gap-1.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
             <LayoutGrid className={`shrink-0 text-cyan-300 ${dense ? 'h-4 w-4' : 'h-5 w-5'}`} aria-hidden />
-            <span className={`font-black ${dense ? 'text-xs' : 'text-sm sm:text-base'}`}>
+            <span className={`font-black ${dense ? 'text-sm sm:text-base' : 'text-sm sm:text-base'}`}>
               アラーム一覧（1画面・{gridSpec.cols}×{gridSpec.rows}）
             </span>
-            <span className={`font-bold text-slate-300 ${dense ? 'text-[9px]' : 'text-[10px] sm:text-xs'}`}>
+            <span className={`font-bold text-slate-300 ${dense ? 'text-xs sm:text-sm' : 'text-xs sm:text-sm'}`}>
               全 {counts.total} 名{dense ? '・スクロールなし' : ''}
               {alarmsOnly ? ` / 表示 ${visible.length}` : ''}
             </span>
           </div>
           <label
             className={`flex cursor-pointer items-center gap-1 rounded-lg border border-slate-600 bg-slate-800 font-black text-white ${
-              dense ? 'px-1.5 py-0.5 text-[9px]' : 'gap-1.5 px-2 py-1 text-[11px]'
+              dense ? 'px-2 py-1 text-xs sm:text-sm' : 'gap-1.5 px-2 py-1 text-xs sm:text-sm'
             }`}
           >
             <input
@@ -160,10 +160,10 @@ export function ResidentMonitorBoard({
             アラームのみ
           </label>
         </div>
-        <div className={`flex flex-wrap gap-1.5 font-black ${dense ? 'mt-1 text-[9px]' : 'mt-2 text-[11px] sm:text-xs'}`}>
-          <span className="rounded-md bg-red-600 px-1.5 py-0.5 text-white">緊急 {counts.critical}</span>
-          <span className="rounded-md bg-amber-400 px-1.5 py-0.5 text-amber-950">注意 {counts.warn}</span>
-          <span className="rounded-md bg-slate-600 px-1.5 py-0.5 text-slate-100">平常 {counts.ok}</span>
+        <div className={`flex flex-wrap gap-2 font-black ${dense ? 'mt-1.5 text-xs sm:text-sm' : 'mt-2 text-xs sm:text-sm'}`}>
+          <span className="rounded-md bg-red-600 px-2 py-0.5 text-white">緊急 {counts.critical}</span>
+          <span className="rounded-md bg-amber-400 px-2 py-0.5 text-amber-950">注意 {counts.warn}</span>
+          <span className="rounded-md bg-slate-600 px-2 py-0.5 text-slate-100">平常 {counts.ok}</span>
         </div>
         {!dense ? (
           <p className="mt-1.5 text-[10px] font-bold leading-snug text-slate-400">
@@ -213,8 +213,8 @@ export function ResidentMonitorBoard({
                       : `${row.name} 様 ${row.room} — ${row.alertShort || '平常'}`
                   }
                   onClick={() => onSelectResident(row.res, residents)}
-                  className={`flex min-h-0 min-w-0 flex-col items-stretch justify-center overflow-hidden rounded border text-left shadow-sm transition hover:ring-2 hover:ring-cyan-400 ${
-                    dense ? 'px-0.5 py-0' : 'min-h-[3.1rem] px-0.5 py-0.5'
+                  className={`flex min-h-0 min-w-0 flex-col items-stretch justify-center gap-0.5 overflow-hidden rounded border text-left shadow-sm transition hover:ring-2 hover:ring-cyan-400 ${
+                    dense ? 'px-1 py-1 sm:px-1.5 sm:py-1.5' : 'min-h-[3.75rem] px-1 py-1'
                   } ${
                     critical
                       ? 'animate-carelink-blink border-red-900 bg-red-600 text-white'
@@ -226,15 +226,15 @@ export function ResidentMonitorBoard({
                   } ${row.muted && (row.rawEv.level === 'critical' || row.rawEv.level === 'warn') ? 'ring-1 ring-red-400' : ''}`}
                 >
                   <span
-                    className={`truncate text-center font-mono font-black leading-none ${
-                      dense ? 'text-[10px] sm:text-[11px]' : 'text-[9px]'
+                    className={`truncate text-center font-mono font-black leading-tight ${
+                      dense ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
                     } ${critical ? 'text-red-100' : 'text-slate-600'}`}
                   >
                     {row.room}
                   </span>
                   <span
-                    className={`truncate text-center font-black leading-none ${
-                      dense ? 'text-[8px] sm:text-[9px]' : 'text-[10px] sm:text-[11px]'
+                    className={`truncate text-center font-black leading-tight ${
+                      dense ? 'text-sm sm:text-base' : 'text-sm sm:text-base'
                     }`}
                     title={row.name}
                   >
@@ -242,16 +242,16 @@ export function ResidentMonitorBoard({
                   </span>
                   {showAlert ? (
                     <span
-                      className={`truncate text-center font-black leading-none ${
-                        dense ? 'text-[7px] sm:text-[8px]' : 'text-[8px] sm:text-[9px]'
+                      className={`truncate text-center font-black leading-tight ${
+                        dense ? 'text-xs sm:text-sm' : 'text-xs sm:text-sm'
                       } ${critical ? 'text-white' : warn ? 'text-amber-900' : 'text-slate-600'}`}
                     >
                       {row.muted ? `(${row.alertShort})` : row.alertShort}
                     </span>
                   ) : row.hospitalized ? (
                     <span
-                      className={`truncate text-center font-black text-violet-800 ${
-                        dense ? 'text-[7px]' : 'text-[8px]'
+                      className={`truncate text-center font-black leading-tight text-violet-800 ${
+                        dense ? 'text-xs sm:text-sm' : 'text-xs sm:text-sm'
                       }`}
                     >
                       入院

@@ -13,19 +13,24 @@ export function computeMonitorBedGrid(total) {
     return { cols, rows: Math.ceil(n / cols), dense: true };
   }
   if (n >= 20) {
-    const cols = 8;
+    const cols = 7;
     return { cols, rows: Math.ceil(n / cols), dense: true };
   }
   const cols = 6;
   return { cols, rows: Math.ceil(n / cols), dense: false };
 }
 
-/** 床マップ用の短い氏名（居室番号が主） */
-export function bedMapShortName(nameRaw) {
+/**
+ * 床マップ用の短い氏名（居室番号が主）
+ * @param {unknown} nameRaw
+ * @param {number} [maxLen] 省略時 6 文字（読みやすさ優先）
+ */
+export function bedMapShortName(nameRaw, maxLen = 6) {
   const n = String(nameRaw ?? '')
     .trim()
     .replace(/\s+/g, '');
   if (!n) return '—';
-  if (n.length <= 4) return n;
-  return n.slice(0, 4);
+  const cap = Math.max(4, Math.min(8, Math.floor(maxLen) || 6));
+  if (n.length <= cap) return n;
+  return n.slice(0, cap);
 }
