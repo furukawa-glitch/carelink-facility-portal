@@ -301,7 +301,10 @@ export function ResidentBulkInputTable({
             </button>
           </div>
           <p className="px-1 text-[10px] font-bold leading-snug text-slate-500">
-            全入力=入力がある行だけ保存／バイタルのみ=バイタル列だけ保存
+            全入力=入力がある行だけ保存／バイタルのみ=バイタル列だけ保存。
+            <span className="text-amber-800">
+              他PCへ届けるには<strong>保存</strong>が必要です（入力だけでは同期されません）。クラウド同期ONなら保存後に自動共有されます。
+            </span>
           </p>
         </div>
       </div>

@@ -64,6 +64,7 @@ import {
 } from '../lib/careQuickCareFields.js';
 import { CARE_EVENTS_SYNC_EVENT } from '../lib/careEventsRealtimeSync.js';
 import { flushCareEventsCloudSync } from '../lib/careEventsSupabaseSync.js';
+import { queueBulkTableDraftCloudSync } from '../lib/facilityPortalStoreSync.js';
 import {
   buildHourlyCareFromEvents,
   buildHourlyUrineCellsFromEvents,
@@ -1631,13 +1632,18 @@ export function RecordPage({
     }
     const store = readBulkDraftStore();
     store[bulkDraftScopeKey] = scoped;
+    store[`${bulkDraftScopeKey}__savedAt`] = new Date().toISOString();
     // ストレージ肥大化防止: 直近 90 スコープ（施設×日付）だけ保持
-    const keys = Object.keys(store);
+    const keys = Object.keys(store).filter((k) => !k.endsWith('__savedAt'));
     if (keys.length > 90) {
       keys.sort();
-      for (const k of keys.slice(0, keys.length - 90)) delete store[k];
+      for (const k of keys.slice(0, keys.length - 90)) {
+        delete store[k];
+        delete store[`${k}__savedAt`];
+      }
     }
     writeBulkDraftStore(store);
+    queueBulkTableDraftCloudSync(bulkDraftScopeKey);
   }, [residentInputView, bulkDraft, bulkDraftScopeKey, displayResidents]);
 
   const insuranceBreakdown = useMemo(() => {
@@ -2771,6 +2777,7 @@ export function RecordPage({
       return next;
     });
     setTick((t) => t + 1);
+    void flushCareEventsCloudSync();
   }, [displayResidents, bulkDraft, bulkRowHasVitalInput, applyCareQuickRecord, bulkSheetDate]);
 
   const setBulkPatrolForAllVisible = useCallback(

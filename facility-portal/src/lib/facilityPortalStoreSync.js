@@ -10,6 +10,7 @@ export const FACILITY_STORE_INJURY_DISEASE = 'injury_disease_by_resident';
 export const FACILITY_STORE_ENTERAL_MENU = 'enteral_nutrition_menu';
 export const FACILITY_STORE_BATH_SCHEDULE = 'bath_schedule';
 export const FACILITY_STORE_RESIDENT_SCHEDULE = 'resident_daily_schedule';
+export const FACILITY_STORE_BULK_DRAFT = 'bulk_table_draft';
 /** 組織全体で1つ（利用者IDキー） */
 export const FACILITY_STORE_ORG_KEY = '__org__';
 
@@ -21,6 +22,7 @@ const LS_BATH_SCHEDULE = 'carelink_os_bath_schedule_v1';
 const LS_RESIDENT_PLANS = 'carelink_os_resident_daily_plans_v1';
 const LS_RESIDENT_RECURRING = 'carelink_os_resident_recurring_plans_v1';
 const LS_RESIDENT_PLANS_META = 'carelink_os_resident_daily_plans_meta_v1';
+const LS_BULK_DRAFT = 'carelink_os_bulk_table_draft_v1';
 const FLUSH_DEBOUNCE_MS = 2_000;
 
 /** @type {Set<string>} */
@@ -126,6 +128,7 @@ function applyFacilityStoresToLocal(rows) {
   let enteralChanged = 0;
   let bathChanged = 0;
   let residentScheduleChanged = 0;
+  let bulkDraftChanged = 0;
   const weeklyAll = readJson(LS_WEEKLY, {});
   const homeAll = readJson(LS_HOME_VISIT, {});
   let injuryAll = readJson(LS_INJURY_DISEASE, {});
@@ -134,6 +137,7 @@ function applyFacilityStoresToLocal(rows) {
   let residentPlansAll = readJson(LS_RESIDENT_PLANS, {});
   let residentRecurringAll = readJson(LS_RESIDENT_RECURRING, {});
   let residentMetaAll = readJson(LS_RESIDENT_PLANS_META, {});
+  let bulkDraftAll = readJson(LS_BULK_DRAFT, {});
 
   for (const row of rows) {
     const type = String(row?.store_type ?? '').trim();
@@ -207,6 +211,19 @@ function applyFacilityStoresToLocal(rows) {
         };
         residentScheduleChanged = 1;
       }
+    } else if (type === FACILITY_STORE_BULK_DRAFT) {
+      const remote = row.payload && typeof row.payload === 'object' ? row.payload : null;
+      if (!remote) continue;
+      const remoteRows = remote.rows && typeof remote.rows === 'object' ? remote.rows : null;
+      if (!remoteRows) continue;
+      const localRows = bulkDraftAll[linkKey];
+      const remoteAt = String(remote.savedAt ?? remote.updated_at ?? '');
+      const localAt = String(bulkDraftAll[`${linkKey}__savedAt`] ?? '');
+      if (!localRows || remoteAt >= localAt) {
+        bulkDraftAll[linkKey] = remoteRows;
+        if (remoteAt) bulkDraftAll[`${linkKey}__savedAt`] = remoteAt;
+        bulkDraftChanged = 1;
+      }
     }
   }
 
@@ -227,13 +244,15 @@ function applyFacilityStoresToLocal(rows) {
     writeJson(LS_RESIDENT_RECURRING, residentRecurringAll);
     writeJson(LS_RESIDENT_PLANS_META, residentMetaAll);
   }
+  if (bulkDraftChanged) writeJson(LS_BULK_DRAFT, bulkDraftAll);
   const storesMerged =
     weeklyChanged +
     homeChanged +
     injuryChanged +
     enteralChanged +
     bathChanged +
-    residentScheduleChanged;
+    residentScheduleChanged +
+    bulkDraftChanged;
   return {
     weeklyChanged,
     homeChanged,
@@ -241,6 +260,7 @@ function applyFacilityStoresToLocal(rows) {
     enteralChanged,
     bathChanged,
     residentScheduleChanged,
+    bulkDraftChanged,
     storesMerged,
   };
 }
@@ -259,6 +279,11 @@ export function queueBathScheduleCloudSync(facilityLinkKey) {
 /** 利用者予定（1か月・毎週）保存後にクラウドへ送る */
 export function queueResidentScheduleCloudSync(facilityLinkKey) {
   queueFacilityPortalStoreSync(FACILITY_STORE_RESIDENT_SCHEDULE, facilityLinkKey);
+}
+
+/** 一覧表の入力下書き（施設×日付スコープ） */
+export function queueBulkTableDraftCloudSync(scopeKey) {
+  queueFacilityPortalStoreSync(FACILITY_STORE_BULK_DRAFT, scopeKey);
 }
 
 /** 傷病一覧CSV取り込み後にクラウドへ送る */
@@ -327,6 +352,13 @@ export async function flushFacilityPortalStoresCloud() {
         payload = all[facilityLinkKey] ?? null;
         if (!payload) continue;
         updatedAt = String(payload.savedAt ?? updatedAt);
+      } else if (storeType === FACILITY_STORE_BULK_DRAFT) {
+        const all = readJson(LS_BULK_DRAFT, {});
+        const rows = all[facilityLinkKey];
+        if (!rows || typeof rows !== 'object' || !Object.keys(rows).length) continue;
+        const savedAt = String(all[`${facilityLinkKey}__savedAt`] ?? new Date().toISOString());
+        payload = { savedAt, rows };
+        updatedAt = savedAt;
       } else if (storeType === FACILITY_STORE_RESIDENT_SCHEDULE) {
         const plansAll = readJson(LS_RESIDENT_PLANS, {});
         const recurringAll = readJson(LS_RESIDENT_RECURRING, {});
@@ -381,6 +413,7 @@ export async function pullAndMergeFacilityPortalStores() {
       FACILITY_STORE_ENTERAL_MENU,
       FACILITY_STORE_BATH_SCHEDULE,
       FACILITY_STORE_RESIDENT_SCHEDULE,
+      FACILITY_STORE_BULK_DRAFT,
     ],
   });
   const rows = Array.isArray(result?.stores) ? result.stores : [];
@@ -396,6 +429,7 @@ export async function pullAndMergeFacilityPortalStores() {
     enteralChanged: applied.enteralChanged,
     bathChanged: applied.bathChanged,
     residentScheduleChanged: applied.residentScheduleChanged,
+    bulkDraftChanged: applied.bulkDraftChanged,
   };
 }
 
@@ -473,6 +507,21 @@ export async function pushAllFacilityPortalStoresCloud() {
   const plansAll = readJson(LS_RESIDENT_PLANS, {});
   const recurringAll = readJson(LS_RESIDENT_RECURRING, {});
   const metaAll = readJson(LS_RESIDENT_PLANS_META, {});
+  const bulkDraftAll = readJson(LS_BULK_DRAFT, {});
+  for (const facilityLinkKey of Object.keys(bulkDraftAll)) {
+    if (facilityLinkKey.endsWith('__savedAt')) continue;
+    const rows = bulkDraftAll[facilityLinkKey];
+    if (!rows || typeof rows !== 'object' || !Object.keys(rows).length) continue;
+    const savedAt = String(bulkDraftAll[`${facilityLinkKey}__savedAt`] ?? new Date().toISOString());
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_BULK_DRAFT,
+      facilityLinkKey,
+      payload: { savedAt, rows },
+      updatedAt: savedAt,
+    });
+    upserted++;
+  }
   for (const facilityLinkKey of new Set([
     ...Object.keys(plansAll),
     ...Object.keys(recurringAll),

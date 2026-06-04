@@ -1883,8 +1883,20 @@ export function removeCareEventsByResidentAtMinute(residentId, isoTs, types = []
     if (allow && !allow.has(String(e.type ?? '').trim())) return true;
     return false;
   });
-  const removed = list.length - next.length;
-  if (removed > 0) persistCareEventsList(next);
+  const removedRows = list.filter((e) => {
+    if (String(e.residentId ?? '').trim() !== rid) return false;
+    if (minuteKey(e.ts) !== mk) return false;
+    if (allow && !allow.has(String(e.type ?? '').trim())) return false;
+    return true;
+  });
+  const removed = removedRows.length;
+  if (removed > 0) {
+    persistCareEventsList(next);
+    const ids = removedRows.map((e) => String(e?.id ?? '').trim()).filter(Boolean);
+    if (ids.length) {
+      void import('../lib/careEventsSupabaseSync.js').then((m) => m.queueCareEventsCloudDelete(ids));
+    }
+  }
   return removed;
 }
 
