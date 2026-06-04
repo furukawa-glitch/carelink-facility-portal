@@ -92,10 +92,34 @@ function normalizeRow(raw, res) {
   };
 }
 
-/** @param {Record<string, unknown>} res */
-export function enteralMenuRowFromResident(res, saved) {
+/** @param {EnteralMenuRow | null | undefined} row */
+export function enteralMenuBulkLineFromRow(row) {
+  if (!row) return '';
+  const parts = [row.morning?.content, row.noon?.content, row.evening?.content]
+    .map((s) => String(s ?? '').trim())
+    .filter(Boolean);
+  return parts.join(' ／ ');
+}
+
+/** @param {string} facilityLinkKey @param {string} residentId */
+export function enteralMenuBulkDefaultForResident(facilityLinkKey, residentId) {
+  const draft = loadEnteralMenuDraft(facilityLinkKey);
+  const row = (draft.rows ?? []).find((r) => String(r.residentId) === String(residentId));
+  return enteralMenuBulkLineFromRow(row);
+}
+
+/** 一括表「経管メニュー」列の初期値（スプレッドシート取込 → 名簿） */
+export function defaultEnteralMenuForResident(res, facilityLinkKey = '') {
+  const fk = String(facilityLinkKey ?? '').trim();
+  const fromMenu = fk ? enteralMenuBulkDefaultForResident(fk, String(res?.id ?? '')) : '';
+  return fromMenu || defaultEnteralMenuFromResident(res);
+}
+
+/** @param {Record<string, unknown>} res @param {EnteralMenuRow} [saved] @param {string} [facilityLinkKey] */
+export function enteralMenuRowFromResident(res, saved, facilityLinkKey = '') {
   const base = normalizeRow(saved ?? {}, res);
-  const def = defaultEnteralMenuFromResident(res);
+  const fromDraft = facilityLinkKey ? enteralMenuBulkDefaultForResident(facilityLinkKey, String(res?.id ?? '')) : '';
+  const def = fromDraft || defaultEnteralMenuFromResident(res);
   if (def && !base.morning.content && !base.noon.content && !base.evening.content) {
     base.morning = { ...base.morning, content: def };
   }
@@ -107,7 +131,7 @@ export function enteralMenuRowFromResident(res, saved) {
 /**
  * @param {Record<string, unknown>[]} roster
  * @param {EnteralMenuRow[]} [savedRows]
- * @param {{ enteralOnly?: boolean }} [opts]
+ * @param {{ enteralOnly?: boolean; facilityLinkKey?: string }} [opts]
  * @returns {EnteralMenuRow[]}
  */
 export function mergeEnteralMenuRows(roster, savedRows, opts = {}) {
@@ -115,7 +139,8 @@ export function mergeEnteralMenuRows(roster, savedRows, opts = {}) {
   const saved = Array.isArray(savedRows) ? savedRows : [];
   const byId = new Map(saved.map((r) => [String(r.residentId), r]));
   const enteralOnly = opts.enteralOnly !== false;
-  let rows = list.map((res) => enteralMenuRowFromResident(res, byId.get(String(res.id))));
+  const fk = String(opts.facilityLinkKey ?? '').trim();
+  let rows = list.map((res) => enteralMenuRowFromResident(res, byId.get(String(res.id)), fk));
   if (enteralOnly) {
     rows = rows.filter((r) => r.included);
   } else {
@@ -167,6 +192,7 @@ export function saveEnteralMenuDraft(facilityLinkKey, draft) {
     savedAt: new Date().toISOString(),
   };
   writeStore(all);
+  void import('./facilityPortalStoreSync.js').then((m) => m.queueEnteralMenuCloudSync(k));
 }
 
 function escHtml(s) {

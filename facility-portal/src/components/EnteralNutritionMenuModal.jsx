@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, Printer, RefreshCw, Utensils, X } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2, Printer, RefreshCw, Utensils, X } from 'lucide-react';
 import {
   ENTERAL_MEDICATION_OPTIONS,
   currentYmd,
@@ -9,6 +9,7 @@ import {
   openEnteralMenuPrint,
   saveEnteralMenuDraft,
 } from '../lib/enteralNutritionMenu.js';
+import { importEnteralMenuFromSheet } from '../lib/enteralNutritionMenuSheetImport.js';
 
 /**
  * @param {{
@@ -16,15 +17,24 @@ import {
  *   onClose: () => void;
  *   facilityLabel: string;
  *   facilityLinkKey?: string;
+ *   sheetsApiKey?: string;
  *   residents: Record<string, unknown>[];
  * }} props
  */
-export function EnteralNutritionMenuModal({ open, onClose, facilityLabel, facilityLinkKey = '', residents }) {
-  const [updatedYmd, setUpdatedYmd] = useState(currentYmd);
+export function EnteralNutritionMenuModal({
+  open,
+  onClose,
+  facilityLabel,
+  facilityLinkKey = '',
+  sheetsApiKey = '',
+  residents,
+}) {
+  const [updatedYmd, setUpdatedYmd] = useState(() => currentYmd());
   const [footerNote, setFooterNote] = useState('');
   const [legendNote, setLegendNote] = useState('ロング　ショート　ピンク：朝日勤　オレンジ：夕日勤');
   const [enteralOnly, setEnteralOnly] = useState(true);
   const [rows, setRows] = useState(/** @type {import('../lib/enteralNutritionMenu.js').EnteralMenuRow[]} */ ([]));
+  const [sheetImporting, setSheetImporting] = useState(false);
 
   const roster = useMemo(() => (Array.isArray(residents) ? residents : []), [residents]);
 
@@ -33,8 +43,32 @@ export function EnteralNutritionMenuModal({ open, onClose, facilityLabel, facili
     setUpdatedYmd(String(draft.updatedYmd ?? currentYmd()).slice(0, 10));
     setFooterNote(String(draft.footerNote ?? ''));
     setLegendNote(String(draft.legendNote ?? ''));
-    setRows(mergeEnteralMenuRows(roster, draft.rows, { enteralOnly }));
+    setRows(mergeEnteralMenuRows(roster, draft.rows, { enteralOnly, facilityLinkKey }));
   }, [facilityLinkKey, roster, enteralOnly]);
+
+  const onImportFromSheet = async () => {
+    const key = String(sheetsApiKey ?? '').trim();
+    if (!key) {
+      alert('VITE_GOOGLE_SHEETS_API_KEY を .env に設定し、開発サーバーを再起動してください。');
+      return;
+    }
+    setSheetImporting(true);
+    try {
+      const result = await importEnteralMenuFromSheet(facilityLinkKey, key, roster);
+      if (!result.ok) {
+        alert(result.error ?? '読み込みに失敗しました');
+        return;
+      }
+      initRows();
+      const extra =
+        result.unmatched > 0 ? `\n名簿と一致しなかった行: ${result.unmatched} 件` : '';
+      alert(
+        `経管メニュー表を取り込みました。\nシート ${result.sheetNames} 名 → 名簿一致 ${result.matched} 名${extra}\n一括入力の「経管メニュー」列にも反映されます。`
+      );
+    } finally {
+      setSheetImporting(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -84,7 +118,7 @@ export function EnteralNutritionMenuModal({ open, onClose, facilityLabel, facili
               経管栄養メニュー一覧
             </h2>
             <p className="mt-0.5 text-xs font-bold text-violet-900/80">
-              {facilityLabel} ／ 利用者別に朝・昼・夕と薬（〇×）を入力 → 用紙どおり印刷
+              {facilityLabel} ／ Googleの経管メニュー表から取込、または手入力 → 印刷・一括表へ反映
             </p>
           </div>
           <button
@@ -119,6 +153,19 @@ export function EnteralNutritionMenuModal({ open, onClose, facilityLabel, facili
             />
             名簿の経管対象のみ
           </label>
+          <button
+            type="button"
+            disabled={sheetImporting}
+            onClick={() => void onImportFromSheet()}
+            className="inline-flex items-center gap-1.5 rounded-xl border-2 border-emerald-600 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-950 hover:bg-emerald-100 disabled:opacity-60"
+          >
+            {sheetImporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : (
+              <FileSpreadsheet className="h-4 w-4" aria-hidden />
+            )}
+            経管メニュー表を更新
+          </button>
           <button
             type="button"
             onClick={initRows}
@@ -234,7 +281,7 @@ export function EnteralNutritionMenuModal({ open, onClose, facilityLabel, facili
             />
           </label>
           <p className="text-[10px] font-bold text-slate-500">
-            入力内容は施設ごとにこの端末へ自動保存されます（{visibleRows.length} 名表示中）。
+            取込・入力は施設ごとに保存され、クラウド同期ON時は他PCとも共有されます（{visibleRows.length} 名表示中）。
           </p>
         </div>
       </div>

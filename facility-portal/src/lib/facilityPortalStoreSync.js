@@ -7,12 +7,14 @@ import { careSyncPost, isCareCloudSyncConfigured } from './careEventsSupabaseSyn
 export const FACILITY_STORE_WEEKLY_PLANS = 'weekly_plans';
 export const FACILITY_STORE_HOME_VISIT = 'home_visit_calendar';
 export const FACILITY_STORE_INJURY_DISEASE = 'injury_disease_by_resident';
+export const FACILITY_STORE_ENTERAL_MENU = 'enteral_nutrition_menu';
 /** 組織全体で1つ（利用者IDキー） */
 export const FACILITY_STORE_ORG_KEY = '__org__';
 
 const LS_WEEKLY = 'carelink_os_weekly_plans_v1';
 const LS_HOME_VISIT = 'carelink_os_home_visit_calendar_v1';
 const LS_INJURY_DISEASE = 'carelink_os_injury_disease_by_resident_v1';
+const LS_ENTERAL_MENU = 'carelink_os_enteral_nutrition_menu_v1';
 const FLUSH_DEBOUNCE_MS = 2_000;
 
 /** @type {Set<string>} */
@@ -82,13 +84,32 @@ function mergeInjuryDiseaseStore(local, remote) {
   return out;
 }
 
+/**
+ * @param {Record<string, unknown>} local
+ * @param {Record<string, unknown>} remote
+ */
+function mergeEnteralMenuFacilityStore(local, remote) {
+  const out = { ...local };
+  for (const [linkKey, row] of Object.entries(remote || {})) {
+    const k = String(linkKey ?? '').trim();
+    if (!k || !row || typeof row !== 'object') continue;
+    const prev = out[k];
+    const prevAt = String(prev?.savedAt ?? '');
+    const newAt = String(row.savedAt ?? '');
+    if (!prev || newAt >= prevAt) out[k] = row;
+  }
+  return out;
+}
+
 function applyFacilityStoresToLocal(rows) {
   let weeklyChanged = 0;
   let homeChanged = 0;
   let injuryChanged = 0;
+  let enteralChanged = 0;
   const weeklyAll = readJson(LS_WEEKLY, {});
   const homeAll = readJson(LS_HOME_VISIT, {});
   let injuryAll = readJson(LS_INJURY_DISEASE, {});
+  let enteralAll = readJson(LS_ENTERAL_MENU, {});
 
   for (const row of rows) {
     const type = String(row?.store_type ?? '').trim();
@@ -120,18 +141,34 @@ function applyFacilityStoresToLocal(rows) {
         injuryAll = merged;
         injuryChanged = 1;
       }
+    } else if (type === FACILITY_STORE_ENTERAL_MENU) {
+      const remote =
+        row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload) ? row.payload : {};
+      const merged = mergeEnteralMenuFacilityStore(enteralAll, remote);
+      if (JSON.stringify(merged) !== JSON.stringify(enteralAll)) {
+        enteralAll = merged;
+        enteralChanged = 1;
+      }
     }
   }
 
   if (weeklyChanged) writeJson(LS_WEEKLY, weeklyAll);
   if (homeChanged) writeJson(LS_HOME_VISIT, homeAll);
   if (injuryChanged) writeJson(LS_INJURY_DISEASE, injuryAll);
+  if (enteralChanged) writeJson(LS_ENTERAL_MENU, enteralAll);
   return {
     weeklyChanged,
     homeChanged,
     injuryChanged,
-    storesMerged: weeklyChanged + homeChanged + injuryChanged,
+    enteralChanged,
+    storesMerged: weeklyChanged + homeChanged + injuryChanged + enteralChanged,
   };
+}
+
+/** 経管メニュー下書き保存後にクラウドへ送る */
+export function queueEnteralMenuCloudSync(facilityLinkKey) {
+  queueFacilityPortalStoreSync(FACILITY_STORE_ENTERAL_MENU, FACILITY_STORE_ORG_KEY);
+  void facilityLinkKey;
 }
 
 /** 傷病一覧CSV取り込み後にクラウドへ送る */
@@ -187,6 +224,14 @@ export async function flushFacilityPortalStoresCloud() {
           .filter(Boolean)
           .sort();
         if (times.length) updatedAt = times[times.length - 1];
+      } else if (storeType === FACILITY_STORE_ENTERAL_MENU) {
+        payload = readJson(LS_ENTERAL_MENU, {});
+        const times = Object.values(payload)
+          .map((r) => String(r?.savedAt ?? ''))
+          .filter(Boolean)
+          .sort();
+        if (times.length) updatedAt = times[times.length - 1];
+        if (!Object.keys(payload).length) continue;
       } else {
         continue;
       }
@@ -216,7 +261,12 @@ export async function pullAndMergeFacilityPortalStores() {
   if (!isCareCloudSyncConfigured()) return { ok: true, skipped: true, storesMerged: 0 };
   const result = await careSyncPost({
     action: 'pull_facility_stores',
-    storeTypes: [FACILITY_STORE_WEEKLY_PLANS, FACILITY_STORE_HOME_VISIT, FACILITY_STORE_INJURY_DISEASE],
+    storeTypes: [
+      FACILITY_STORE_WEEKLY_PLANS,
+      FACILITY_STORE_HOME_VISIT,
+      FACILITY_STORE_INJURY_DISEASE,
+      FACILITY_STORE_ENTERAL_MENU,
+    ],
   });
   const rows = Array.isArray(result?.stores) ? result.stores : [];
   if (!rows.length) return { ok: true, pulled: 0, storesMerged: 0 };
@@ -270,6 +320,21 @@ export async function pushAllFacilityPortalStoresCloud() {
       storeType: FACILITY_STORE_INJURY_DISEASE,
       facilityLinkKey: FACILITY_STORE_ORG_KEY,
       payload: injuryAll,
+      updatedAt: times[times.length - 1] ?? new Date().toISOString(),
+    });
+    upserted++;
+  }
+  const enteralAll = readJson(LS_ENTERAL_MENU, {});
+  if (enteralAll && typeof enteralAll === 'object' && Object.keys(enteralAll).length) {
+    const times = Object.values(enteralAll)
+      .map((r) => String(r?.savedAt ?? ''))
+      .filter(Boolean)
+      .sort();
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_ENTERAL_MENU,
+      facilityLinkKey: FACILITY_STORE_ORG_KEY,
+      payload: enteralAll,
       updatedAt: times[times.length - 1] ?? new Date().toISOString(),
     });
     upserted++;

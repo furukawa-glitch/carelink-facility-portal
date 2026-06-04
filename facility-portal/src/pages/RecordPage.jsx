@@ -71,7 +71,7 @@ import {
   tokyoHourFromTs,
 } from '../lib/hourlyCareGrid.js';
 import { bulkCareEventTs, parseMealAmountFieldsFromLog } from '../lib/bulkCareEventTs.js';
-import { defaultEnteralMenuFromResident } from '../lib/residentDetailSeed.js';
+import { defaultEnteralMenuForResident } from '../lib/enteralNutritionMenu.js';
 import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
 import {
   buildInjuryDiseaseLabelMapFromRows,
@@ -261,7 +261,7 @@ function pickMealDraftFromStored(stored, mealSlot) {
 }
 
 /** 食事保存後: 入力欄は空、バイタル・24h・巡視排泄は維持 */
-function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident) {
+function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident, facilityLinkKey = '') {
   const care = bulkCareSeedForResidentDay(residentId, ymd);
   const base = {
     ...(prevRow && typeof prevRow === 'object' ? prevRow : {}),
@@ -271,7 +271,7 @@ function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident) {
     ...bulkNonMealCareFromSeed(care),
     vitalHandwritingDataUrl: '',
   };
-  const def = defaultEnteralMenuFromResident(resident);
+  const def = defaultEnteralMenuForResident(resident, facilityLinkKey);
   if (def && !String(base.enteralMenu ?? '').trim()) base.enteralMenu = def;
   return base;
 }
@@ -1547,7 +1547,7 @@ export function RecordPage({
           };
           if (!String(row.mealSlot ?? '').trim()) row = { ...row, mealSlot };
           row.vitalHandwritingDataUrl = '';
-          const def = defaultEnteralMenuFromResident(r);
+          const def = defaultEnteralMenuForResident(r, selectedFacilityLinkKey);
           if (def && !String(row.enteralMenu ?? '').trim()) row.enteralMenu = def;
         } else {
           row = {
@@ -1563,7 +1563,7 @@ export function RecordPage({
       }
       return next;
     });
-  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey]);
+  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey]);
 
   /** 一覧入力の下書きを施設×日付ごとに保存（保存押し忘れの復元用） */
   useEffect(() => {
@@ -2476,13 +2476,13 @@ export function RecordPage({
           : { ...savedCare, mealSlot: bulkGlobalMealSlot }),
       };
       if (!String(init[id].enteralMenu ?? '').trim()) {
-        const enteralDefault = defaultEnteralMenuFromResident(r);
+        const enteralDefault = defaultEnteralMenuForResident(r, selectedFacilityLinkKey);
         if (enteralDefault) init[id].enteralMenu = enteralDefault;
       }
     }
     setBulkDraft(init);
     setResidentInputViewPersist('table');
-  }, [displayResidents, bulkGlobalMealSlot, bulkSheetDate, setResidentInputViewPersist]);
+  }, [displayResidents, bulkGlobalMealSlot, bulkSheetDate, setResidentInputViewPersist, selectedFacilityLinkKey]);
 
   const onBulkGlobalMealSlotChange = useCallback(
     (slot) => {
@@ -2593,12 +2593,12 @@ export function RecordPage({
       const ymd = bulkTableYmd(bulkSheetDate);
       setBulkDraft((prev) => ({
         ...prev,
-        [id]: bulkRowAfterMealSave(prev[id], id, ymd, bulkGlobalMealSlot, res),
+        [id]: bulkRowAfterMealSave(prev[id], id, ymd, bulkGlobalMealSlot, res, selectedFacilityLinkKey),
       }));
       setTick((n) => n + 1);
       void flushCareEventsCloudSync();
     },
-    [bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate]
+    [bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate, selectedFacilityLinkKey]
   );
 
   const saveBulkAllWithInput = useCallback(() => {
@@ -2615,13 +2615,13 @@ export function RecordPage({
       const next = { ...prev };
       for (const res of toSave) {
         const id = String(res.id);
-        if (next[id]) next[id] = bulkRowAfterMealSave(next[id], id, ymd, bulkGlobalMealSlot, res);
+        if (next[id]) next[id] = bulkRowAfterMealSave(next[id], id, ymd, bulkGlobalMealSlot, res, selectedFacilityLinkKey);
       }
       return next;
     });
     setTick((t) => t + 1);
     void flushCareEventsCloudSync();
-  }, [displayResidents, bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate]);
+  }, [displayResidents, bulkDraft, applyCareQuickRecord, bulkRowHasInput, bulkGlobalMealSlot, bulkSheetDate, selectedFacilityLinkKey]);
 
   /** バイタル列のみを全員一括保存（巡視・食事などは触らない） */
   const saveBulkVitalsOnly = useCallback(() => {
@@ -2760,7 +2760,7 @@ export function RecordPage({
           if (cur.solitaPortion === undefined) cur = { ...cur, solitaPortion: '' };
           if (cur.enteralMenu === undefined) cur = { ...cur, enteralMenu: '' };
           if (!String(cur.enteralMenu ?? '').trim()) {
-            const def = defaultEnteralMenuFromResident(r);
+            const def = defaultEnteralMenuForResident(r, selectedFacilityLinkKey);
             if (def) cur = { ...cur, enteralMenu: def };
           }
           if (cur.mealExtras === undefined) cur = { ...cur, mealExtras: '' };
@@ -2776,7 +2776,7 @@ export function RecordPage({
       }
       return next;
     });
-  }, [displayResidents, residentInputView, bulkGlobalMealSlot, bulkSheetDate]);
+  }, [displayResidents, residentInputView, bulkGlobalMealSlot, bulkSheetDate, selectedFacilityLinkKey]);
 
   const registerNursing = useCallback(() => {
     const k = selectedDef?.linkKey;
@@ -5977,6 +5977,7 @@ export function RecordPage({
         onClose={() => setEnteralMenuOpen(false)}
         facilityLabel={selectedDef?.tabLabel ?? selectedSheetTitle}
         facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
+        sheetsApiKey={SHEETS_KEY}
         residents={displayResidents}
       />
       <ResidentDailyScheduleModal
