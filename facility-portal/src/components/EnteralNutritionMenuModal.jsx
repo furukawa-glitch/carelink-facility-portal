@@ -8,6 +8,7 @@ import {
   enteralShiftCellClass,
   loadEnteralMenuDraft,
   mergeEnteralMenuRows,
+  filterEnteralMenuPrintRows,
   openEnteralMenuPrint,
   parseEnteralTimeFromText,
   saveEnteralMenuDraft,
@@ -155,7 +156,11 @@ export function EnteralNutritionMenuModal({
     patchSlot(residentId, slotKey, { content: rest, time });
   };
 
-  const visibleRows = useMemo(() => rows.filter((r) => r.included !== false), [rows]);
+  const printRowCount = useMemo(() => filterEnteralMenuPrintRows(rows).length, [rows]);
+  const visibleRows = useMemo(
+    () => (enteralOnly ? rows.filter((r) => r.enteralTarget) : rows.filter((r) => r.included !== false)),
+    [rows, enteralOnly]
+  );
 
   if (!open) return null;
 
@@ -251,9 +256,10 @@ export function EnteralNutritionMenuModal({
             type="button"
             onClick={() => openEnteralMenuPrint(facilityLabel, draft)}
             className="inline-flex items-center gap-1.5 rounded-xl border-2 border-violet-700 bg-violet-700 px-3 py-2 text-xs font-black text-white hover:bg-violet-600"
+            title={`経管対象 ${printRowCount} 名のみ印刷（名簿の経管列・メニュー入力あり）`}
           >
             <Printer className="h-4 w-4" aria-hidden />
-            印刷（用紙）
+            印刷（対象{printRowCount}名）
           </button>
           <button
             type="button"

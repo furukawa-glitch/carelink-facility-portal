@@ -81,6 +81,8 @@ export function normalizeEnteralMedication(med) {
  *   noon: EnteralMenuSlot;
  *   evening: EnteralMenuSlot;
  *   note: string;
+ *   /** 名簿の経管対象・メニューあり（印刷はこのフラグで絞る） */
+ *   enteralTarget?: boolean;
  * }} EnteralMenuRow
  */
 
@@ -246,8 +248,22 @@ export function enteralMenuRowFromResident(res, saved, facilityLinkKey = '') {
   }
   const hasSlotContent = !!(base.morning.content || base.noon.content || base.evening.content);
   const isEnteral = Boolean(res?.isEnteral) || Boolean(def) || hasSlotContent;
+  const target = saved?.enteralTarget !== undefined ? saved.enteralTarget !== false : isEnteral;
+  base.enteralTarget = target;
   base.included = saved?.included !== undefined ? saved.included !== false : isEnteral;
   return base;
+}
+
+/** 印刷・HTML出力用: 経管対象者のみ */
+export function filterEnteralMenuPrintRows(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (typeof row?.enteralTarget === 'boolean') return row.enteralTarget;
+    const hasContent = ['morning', 'noon', 'evening'].some((k) =>
+      String(row?.[k]?.content ?? '').trim()
+    );
+    const hasNote = String(row?.note ?? '').trim();
+    return hasContent || hasNote;
+  });
 }
 
 /**
@@ -262,16 +278,24 @@ export function mergeEnteralMenuRows(roster, savedRows, opts = {}) {
   const byId = new Map(saved.map((r) => [String(r.residentId), r]));
   const enteralOnly = opts.enteralOnly !== false;
   const fk = String(opts.facilityLinkKey ?? '').trim();
-  let rows = list.map((res) => enteralMenuRowFromResident(res, byId.get(String(res.id)), fk));
+  let rows = list.map((res) => {
+    const row = enteralMenuRowFromResident(res, byId.get(String(res.id)), fk);
+    return { ...row, enteralTarget: Boolean(row.enteralTarget) };
+  });
   if (enteralOnly) {
-    rows = rows.filter((r) => r.included);
+    rows = rows.filter((r) => r.enteralTarget);
   } else {
     rows = rows.map((r) => ({ ...r, included: true }));
   }
   for (const s of saved) {
     const id = String(s.residentId ?? '').trim();
     if (!id || rows.some((r) => r.residentId === id)) continue;
-    rows.push(normalizeRow(s, { id, name: s.name, room: s.room }));
+    const extra = normalizeRow(s, { id, name: s.name, room: s.room });
+    extra.enteralTarget =
+      typeof s.enteralTarget === 'boolean'
+        ? s.enteralTarget
+        : filterEnteralMenuPrintRows([extra]).length > 0;
+    rows.push(extra);
   }
   return rows.sort((a, b) => {
     const ra = String(a.room ?? '').trim();
@@ -330,7 +354,7 @@ function escHtml(s) {
  * @param {EnteralMenuDraft} draft
  */
 export function buildEnteralMenuHtml(facilityLabel, draft) {
-  const rows = (draft.rows ?? []).filter((r) => r.included !== false);
+  const rows = filterEnteralMenuPrintRows(draft.rows);
   const updated = formatYmdSlashed(draft.updatedYmd) || formatYmdSlashed(currentYmd());
   const bodyRows = rows
     .map(
@@ -377,7 +401,7 @@ export function buildEnteralMenuHtml(facilityLabel, draft) {
 </head>
 <body>
 <h1>【経管栄養メニュー】</h1>
-<p class="meta">${escHtml(facilityLabel)}　${escHtml(updated)}　更新</p>
+<p class="meta">${escHtml(facilityLabel)}　${escHtml(updated)}　更新　（経管対象 ${rows.length} 名）</p>
 <table>
   <colgroup>
     <col class="c-name"/>
