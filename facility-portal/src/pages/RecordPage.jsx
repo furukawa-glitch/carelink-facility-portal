@@ -1416,7 +1416,7 @@ export function RecordPage({
 
   const displayResidents = useMemo(() => {
     const q = String(residentNameQuery ?? '').trim();
-    const base =
+    const roster =
       q.length === 0
         ? filteredResidents
         : filteredResidents.filter((r) => {
@@ -1425,6 +1425,7 @@ export function RecordPage({
             const kana = String(r.kana ?? r.nameKana ?? r.namePhonetic ?? '').trim();
             return name.includes(q) || nameNoSama.includes(q) || kana.includes(q);
           });
+    const base = Report.applyInjuryDiseaseImportsToResidentList(roster);
     const list = [...base];
     const collator = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
     const roomSortKey = (v) => {
@@ -1451,7 +1452,7 @@ export function RecordPage({
       return collator.compare(String(a.room ?? ''), String(b.room ?? ''));
     });
     return list;
-  }, [filteredResidents, residentSortMode, residentNameQuery]);
+  }, [filteredResidents, residentSortMode, residentNameQuery, tick]);
 
   /** 一覧表・24時間グリッド用（保存済みログからマスを埋める） */
   const bulkHourlySavedByResident = useMemo(() => {
@@ -3244,6 +3245,7 @@ export function RecordPage({
           Object.entries(byId).map(([id, row]) => [id, { label: row.label, ym: targetYm }])
         );
         Report.mergeInjuryDiseaseImportPatch(patch, targetYm);
+        void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
         if (targetYm !== auditMonth) setAuditMonth(targetYm);
         setAllResidents((prev) => {
           const base = prev.length ? prev : scopeResidents;

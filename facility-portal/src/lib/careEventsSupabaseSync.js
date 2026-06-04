@@ -139,7 +139,7 @@ export function getCareCloudSyncStatus() {
     enabled: true,
     configured: true,
     label: 'クラウド同期 ON（自動）',
-    hint: '生活記録・予定カレンダー（手入力・往診PDF）を自動で全PCに共有します。保存後すぐ反映、他PCは起動時・約1分ごとに自動取得します。',
+    hint: '生活記録・傷病一覧の病名・予定カレンダーを全PCに自動共有します。保存・取込後すぐ反映、他PCは起動時・約1分ごとに自動取得します。',
   };
 }
 

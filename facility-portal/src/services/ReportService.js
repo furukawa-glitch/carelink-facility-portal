@@ -3522,6 +3522,7 @@ export function mergeInjuryDiseaseImportPatch(patch, ym = '') {
     all[rid] = { label, ym: targetYm || String(row?.ym ?? '').trim(), importedAt: now };
   }
   writeJson(LS.injuryDiseaseByResident, all);
+  void import('../lib/facilityPortalStoreSync.js').then((m) => m.queueInjuryDiseaseCloudSync());
 }
 
 /**
