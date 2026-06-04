@@ -1232,17 +1232,6 @@ export function RecordPage({
   const [homeVisitNoteOpen, setHomeVisitNoteOpen] = useState(false);
   const [enteralMenuOpen, setEnteralMenuOpen] = useState(false);
 
-  const refreshBulkEnteralPlans = useCallback(() => {
-    setBulkDraft((prev) => {
-      const next = { ...prev };
-      for (const r of displayResidents) {
-        const id = String(r.id);
-        if (!next[id]) continue;
-        next[id] = applyEnteralBulkPlanToRow(next[id], r, selectedFacilityLinkKey, bulkGlobalMealSlot);
-      }
-      return next;
-    });
-  }, [displayResidents, selectedFacilityLinkKey, bulkGlobalMealSlot]);
   const [homeVisitNoteLaunch, setHomeVisitNoteLaunch] = useState(
     /** @type {null | { visitDateYmd: string; residentIds: string[]; doctor?: string; visitType?: string }} */ (null)
   );
@@ -1275,6 +1264,7 @@ export function RecordPage({
       /* noop */
     }
   }, []);
+
   /** 入居者一覧の並び順 */
   const [residentSortMode, setResidentSortMode] = useState(/** @type {'room' | 'kana'} */ ('room'));
   /** 入居者一覧の名前検索（確定文字列のみで絞り込み。IME 変換中は絞り込まない） */
@@ -1337,6 +1327,7 @@ export function RecordPage({
     () => residentScheduleSheetForFacility(selectedFacilityLinkKey),
     [selectedFacilityLinkKey]
   );
+
   const [scheduleImportBusy, setScheduleImportBusy] = useState(false);
   const [scheduleImportMsg, setScheduleImportMsg] = useState('');
   const [scheduleModalResident, setScheduleModalResident] = useState(
@@ -1488,6 +1479,23 @@ export function RecordPage({
     });
     return list;
   }, [filteredResidents, residentSortMode, residentNameQuery, tick]);
+
+  const refreshBulkEnteralPlans = useCallback(() => {
+    setBulkDraft((prev) => {
+      const next = { ...prev };
+      for (const r of displayResidents) {
+        const id = String(r.id);
+        if (!next[id]) continue;
+        next[id] = applyEnteralBulkPlanToRow(next[id], r, selectedFacilityLinkKey, bulkGlobalMealSlot);
+      }
+      return next;
+    });
+  }, [displayResidents, selectedFacilityLinkKey, bulkGlobalMealSlot]);
+
+  useEffect(() => {
+    if (residentInputView !== 'table' || !selectedFacilityLinkKey) return;
+    refreshBulkEnteralPlans();
+  }, [residentInputView, selectedFacilityLinkKey, bulkGlobalMealSlot, refreshBulkEnteralPlans]);
 
   /** 一覧表・24時間グリッド用（保存済みログからマスを埋める） */
   const bulkHourlySavedByResident = useMemo(() => {
@@ -6034,7 +6042,10 @@ export function RecordPage({
       />
       <EnteralNutritionMenuModal
         open={enteralMenuOpen}
-        onClose={() => setEnteralMenuOpen(false)}
+        onClose={() => {
+          setEnteralMenuOpen(false);
+          refreshBulkEnteralPlans();
+        }}
         facilityLabel={selectedDef?.tabLabel ?? selectedSheetTitle}
         facilityLinkKey={linkKeyForSheetTitle(selectedSheetTitle)}
         sheetsApiKey={SHEETS_KEY}

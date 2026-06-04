@@ -122,6 +122,9 @@ export default defineConfig(({ mode }) => {
   ).trim();
   define['import.meta.env.VITE_BACKUP_ADMIN_PASSWORD'] = JSON.stringify(backupAdminPassword);
 
+  const buildId = String(env.VERCEL_GIT_COMMIT_SHA ?? env.VITE_APP_BUILD_ID ?? 'local').slice(0, 7);
+  define['import.meta.env.VITE_APP_BUILD_ID'] = JSON.stringify(buildId || 'dev');
+
   return {
     define,
     envDir: __dirname,

@@ -235,6 +235,9 @@ export function ResidentBulkInputTable({
         <p className="flex items-center gap-1.5 text-base font-black text-emerald-800">
           <Table2 className="h-4 w-4 shrink-0" aria-hidden />
           バイタル・体重（月1回）・巡視・排尿・排便・食事（朝昼夜）・エンシュア・ソリタ・間食など・経管メニュー・水分・内服を一覧から
+          <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-mono font-bold text-slate-600">
+            {String(import.meta.env.VITE_APP_BUILD_ID ?? 'dev')}
+          </span>
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
           <button
