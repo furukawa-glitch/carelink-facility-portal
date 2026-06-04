@@ -1620,6 +1620,9 @@ export function addWeeklyPlan(linkKey, plan) {
   // 古いものは肥大化防止で削る（直近90件）
   all[k] = list.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)).slice(-90);
   writeJson(LS.weeklyPlans, all);
+  void import('../lib/facilityPortalStoreSync.js').then((m) =>
+    m.queueFacilityPortalStoreSync(m.FACILITY_STORE_WEEKLY_PLANS, k)
+  );
   return true;
 }
 
@@ -1632,6 +1635,9 @@ export function removeWeeklyPlan(linkKey, planId) {
   if (next.length === list.length) return false;
   all[k] = next;
   writeJson(LS.weeklyPlans, all);
+  void import('../lib/facilityPortalStoreSync.js').then((m) =>
+    m.queueFacilityPortalStoreSync(m.FACILITY_STORE_WEEKLY_PLANS, k)
+  );
   return true;
 }
 
@@ -1705,6 +1711,9 @@ export function saveHomeVisitCalendar(linkKey, record) {
     days: Array.isArray(record.days) ? record.days : [],
   };
   writeJson(LS.homeVisitCalendar, all);
+  void import('../lib/facilityPortalStoreSync.js').then((m) =>
+    m.queueFacilityPortalStoreSync(m.FACILITY_STORE_HOME_VISIT, k)
+  );
   return true;
 }
 

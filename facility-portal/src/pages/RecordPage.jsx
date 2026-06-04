@@ -2110,7 +2110,11 @@ export function RecordPage({
   }, [clock, displayResidents, selectedSheetTitle]);
 
   useEffect(() => {
-    const onCloudSync = () => setTick((n) => n + 1);
+    const onCloudSync = () => {
+      setTick((n) => n + 1);
+      setPlanRev((n) => n + 1);
+      setHomeVisitCalendarRev((n) => n + 1);
+    };
     window.addEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
     return () => window.removeEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
   }, []);
@@ -2812,6 +2816,7 @@ export function RecordPage({
     if (!ok) return;
     setPlanDraftTitle('');
     setPlanRev((n) => n + 1);
+    void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
   }, [selectedDef, planDraftDate, planDraftTime, planDraftType, planDraftTitle]);
 
   const removeWeeklyPlan = useCallback(

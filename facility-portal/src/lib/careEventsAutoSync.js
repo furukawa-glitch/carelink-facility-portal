@@ -9,6 +9,11 @@ import {
   pullAndApplyCareEventsCloud,
   pushAllLocalCareEventsCloud,
 } from './careEventsSupabaseSync.js';
+import {
+  flushFacilityPortalStoresCloud,
+  pullAndMergeFacilityPortalStores,
+  pushAllFacilityPortalStoresCloud,
+} from './facilityPortalStoreSync.js';
 import { CARE_EVENTS_SYNC_EVENT, startCareEventsRealtimeSync } from './careEventsRealtimeSync.js';
 
 const BOOTSTRAP_LS_KEY = 'carelink_care_cloud_bootstrap_done_v1';
@@ -28,21 +33,25 @@ function dispatchSyncEvent(detail) {
 export async function syncCareEventsNow(onApplied) {
   if (!isCareCloudSyncConfigured()) return { ok: true, skipped: true };
   let pull = { ok: true, pulled: 0, merged: 0 };
+  let stores = { storesMerged: 0 };
   try {
     pull = await pullAndApplyCareEventsCloud();
-    if (Number(pull?.merged ?? 0) > 0 || Number(pull?.pulled ?? 0) > 0) {
-      dispatchSyncEvent(pull);
-      onApplied?.(pull);
+    stores = await pullAndMergeFacilityPortalStores();
+    const merged = Number(pull?.merged ?? 0) + Number(stores?.storesMerged ?? 0);
+    if (merged > 0 || Number(pull?.pulled ?? 0) > 0 || Number(stores?.pulled ?? 0) > 0) {
+      dispatchSyncEvent({ ...pull, ...stores, merged });
+      onApplied?.({ ...pull, ...stores, merged });
     }
   } catch {
     /* 継続 */
   }
   try {
     await flushCareEventsCloudSync();
+    await flushFacilityPortalStoresCloud();
   } catch {
     /* 継続 */
   }
-  return pull;
+  return { ...pull, ...stores };
 }
 
 /**
@@ -59,8 +68,12 @@ async function runCloudBootstrapOnce(onApplied) {
       return;
     }
     const result = await pushAllLocalCareEventsCloud();
+    const storesResult = await pushAllFacilityPortalStoresCloud();
     localStorage.setItem(BOOTSTRAP_LS_KEY, '1');
-    const detail = { upserted: Number(result?.upserted ?? 0), bootstrap: true };
+    const detail = {
+      upserted: Number(result?.upserted ?? 0) + Number(storesResult?.upserted ?? 0),
+      bootstrap: true,
+    };
     dispatchSyncEvent(detail);
     onApplied?.(detail);
   } catch {

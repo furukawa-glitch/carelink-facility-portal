@@ -1,0 +1,212 @@
+/**
+ * 予定カレンダー・往診カレンダー等（localStorage）のクラウド同期
+ */
+
+import { careSyncPost, isCareCloudSyncConfigured } from './careEventsSupabaseSync.js';
+
+export const FACILITY_STORE_WEEKLY_PLANS = 'weekly_plans';
+export const FACILITY_STORE_HOME_VISIT = 'home_visit_calendar';
+
+const LS_WEEKLY = 'carelink_os_weekly_plans_v1';
+const LS_HOME_VISIT = 'carelink_os_home_visit_calendar_v1';
+const FLUSH_DEBOUNCE_MS = 2_000;
+
+/** @type {Set<string>} */
+const pendingKeys = new Set();
+let flushTimer = 0;
+let flushing = false;
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(key, val) {
+  localStorage.setItem(key, JSON.stringify(val));
+}
+
+/**
+ * @param {unknown[]} a
+ * @param {unknown[]} b
+ */
+function mergePlanLists(a, b) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const byId = new Map();
+  for (const p of [...a, ...b]) {
+    if (!p || typeof p !== 'object') continue;
+    const row = /** @type {Record<string, unknown>} */ (p);
+    const id = String(row.id ?? `${row.date}_${row.time}_${row.title}`);
+    const prev = byId.get(id);
+    const ts = String(row.ts ?? '');
+    const pts = String(prev?.ts ?? '');
+    if (!prev || ts >= pts) byId.set(id, row);
+  }
+  return [...byId.values()]
+    .sort((x, y) =>
+      `${String(x.date ?? '')} ${String(x.time ?? '')}`.localeCompare(
+        `${String(y.date ?? '')} ${String(y.time ?? '')}`,
+        'ja'
+      )
+    )
+    .slice(-90);
+}
+
+/**
+ * @param {{ store_type?: string; facility_link_key?: string; payload?: unknown; updated_at?: string }[]} rows
+ */
+function applyFacilityStoresToLocal(rows) {
+  let weeklyChanged = 0;
+  let homeChanged = 0;
+  const weeklyAll = readJson(LS_WEEKLY, {});
+  const homeAll = readJson(LS_HOME_VISIT, {});
+
+  for (const row of rows) {
+    const type = String(row?.store_type ?? '').trim();
+    const linkKey = String(row?.facility_link_key ?? '').trim();
+    if (!linkKey) continue;
+    if (type === FACILITY_STORE_WEEKLY_PLANS) {
+      const remote = Array.isArray(row.payload) ? row.payload : [];
+      const local = Array.isArray(weeklyAll[linkKey]) ? weeklyAll[linkKey] : [];
+      const merged = mergePlanLists(local, remote);
+      if (JSON.stringify(merged) !== JSON.stringify(local)) {
+        weeklyAll[linkKey] = merged;
+        weeklyChanged++;
+      }
+    } else if (type === FACILITY_STORE_HOME_VISIT) {
+      const remote = row.payload && typeof row.payload === 'object' ? row.payload : null;
+      if (!remote) continue;
+      const local = homeAll[linkKey];
+      const remoteAt = String(remote.updatedAt ?? remote.updated_at ?? '');
+      const localAt = String(local?.updatedAt ?? '');
+      if (!local || remoteAt >= localAt) {
+        homeAll[linkKey] = remote;
+        homeChanged++;
+      }
+    }
+  }
+
+  if (weeklyChanged) writeJson(LS_WEEKLY, weeklyAll);
+  if (homeChanged) writeJson(LS_HOME_VISIT, homeAll);
+  return { weeklyChanged, homeChanged, storesMerged: weeklyChanged + homeChanged };
+}
+
+/**
+ * @param {string} storeType
+ * @param {string} facilityLinkKey
+ */
+export function queueFacilityPortalStoreSync(storeType, facilityLinkKey) {
+  if (!isCareCloudSyncConfigured()) return;
+  const k = String(facilityLinkKey ?? '').trim();
+  const t = String(storeType ?? '').trim();
+  if (!k || !t) return;
+  pendingKeys.add(`${t}:${k}`);
+  if (flushTimer) window.clearTimeout(flushTimer);
+  flushTimer = window.setTimeout(() => {
+    flushTimer = 0;
+    void flushFacilityPortalStoresCloud();
+  }, FLUSH_DEBOUNCE_MS);
+}
+
+export async function flushFacilityPortalStoresCloud() {
+  if (!isCareCloudSyncConfigured() || flushing || pendingKeys.size === 0) {
+    return { ok: true, upserted: 0 };
+  }
+  flushing = true;
+  const keys = [...pendingKeys];
+  pendingKeys.clear();
+  let upserted = 0;
+  try {
+    for (const key of keys) {
+      const [storeType, facilityLinkKey] = key.split(':');
+      if (!storeType || !facilityLinkKey) continue;
+      let payload = null;
+      let updatedAt = new Date().toISOString();
+      if (storeType === FACILITY_STORE_WEEKLY_PLANS) {
+        const all = readJson(LS_WEEKLY, {});
+        payload = Array.isArray(all[facilityLinkKey]) ? all[facilityLinkKey] : [];
+        const last = payload[payload.length - 1];
+        if (last?.ts) updatedAt = String(last.ts);
+      } else if (storeType === FACILITY_STORE_HOME_VISIT) {
+        const all = readJson(LS_HOME_VISIT, {});
+        payload = all[facilityLinkKey] ?? null;
+        if (!payload) continue;
+        updatedAt = String(payload.updatedAt ?? updatedAt);
+      } else {
+        continue;
+      }
+      await careSyncPost({
+        action: 'upsert_facility_store',
+        storeType,
+        facilityLinkKey,
+        payload,
+        updatedAt,
+      });
+      upserted++;
+    }
+    if (pendingKeys.size > 0) {
+      if (flushTimer) window.clearTimeout(flushTimer);
+      flushTimer = window.setTimeout(() => {
+        flushTimer = 0;
+        void flushFacilityPortalStoresCloud();
+      }, FLUSH_DEBOUNCE_MS);
+    }
+    return { ok: true, upserted };
+  } finally {
+    flushing = false;
+  }
+}
+
+export async function pullAndMergeFacilityPortalStores() {
+  if (!isCareCloudSyncConfigured()) return { ok: true, skipped: true, storesMerged: 0 };
+  const result = await careSyncPost({
+    action: 'pull_facility_stores',
+    storeTypes: [FACILITY_STORE_WEEKLY_PLANS, FACILITY_STORE_HOME_VISIT],
+  });
+  const rows = Array.isArray(result?.stores) ? result.stores : [];
+  if (!rows.length) return { ok: true, pulled: 0, storesMerged: 0 };
+  const applied = applyFacilityStoresToLocal(rows);
+  return {
+    ok: true,
+    pulled: rows.length,
+    storesMerged: Number(applied.storesMerged ?? 0),
+    weeklyChanged: applied.weeklyChanged,
+    homeChanged: applied.homeChanged,
+  };
+}
+
+/** 初回: ローカルの予定・往診カレンダーをクラウドへ */
+export async function pushAllFacilityPortalStoresCloud() {
+  if (!isCareCloudSyncConfigured()) return { ok: true, skipped: true, upserted: 0 };
+  const weeklyAll = readJson(LS_WEEKLY, {});
+  const homeAll = readJson(LS_HOME_VISIT, {});
+  let upserted = 0;
+  for (const [facilityLinkKey, plans] of Object.entries(weeklyAll)) {
+    if (!facilityLinkKey || !Array.isArray(plans) || !plans.length) continue;
+    const last = plans[plans.length - 1];
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_WEEKLY_PLANS,
+      facilityLinkKey,
+      payload: plans,
+      updatedAt: String(last?.ts ?? new Date().toISOString()),
+    });
+    upserted++;
+  }
+  for (const [facilityLinkKey, rec] of Object.entries(homeAll)) {
+    if (!facilityLinkKey || !rec || typeof rec !== 'object') continue;
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_HOME_VISIT,
+      facilityLinkKey,
+      payload: rec,
+      updatedAt: String(rec.updatedAt ?? new Date().toISOString()),
+    });
+    upserted++;
+  }
+  return { ok: true, upserted };
+}

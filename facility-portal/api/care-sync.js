@@ -238,6 +238,48 @@ export default async function handler(req, res) {
       return;
     }
 
+    if (action === 'upsert_facility_store') {
+      const storeType = String(payload.storeType ?? payload.store_type ?? '').trim();
+      const facilityLinkKey = String(payload.facilityLinkKey ?? payload.facility_link_key ?? '').trim();
+      if (!storeType || !facilityLinkKey) {
+        sendJson(res, 400, { ok: false, error: 'storeType and facilityLinkKey required' });
+        return;
+      }
+      const updatedAt = String(payload.updatedAt ?? payload.updated_at ?? new Date().toISOString()).trim();
+      const row = {
+        organization_id: organizationId,
+        store_type: storeType,
+        facility_link_key: facilityLinkKey,
+        payload: payload.payload ?? null,
+        updated_at: updatedAt,
+      };
+      await supabaseRest(
+        supabaseUrl,
+        serviceKey,
+        'facility_portal_stores?on_conflict=organization_id,store_type,facility_link_key',
+        'POST',
+        [row]
+      );
+      void broadcastCareEventsUpdated(supabaseUrl, serviceKey, organizationId);
+      sendJson(res, 200, { ok: true, upserted: 1 });
+      return;
+    }
+
+    if (action === 'pull_facility_stores') {
+      const storeTypes = Array.isArray(payload.storeTypes)
+        ? payload.storeTypes.map((s) => String(s ?? '').trim()).filter(Boolean)
+        : [];
+      let path = `facility_portal_stores?organization_id=eq.${organizationId}&select=store_type,facility_link_key,payload,updated_at&order=updated_at.desc&limit=200`;
+      if (storeTypes.length === 1) {
+        path += `&store_type=eq.${encodeURIComponent(storeTypes[0])}`;
+      } else if (storeTypes.length > 1) {
+        path += `&store_type=in.(${storeTypes.map((s) => encodeURIComponent(s)).join(',')})`;
+      }
+      const rows = await supabaseSelectJson(supabaseUrl, serviceKey, path);
+      sendJson(res, 200, { ok: true, stores: rows, count: rows.length });
+      return;
+    }
+
     sendJson(res, 400, { ok: false, error: `Unknown action: ${action}` });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

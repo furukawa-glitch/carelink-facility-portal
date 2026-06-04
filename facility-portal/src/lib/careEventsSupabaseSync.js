@@ -28,6 +28,11 @@ function organizationId() {
   return String(import.meta.env.VITE_CARELINK_ORGANIZATION_ID ?? '').trim();
 }
 
+/** @param {Record<string, unknown>} body */
+export async function careSyncPost(body) {
+  return postCareSync(body);
+}
+
 async function postCareSync(body) {
   const secret = syncSecret();
   if (!secret) return { ok: false, skipped: true, reason: 'no_secret' };
@@ -134,7 +139,7 @@ export function getCareCloudSyncStatus() {
     enabled: true,
     configured: true,
     label: 'クラウド同期 ON（自動）',
-    hint: '保存すると自動でクラウドへ送り、他のPCも起動時・約1分ごとに自動で最新を取得します。手動操作は不要です。',
+    hint: '生活記録・予定カレンダー（手入力・往診PDF）を自動で全PCに共有します。保存後すぐ反映、他PCは起動時・約1分ごとに自動取得します。',
   };
 }
 
