@@ -393,11 +393,25 @@ function escHtml(s) {
  * @param {string} facilityLabel
  * @param {EnteralMenuDraft} draft
  */
+function printCellStyle(legend, colorId) {
+  const id = String(colorId ?? '').trim();
+  if (!id) return '';
+  const bg = enteralSlotBackgroundColor(legend, id);
+  return `background-color:${bg};-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;`;
+}
+
 function printSlotTd(slot, legend) {
-  const bg = enteralSlotBackgroundColor(legend, slot?.colorId);
   const label = getEnteralColorDef(legend, slot?.colorId)?.label ?? '';
-  const tag = label ? ` <span style="font-size:9pt;color:#333">[${escHtml(label)}]</span>` : '';
-  return `<td style="background:${escHtml(bg)}">${escHtml(formatEnteralSlotLine(slot))}${tag}</td>`;
+  const tag = label ? ` <span style="font-size:9pt;color:#111;font-weight:700">[${escHtml(label)}]</span>` : '';
+  const cls = slot?.colorId ? ' class="slot-fill"' : '';
+  const style = printCellStyle(legend, slot?.colorId);
+  return `<td${cls}${style ? ` style="${style}"` : ''}>${escHtml(formatEnteralSlotLine(slot))}${tag}</td>`;
+}
+
+function printMedTd(slot, legend) {
+  const style = printCellStyle(legend, slot?.colorId);
+  const cls = `class="med${slot?.colorId ? ' med-fill slot-fill' : ''}"`;
+  return `<td ${cls}${style ? ` style="${style}"` : ''}>${escHtml(slot.medication || '—')}</td>`;
 }
 
 export function buildEnteralMenuHtml(facilityLabel, draft) {
@@ -409,11 +423,11 @@ export function buildEnteralMenuHtml(facilityLabel, draft) {
       (r) => `<tr>
   <td class="name">${escHtml(r.name)}</td>
   ${printSlotTd(r.morning, legend)}
-  <td class="med" style="background:${escHtml(enteralSlotBackgroundColor(legend, r.morning.colorId))}">${escHtml(r.morning.medication || '—')}</td>
+  ${printMedTd(r.morning, legend)}
   ${printSlotTd(r.noon, legend)}
-  <td class="med" style="background:${escHtml(enteralSlotBackgroundColor(legend, r.noon.colorId))}">${escHtml(r.noon.medication || '—')}</td>
+  ${printMedTd(r.noon, legend)}
   ${printSlotTd(r.evening, legend)}
-  <td class="med" style="background:${escHtml(enteralSlotBackgroundColor(legend, r.evening.colorId))}">${escHtml(r.evening.medication || '—')}</td>
+  ${printMedTd(r.evening, legend)}
 </tr>`
     )
     .join('\n');
@@ -421,7 +435,7 @@ export function buildEnteralMenuHtml(facilityLabel, draft) {
   const colorLegendHtml = legend
     .map(
       (c) =>
-        `<span style="display:inline-block;margin-right:12px;padding:2px 8px;background:${escHtml(c.color)};border:1px solid #333">${escHtml(c.label)}</span>`
+        `<span class="legend-swatch" style="display:inline-block;margin-right:12px;padding:2px 8px;background-color:${escHtml(c.color)};border:1px solid #333;-webkit-print-color-adjust:exact;print-color-adjust:exact">${escHtml(c.label)}</span>`
     )
     .join('');
 
@@ -444,14 +458,26 @@ export function buildEnteralMenuHtml(facilityLabel, draft) {
   .meta { font-size: 11pt; margin-bottom: 10px; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   th, td { border: 1px solid #333; padding: 4px 6px; vertical-align: top; word-break: break-word; }
-  th { background: #f3f4f6; font-size: 10pt; }
+  th { background-color: #f3f4f6; font-size: 10pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   td.name { width: 9em; font-weight: 700; white-space: nowrap; }
   td.med { width: 2.5em; text-align: center; font-weight: 700; }
+  td.slot-fill, td.med-fill, .legend-swatch {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
   col.c-menu { width: 22%; }
   col.c-med { width: 3%; }
   .legend { margin-top: 10px; font-size: 10pt; line-height: 1.5; }
   .footer { margin-top: 8px; font-size: 10pt; line-height: 1.55; white-space: pre-wrap; }
-  @media print { .no-print { display: none; } }
+  @media print {
+    .no-print { display: none; }
+    body, table, tr, td, th, .legend-swatch {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+  }
 </style>
 </head>
 <body>
@@ -479,7 +505,7 @@ ${bodyRows || '<tr><td colspan="7" style="text-align:center;padding:16px;">経�
 ${colorLegendHtml ? `<p class="legend">${colorLegendHtml}</p>` : ''}
 ${draft.legendNote ? `<p class="legend">${escHtml(draft.legendNote)}</p>` : ''}
 ${footer ? `<div class="footer">${footer.replace(/\n/g, '<br/>')}</div>` : ''}
-<p class="no-print" style="margin-top:16px;font-size:10pt;color:#666;">印刷ダイアログで「PDFに保存」もできます。</p>
+<p class="no-print" style="margin-top:16px;font-size:10pt;color:#333;line-height:1.5;">印刷ダイアログで「PDFに保存」もできます。<br/>色が白抜けする場合: 「その他の設定」→ <strong>背景を印刷する</strong>（背景のグラフィック）をオンにしてください。</p>
 </body>
 </html>`;
 }
