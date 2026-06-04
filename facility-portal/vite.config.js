@@ -11,6 +11,11 @@ const sheetProxy = {
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/spreadsheet-export/, ''),
   },
+  '/drive-export': {
+    target: 'https://drive.google.com',
+    changeOrigin: true,
+    rewrite: (path) => path.replace(/^\/drive-export/, ''),
+  },
 };
 
 /**

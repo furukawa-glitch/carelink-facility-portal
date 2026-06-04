@@ -221,20 +221,6 @@ function escHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function fmtMeasuredAt(iso) {
-  const t = String(iso ?? '').trim();
-  if (!t) return '—';
-  const d = new Date(t);
-  if (!Number.isFinite(d.getTime())) return '—';
-  return d.toLocaleString('ja-JP', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-}
-
 function buildAisaiHomeVisitNoteHtml(weekEndYmd, rows, opts = {}) {
   const included = rows.filter((r) => r.included && String(r.name ?? '').trim());
   const headerTitle = String(opts.headerTitle ?? '往診ノート　《１・３週》　水曜　女性').trim();
@@ -267,7 +253,7 @@ function buildAisaiHomeVisitNoteHtml(weekEndYmd, rows, opts = {}) {
   td.name{min-width:9rem;font-weight:bold;}
   td.n{text-align:center;white-space:nowrap;width:4rem;}
   td.remark{width:14%;}
-  td.visit{width:28%;}
+  td.visit{width:38%;min-height:2.5em;white-space:pre-wrap;word-break:break-word;}
   .foot{margin-top:8px;font-size:10px;color:#64748b;}
   @media print{body{margin:8mm;} .noprint{display:none;}}
 </style></head><body>
@@ -311,8 +297,7 @@ export function buildHomeVisitNoteHtml(facilityLabel, weekEndYmd, rows, opts = {
   <td class="n">${escHtml(r.pulse)}</td>
   <td class="n">${escHtml(r.spo2)}</td>
   <td class="n">${escHtml(r.weight)}</td>
-  <td class="ts">${escHtml(fmtMeasuredAt(r.measuredAt))}</td>
-  <td>${escHtml(r.note)}</td>
+  <td class="memo">${escHtml(r.note)}</td>
 </tr>`
     )
     .join('\n');
@@ -326,8 +311,9 @@ export function buildHomeVisitNoteHtml(facilityLabel, weekEndYmd, rows, opts = {
   table{border-collapse:collapse;width:100%;}
   th,td{border:1px solid #333;padding:4px 6px;vertical-align:top;}
   th{background:#e2e8f0;font-size:11px;}
-  td.c,td.n,td.ts{text-align:center;white-space:nowrap;}
+  td.c,td.n{text-align:center;white-space:nowrap;}
   td.name{font-weight:bold;min-width:7rem;}
+  td.memo{min-width:12rem;white-space:pre-wrap;word-break:break-word;}
   .memo{margin-top:12px;padding:8px;border:1px solid #94a3b8;background:#f8fafc;white-space:pre-wrap;}
   @media print{body{margin:8mm;} .noprint{display:none;}}
 </style></head><body>
@@ -336,10 +322,10 @@ export function buildHomeVisitNoteHtml(facilityLabel, weekEndYmd, rows, opts = {
 ${memo ? `<div class="memo"><strong>施設メモ</strong><br/>${escHtml(memo)}</div>` : ''}
 <table>
 <thead><tr>
-  <th>No</th><th>部屋</th><th>氏名</th><th>体温</th><th>血圧</th><th>脈</th><th>SpO2</th><th>体重</th><th>測定</th><th>往診メモ</th>
+  <th>No</th><th>部屋</th><th>氏名</th><th>体温</th><th>血圧</th><th>脈</th><th>SpO2</th><th>体重</th><th>往診メモ</th>
 </tr></thead>
 <tbody>
-${bodyRows || '<tr><td colspan="10">（対象者なし）</td></tr>'}
+${bodyRows || '<tr><td colspan="9">（対象者なし）</td></tr>'}
 </tbody>
 </table>
 <p class="noprint" style="margin-top:16px;font-size:11px;color:#64748b;">CareLink 施設ポータルから出力。バイタルは保存済み記録の最新値です。印刷または PDF 保存してください。</p>
@@ -434,7 +420,7 @@ export function downloadHomeVisitNoteCsv(facilityLabel, weekEndYmd, rows, opts =
   const lines = [
     ['施設', facilityLabel].map(q).join(','),
     ['対象週終了日', weekEndYmd].map(q).join(','),
-    ['No', '部屋', '氏名', '体温', '血圧上', '血圧下', '脈', 'SpO2', '体重', '測定日時', '往診メモ'].map(q).join(','),
+    ['No', '部屋', '氏名', '体温', '血圧上', '血圧下', '脈', 'SpO2', '体重', '往診メモ'].map(q).join(','),
   ];
   included.forEach((r, i) => {
     lines.push(
@@ -448,7 +434,6 @@ export function downloadHomeVisitNoteCsv(facilityLabel, weekEndYmd, rows, opts =
         r.pulse,
         r.spo2,
         r.weight,
-        fmtMeasuredAt(r.measuredAt),
         r.note,
       ]
         .map(q)

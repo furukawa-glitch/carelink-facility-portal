@@ -4,7 +4,8 @@
  */
 
 import { getSupabaseBrowserClient } from './supabaseClient.js';
-import { isCareCloudSyncConfigured, pullAndApplyCareEventsCloud } from './careEventsSupabaseSync.js';
+import { pullAllCloudDataAndApply } from './cloudDataSync.js';
+import { isCareCloudSyncConfigured } from './careEventsSupabaseSync.js';
 
 export const CARE_EVENTS_SYNC_EVENT = 'carelink-care-events-sync';
 
@@ -29,11 +30,13 @@ async function pullAndNotify(onApplied) {
   if (pulling) return;
   pulling = true;
   try {
-    const result = await pullAndApplyCareEventsCloud();
-    if (typeof window !== 'undefined') {
+    const result = await pullAllCloudDataAndApply();
+    const merged = Number(result?.merged ?? 0);
+    const storesMerged = Number(result?.storesMerged ?? 0);
+    if (typeof window !== 'undefined' && (merged > 0 || storesMerged > 0 || Number(result?.pulled ?? 0) > 0)) {
       window.dispatchEvent(new CustomEvent(CARE_EVENTS_SYNC_EVENT, { detail: result }));
     }
-    onApplied?.(result);
+    if (merged > 0 || storesMerged > 0) onApplied?.(result);
   } catch {
     // クラウド未設定・一時失敗時は黙って継続
   } finally {

@@ -2,12 +2,72 @@ import { defaultEnteralMenuFromResident } from './residentDetailSeed.js';
 
 const LS_KEY = 'carelink_os_enteral_nutrition_menu_v1';
 
-export const ENTERAL_MEDICATION_OPTIONS = Object.freeze(['', '〇', '×', '日水のみ']);
+export const ENTERAL_MEDICATION_OPTIONS = Object.freeze(['', '〇', '×']);
+
+/** @type {ReadonlyArray<{ value: string; label: string }>} */
+export const ENTERAL_SHIFT_OPTIONS = Object.freeze([
+  { value: '', label: '—' },
+  { value: 'day', label: '日勤' },
+  { value: 'night', label: '夜勤' },
+  { value: 'short', label: 'ショート' },
+]);
+
+/** @param {string} shift */
+export function enteralShiftCellClass(shift) {
+  switch (String(shift ?? '').trim()) {
+    case 'day':
+      return 'bg-pink-100';
+    case 'night':
+      return 'bg-indigo-200';
+    case 'short':
+      return 'bg-amber-100';
+    default:
+      return 'bg-white';
+  }
+}
+
+/** @param {string} raw */
+export function parseEnteralTimeFromText(raw) {
+  const s = String(raw ?? '').trim();
+  const m = /^(\d{1,2})[：:](\d{2})/.exec(s);
+  if (!m) return { time: '', rest: s };
+  const hh = String(Math.min(23, Math.max(0, Number(m[1])))).padStart(2, '0');
+  const mm = String(Math.min(59, Math.max(0, Number(m[2])))).padStart(2, '0');
+  const time = `${hh}:${mm}`;
+  const rest = s.slice(m[0].length).trim();
+  return { time, rest };
+}
+
+/** @param {EnteralMenuSlot | null | undefined} slot */
+export function formatEnteralSlotLine(slot) {
+  const s = slot && typeof slot === 'object' ? slot : {};
+  const time = String(s.time ?? '').trim();
+  const content = String(s.content ?? '').trim();
+  if (time && content) return `${time} ${content}`;
+  return time || content;
+}
+
+/** @param {string} shift */
+export function enteralShiftLabel(shift) {
+  return ENTERAL_SHIFT_OPTIONS.find((o) => o.value === shift)?.label ?? '';
+}
+
+/** @param {string} med */
+export function normalizeEnteralMedication(med) {
+  const s = String(med ?? '').trim();
+  if (!s || s === '—' || s === '-') return '';
+  if (/日水|水のみ/u.test(s)) return '';
+  if (/^[○◯〇]$/.test(s.replace(/\s/g, ''))) return '〇';
+  if (/^[×✕✖]$/.test(s.replace(/\s/g, ''))) return '×';
+  return ENTERAL_MEDICATION_OPTIONS.includes(s) ? s : '';
+}
 
 /**
  * @typedef {{
  *   content: string;
  *   medication: string;
+ *   time?: string;
+ *   shift?: '' | 'day' | 'night' | 'short';
  * }} EnteralMenuSlot
  */
 
@@ -45,7 +105,7 @@ export function formatYmdSlashed(ymd) {
 }
 
 function emptySlot() {
-  return { content: '', medication: '' };
+  return { content: '', medication: '', time: '', shift: '' };
 }
 
 function readStore() {
@@ -69,10 +129,22 @@ function writeStore(all) {
 
 function normalizeSlot(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
-  const med = String(s.medication ?? '').trim();
+  let time = String(s.time ?? '').trim();
+  let content = String(s.content ?? '').trim();
+  if (!time && content) {
+    const parsed = parseEnteralTimeFromText(content);
+    if (parsed.time) {
+      time = parsed.time;
+      content = parsed.rest;
+    }
+  }
+  const shiftRaw = String(s.shift ?? '').trim();
+  const shift = ['day', 'night', 'short'].includes(shiftRaw) ? shiftRaw : '';
   return {
-    content: String(s.content ?? '').trim(),
-    medication: ENTERAL_MEDICATION_OPTIONS.includes(med) ? med : med.slice(0, 8),
+    content,
+    medication: normalizeEnteralMedication(s.medication),
+    time,
+    shift,
   };
 }
 
@@ -95,8 +167,8 @@ function normalizeRow(raw, res) {
 /** @param {EnteralMenuRow | null | undefined} row */
 export function enteralMenuBulkLineFromRow(row) {
   if (!row) return '';
-  const parts = [row.morning?.content, row.noon?.content, row.evening?.content]
-    .map((s) => String(s ?? '').trim())
+  const parts = [row.morning, row.noon, row.evening]
+    .map((slot) => formatEnteralSlotLine(slot))
     .filter(Boolean);
   return parts.join(' ／ ');
 }
@@ -115,9 +187,10 @@ export function enteralMenuSlotContentForResident(facilityLinkKey, residentId, m
   if (!row) return { content: '', medication: '' };
   const sk = ENTERAL_SLOT_BY_MEAL[String(mealSlot ?? '').trim()];
   if (sk && row[sk]) {
+    const slot = normalizeSlot(row[sk]);
     return {
-      content: String(row[sk].content ?? '').trim(),
-      medication: String(row[sk].medication ?? '').trim(),
+      content: formatEnteralSlotLine(slot),
+      medication: slot.medication,
     };
   }
   return { content: enteralMenuBulkLineFromRow(row), medication: '' };
@@ -263,11 +336,11 @@ export function buildEnteralMenuHtml(facilityLabel, draft) {
     .map(
       (r) => `<tr>
   <td class="name">${escHtml(r.name)}</td>
-  <td>${escHtml(r.morning.content)}</td>
+  <td>${escHtml(formatEnteralSlotLine(r.morning))}${r.morning.shift ? ` <span style="font-size:9pt;color:#555">[${escHtml(enteralShiftLabel(r.morning.shift))}]</span>` : ''}</td>
   <td class="med">${escHtml(r.morning.medication || '—')}</td>
-  <td>${escHtml(r.noon.content)}</td>
+  <td>${escHtml(formatEnteralSlotLine(r.noon))}${r.noon.shift ? ` <span style="font-size:9pt;color:#555">[${escHtml(enteralShiftLabel(r.noon.shift))}]</span>` : ''}</td>
   <td class="med">${escHtml(r.noon.medication || '—')}</td>
-  <td>${escHtml(r.evening.content)}</td>
+  <td>${escHtml(formatEnteralSlotLine(r.evening))}${r.evening.shift ? ` <span style="font-size:9pt;color:#555">[${escHtml(enteralShiftLabel(r.evening.shift))}]</span>` : ''}</td>
   <td class="med">${escHtml(r.evening.medication || '—')}</td>
 </tr>`
     )

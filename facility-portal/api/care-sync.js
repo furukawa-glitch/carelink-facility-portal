@@ -175,6 +175,11 @@ export default async function handler(req, res) {
   const action = String(payload.action ?? 'upsert_events').trim();
 
   try {
+    if (action === 'ping') {
+      sendJson(res, 200, { ok: true, server: true, organizationId });
+      return;
+    }
+
     if (action === 'upsert_events') {
       const rawEvents = Array.isArray(payload.events) ? payload.events : [];
       const rows = rawEvents.map((e) => mapCareEventRow(organizationId, e)).filter(Boolean);
@@ -273,7 +278,8 @@ export default async function handler(req, res) {
       if (storeTypes.length === 1) {
         path += `&store_type=eq.${encodeURIComponent(storeTypes[0])}`;
       } else if (storeTypes.length > 1) {
-        path += `&store_type=in.(${storeTypes.map((s) => encodeURIComponent(s)).join(',')})`;
+        const quoted = storeTypes.map((s) => `"${String(s).replace(/"/g, '')}"`).join(',');
+        path += `&store_type=in.(${quoted})`;
       }
       const rows = await supabaseSelectJson(supabaseUrl, serviceKey, path);
       sendJson(res, 200, { ok: true, stores: rows, count: rows.length });

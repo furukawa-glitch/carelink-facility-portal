@@ -156,12 +156,13 @@ function applyFacilityStoresToLocal(rows) {
   if (homeChanged) writeJson(LS_HOME_VISIT, homeAll);
   if (injuryChanged) writeJson(LS_INJURY_DISEASE, injuryAll);
   if (enteralChanged) writeJson(LS_ENTERAL_MENU, enteralAll);
+  const storesMerged = weeklyChanged + homeChanged + injuryChanged + enteralChanged;
   return {
     weeklyChanged,
     homeChanged,
     injuryChanged,
     enteralChanged,
-    storesMerged: weeklyChanged + homeChanged + injuryChanged + enteralChanged,
+    storesMerged,
   };
 }
 
@@ -277,6 +278,8 @@ export async function pullAndMergeFacilityPortalStores() {
     storesMerged: Number(applied.storesMerged ?? 0),
     weeklyChanged: applied.weeklyChanged,
     homeChanged: applied.homeChanged,
+    injuryChanged: applied.injuryChanged,
+    enteralChanged: applied.enteralChanged,
   };
 }
 

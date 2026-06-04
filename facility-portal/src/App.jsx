@@ -1167,7 +1167,8 @@ const App = () => {
       if (
         Number(result?.merged ?? 0) > 0 ||
         Number(result?.pulled ?? 0) > 0 ||
-        Number(result?.upserted ?? 0) > 0
+        Number(result?.upserted ?? 0) > 0 ||
+        Number(result?.storesMerged ?? 0) > 0
       ) {
         setCareSyncRev((n) => n + 1);
         setPanoramaNursingRev((n) => n + 1);

@@ -2,6 +2,7 @@
  * 利用者名簿: VITE_GOOGLE_SHEETS_API_KEY があるとき Sheets API、ないとき公開CSV（Viteプロキシ）
  */
 
+import * as XLSX from 'xlsx';
 import {
   CARELINK_FACILITIES,
   compactFacilityToken,
@@ -1751,23 +1752,24 @@ export async function fetchSpreadsheetValuesByGid(
   spreadsheetId,
   apiKey,
   sheetGid,
-  rangeA1WithinSheet = 'A1:Z200'
+  rangeA1WithinSheet = 'A1:Z200',
+  opts = {}
 ) {
-  const gidNum = Number(sheetGid);
+  const gidNum = Number(sheetGid) || 0;
+  const label = String(opts.label ?? '表').trim() || '表';
   try {
     const tabs = await fetchSpreadsheetTabs(spreadsheetId, apiKey);
     const tab = tabs.find((t) => t.sheetId === gidNum);
-    if (!tab) {
-      throw new Error(`gid=${sheetGid} のタブが見つかりません（URL の #gid= を確認してください）`);
+    if (tab) {
+      return fetchAnySheetValues(spreadsheetId, apiKey, tab.title, rangeA1WithinSheet);
     }
-    return fetchAnySheetValues(spreadsheetId, apiKey, tab.title, rangeA1WithinSheet);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (isGoogleOfficeSheetError(msg)) {
-      return fetchSpreadsheetValuesViaCsvExport(spreadsheetId, gidNum);
+    if (!isGoogleOfficeSheetError(msg) && !isPublicSheetFetchFallback(msg)) {
+      throw e;
     }
-    throw e;
   }
+  return fetchSpreadsheetValuesViaCsvExport(spreadsheetId, gidNum, label);
 }
 
 /**
@@ -1932,41 +1934,127 @@ function csvProxyUrl(sheetId, gid) {
   return `/spreadsheet-export/spreadsheets/d/${sheetId}/export?format=csv&gid=${encodeURIComponent(gid)}`;
 }
 
+function gvizCsvProxyUrl(sheetId, gid) {
+  const base = `/spreadsheet-export/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`;
+  const g = Number(gid);
+  return Number.isFinite(g) && g >= 0 ? `${base}&gid=${encodeURIComponent(g)}` : base;
+}
+
+function driveXlsxDownloadUrls(fileId) {
+  const id = encodeURIComponent(fileId);
+  return [
+    `/drive-export/uc?export=download&id=${id}&confirm=t`,
+    `/drive-export/uc?export=download&id=${id}`,
+  ];
+}
+
 /** Google ドライブ上の Excel（.xlsx）など Sheets API 非対応か */
 function isGoogleOfficeSheetError(message) {
   return /Office file|not supported for this document|FAILED_PRECONDITION/i.test(String(message ?? ''));
 }
 
+function isPublicSheetFetchFallback(message) {
+  return /gid=.*見つかりません|PERMISSION_DENIED|403|400/i.test(String(message ?? ''));
+}
+
 /**
- * Sheets API が使えないファイル（Excel アップロード等）を CSV エクスポートで読む
- * @param {string} spreadsheetId
- * @param {number} sheetGid
- * @returns {Promise<string[][]>}
+ * @param {string} text
+ * @param {string} label
  */
-export async function fetchSpreadsheetValuesViaCsvExport(spreadsheetId, sheetGid) {
-  const id = String(spreadsheetId ?? '').trim();
-  if (!id) throw new Error('スプレッドシート ID が空です');
-  const url = csvProxyUrl(id, sheetGid);
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) {
-    throw new Error(
-      `お予定表の取得に失敗しました（HTTP ${res.status}）。` +
-        'ファイルを Google スプレッドシート形式に変換するか、「リンクを知っている全員が閲覧可」にしてください。'
-    );
-  }
-  const text = await res.text();
+function rowsFromCsvText(text, label) {
   const head = text.trimStart().slice(0, 200).toLowerCase();
-  if (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('<!DOCTYPE')) {
+  if (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('<!doctype')) {
     throw new Error(
-      'お予定表の取得に失敗しました。Google ドライブで「共有」→「リンクを知っている全員が閲覧可」にし、' +
+      `${label}の取得に失敗しました。Google ドライブで「共有」→「リンクを知っている全員が閲覧可」にし、` +
         '可能なら「ファイル」→「Googleスプレッドシートとして保存」に変換してください。'
     );
   }
   const rows = parseCsv(text);
   if (!rows.length) {
-    throw new Error('お予定表が空か、CSV の形式を読み取れませんでした。');
+    throw new Error(`${label}が空か、CSV の形式を読み取れませんでした。`);
   }
   return rows;
+}
+
+/**
+ * @param {string} url
+ * @param {string} label
+ */
+async function tryFetchCsvFromProxyUrl(url, label) {
+  const res = await fetch(url, { cache: 'no-store', redirect: 'follow' });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const text = await res.text();
+  return rowsFromCsvText(text, label);
+}
+
+/**
+ * @param {string} fileId
+ * @param {number} sheetGid
+ * @param {string} label
+ */
+async function fetchSpreadsheetValuesViaXlsxDownload(fileId, sheetGid, label) {
+  let buf = null;
+  for (const url of driveXlsxDownloadUrls(fileId)) {
+    const res = await fetch(url, { cache: 'no-store', redirect: 'follow' });
+    if (!res.ok) continue;
+    const ab = await res.arrayBuffer();
+    const head = new Uint8Array(ab.slice(0, 8));
+    if (head[0] === 0x50 && head[1] === 0x4b) {
+      buf = ab;
+      break;
+    }
+  }
+  if (!buf) {
+    throw new Error('xlsx をダウンロードできませんでした');
+  }
+  const wb = XLSX.read(buf, { type: 'array' });
+  const names = wb.SheetNames ?? [];
+  if (!names.length) {
+    throw new Error(`${label}にシートがありません`);
+  }
+  const idx = Math.min(Math.max(0, Number(sheetGid) || 0), names.length - 1);
+  const ws = wb.Sheets[names[idx]];
+  if (!ws) {
+    throw new Error(`${label}のシートを読み取れませんでした`);
+  }
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+  return rows.map((row) => (Array.isArray(row) ? row.map((c) => String(c ?? '')) : []));
+}
+
+/**
+ * Sheets API が使えないファイル（Excel アップロード等）を CSV / xlsx で読む
+ * @param {string} spreadsheetId
+ * @param {number} sheetGid
+ * @param {string} [label]
+ * @returns {Promise<string[][]>}
+ */
+export async function fetchSpreadsheetValuesViaCsvExport(spreadsheetId, sheetGid, label = '表') {
+  const id = String(spreadsheetId ?? '').trim();
+  if (!id) throw new Error('スプレッドシート ID が空です');
+  const gid = Number(sheetGid) || 0;
+  const lab = String(label ?? '表').trim() || '表';
+  const attempts = [
+    () => tryFetchCsvFromProxyUrl(csvProxyUrl(id, gid), lab),
+    () => tryFetchCsvFromProxyUrl(gvizCsvProxyUrl(id, gid), lab),
+    () => tryFetchCsvFromProxyUrl(csvProxyUrl(id, 0), lab),
+    () => tryFetchCsvFromProxyUrl(gvizCsvProxyUrl(id, 0), lab),
+    () => fetchSpreadsheetValuesViaXlsxDownload(id, gid, lab),
+  ];
+  const errors = [];
+  for (const fn of attempts) {
+    try {
+      const rows = await fn();
+      if (rows?.length) return rows;
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+  throw new Error(
+    `${lab}の取得に失敗しました（${errors.slice(0, 2).join(' / ')}）。` +
+      '「リンクを知っている全員が閲覧可」にし、うまくいかない場合は Drive で「Googleスプレッドシートとして保存」してください。'
+  );
 }
 
 /** API キー未設定時: 公開シートの CSV エクスポート（dev/preview のプロキシ経由） */

@@ -48,8 +48,8 @@ export function ResidentDailyScheduleModal({
 
   const plans = useMemo(() => {
     void rev;
-    return getResidentDailyPlans(facilityLinkKey, residentId, viewYmd);
-  }, [facilityLinkKey, residentId, viewYmd, rev]);
+    return getResidentDailyPlans(facilityLinkKey, residentId, viewYmd, String(resident?.name ?? ''));
+  }, [facilityLinkKey, residentId, viewYmd, resident?.name, rev]);
 
   useEffect(() => {
     if (!open) return;

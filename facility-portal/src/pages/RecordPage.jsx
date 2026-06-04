@@ -93,6 +93,8 @@ import { residentScheduleSheetForFacility } from '../config/residentScheduleShee
 import {
   applyImportedResidentSchedules,
   formatResidentPlansShort,
+  getFacilityScheduleDisplayYmd,
+  getResidentDailyPlansForFacilityCalendar,
   importResidentScheduleFromSheet,
 } from '../lib/residentDailySchedule.js';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
@@ -1609,7 +1611,7 @@ export function RecordPage({
       }
       return next;
     });
-  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey]);
+  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey, tick]);
 
   /** 一覧入力の下書きを施設×日付ごとに保存（保存押し忘れの復元用） */
   useEffect(() => {
@@ -1890,7 +1892,11 @@ export function RecordPage({
     const out = base.map((day) => {
       const gcal = googleCalendarPlansByDate.get(String(day.date)) ?? [];
       const hvc = homeVisitByDate.get(String(day.date)) ?? [];
-      const merged = [...day.plans, ...gcal, ...hvc].sort((a, b) =>
+      const residentDaily =
+        residentScheduleSheetCfg && displayResidents.length
+          ? getResidentDailyPlansForFacilityCalendar(k, displayResidents, String(day.date))
+          : [];
+      const merged = [...day.plans, ...gcal, ...hvc, ...residentDaily].sort((a, b) =>
         String(a.time ?? '').localeCompare(String(b.time ?? ''), 'ja')
       );
       return { ...day, plans: merged, homeVisit: hvc[0] ?? null };
@@ -1905,6 +1911,8 @@ export function RecordPage({
     googleCalendarPlanRev,
     planCalendarRange,
     planRangeMeta,
+    residentScheduleSheetCfg,
+    displayResidents,
   ]);
   const todayHomeVisit = useMemo(() => {
     const d = weeklyPlanDays.find((x) => x.isToday);
@@ -3312,7 +3320,6 @@ export function RecordPage({
           Object.entries(byId).map(([id, row]) => [id, { label: row.label, ym: targetYm }])
         );
         Report.mergeInjuryDiseaseImportPatch(patch, targetYm);
-        void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
         if (targetYm !== auditMonth) setAuditMonth(targetYm);
         setAllResidents((prev) => {
           const base = prev.length ? prev : scopeResidents;
@@ -4386,7 +4393,9 @@ export function RecordPage({
                                 className={`rounded-lg border px-2 py-1.5 shadow-sm ${
                                   String(p.source ?? '') === 'home_visit_calendar'
                                     ? 'border-violet-300 bg-violet-50/95'
-                                    : 'border-teal-200 bg-teal-50/90'
+                                    : String(p.source ?? '') === 'resident_schedule'
+                                      ? 'border-purple-300 bg-purple-50/95'
+                                      : 'border-teal-200 bg-teal-50/90'
                                 }`}
                               >
                                 <div className="font-mono text-[11px] font-black text-teal-900">{p.time}</div>
@@ -4403,6 +4412,11 @@ export function RecordPage({
                                 {String(p.source ?? '') === 'google_calendar' ? (
                                   <span className="ml-1 mt-0.5 inline-block rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-black text-white">
                                     {p.type === '面会' ? 'LINE/Google' : 'Google'}
+                                  </span>
+                                ) : null}
+                                {String(p.source ?? '') === 'resident_schedule' ? (
+                                  <span className="ml-1 mt-0.5 inline-block rounded bg-purple-700 px-1 py-0.5 text-[9px] font-black text-white">
+                                    利用者予定
                                   </span>
                                 ) : null}
                                 {String(p.source ?? '') === 'home_visit_calendar' ? (
@@ -4432,7 +4446,8 @@ export function RecordPage({
                                   <div className="mt-1 font-bold leading-snug text-slate-900">{p.title}</div>
                                 )}
                                 {String(p.source ?? '') === 'google_calendar' ||
-                                String(p.source ?? '') === 'home_visit_calendar' ? null : (
+                                String(p.source ?? '') === 'home_visit_calendar' ||
+                                String(p.source ?? '') === 'resident_schedule' ? null : (
                                   <button
                                     type="button"
                                     onClick={() => removeWeeklyPlan(p.id)}
@@ -5168,7 +5183,14 @@ export function RecordPage({
                       onBackupDone={() => setTick((n) => n + 1)}
                       onOpenBulkForYmd={openBulkTableForYmd}
                     />
-                    <CareCloudSyncPanel onSyncApplied={() => setTick((n) => n + 1)} />
+                    <CareCloudSyncPanel
+                      onSyncApplied={() => {
+                        setAllResidents((prev) =>
+                          Report.applyInjuryDiseaseImportsToResidentList(prev.length ? prev : displayResidents)
+                        );
+                        setTick((n) => n + 1);
+                      }}
+                    />
                   </div>
                   {residentInputView === 'table' ? (
                     <ResidentBulkInputTable
@@ -5282,9 +5304,35 @@ export function RecordPage({
                         >
                           <div className="mb-2 flex items-start justify-between gap-2">
                             <div className="min-w-0 flex-1">
-                              <div className="line-clamp-1 text-2xl font-black leading-tight">
+                              <div className="text-2xl font-black leading-tight">
                                 {residentCardDisplayName(res.name)}
                               </div>
+                              {residentScheduleSheetCfg
+                                ? (() => {
+                                    const scheduleYmd = getFacilityScheduleDisplayYmd(
+                                      selectedFacilityLinkKey,
+                                      todayStrip
+                                    );
+                                    const todayPlansShort = formatResidentPlansShort(
+                                      selectedFacilityLinkKey,
+                                      String(res.id),
+                                      scheduleYmd,
+                                      String(res.name ?? '')
+                                    );
+                                    if (!todayPlansShort) return null;
+                                    return (
+                                      <div
+                                        className="mt-1.5 rounded-lg border border-purple-400 bg-purple-800 px-2 py-1.5 text-[10px] font-bold leading-snug text-white sm:text-[11px]"
+                                        title={todayPlansShort}
+                                      >
+                                        <span className="mr-1 font-black opacity-90">
+                                          本日{scheduleYmd !== todayStrip ? `(${scheduleYmd.slice(5)})` : ''}
+                                        </span>
+                                        {todayPlansShort}
+                                      </div>
+                                    );
+                                  })()
+                                : null}
                               <div
                                 className={`mt-2 rounded-xl border-2 px-3 py-2 ${
                                   critical ? 'border-white/50 bg-black/25' : 'border-slate-300 bg-slate-50'
@@ -5322,23 +5370,6 @@ export function RecordPage({
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-1">
                               {(() => {
-                                const todayPlansShort = residentScheduleSheetCfg
-                                  ? formatResidentPlansShort(
-                                      selectedFacilityLinkKey,
-                                      String(res.id),
-                                      todayStrip
-                                    )
-                                  : '';
-                                if (todayPlansShort) {
-                                  return (
-                                    <span
-                                      className="max-w-[11rem] rounded-lg bg-purple-700 px-2 py-1 text-[9px] font-black leading-snug text-white"
-                                      title={todayPlansShort}
-                                    >
-                                      本日 {todayPlansShort.length > 28 ? `${todayPlansShort.slice(0, 28)}…` : todayPlansShort}
-                                    </span>
-                                  );
-                                }
                                 const cell = Report.getDayServiceCell(String(res.id), todayStrip);
                                 if (!cell) return null;
                                 if (cell.kind === 'on_site')

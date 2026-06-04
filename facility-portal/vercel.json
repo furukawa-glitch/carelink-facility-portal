@@ -3,6 +3,10 @@
     {
       "source": "/spreadsheet-export/:path*",
       "destination": "https://docs.google.com/:path*"
+    },
+    {
+      "source": "/drive-export/:path*",
+      "destination": "https://drive.google.com/:path*"
     }
   ],
   "cleanUrls": true,

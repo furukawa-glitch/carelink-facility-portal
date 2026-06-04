@@ -113,6 +113,42 @@ export function isCareCloudSyncConfigured() {
   return isCloudSyncEnabled() && Boolean(syncSecret()) && Boolean(organizationId());
 }
 
+/** 本番 API（Vercel サーバ側の Supabase 鍵）が使えるか */
+export async function probeCareCloudSyncServer() {
+  if (!isCareCloudSyncConfigured()) {
+    return {
+      ok: false,
+      clientConfigured: false,
+      serverConfigured: false,
+      error:
+        'このアプリのビルドに VITE_CARELINK_ORGANIZATION_ID と VITE_CARE_SYNC_SECRET がありません。Vercel で設定して再デプロイしてください。',
+    };
+  }
+  try {
+    const res = await fetch('/api/care-sync-status', { cache: 'no-store' });
+    if (res.ok) {
+      const status = await res.json().catch(() => ({}));
+      if (!status?.ready) {
+        const missing = Array.isArray(status?.missing) ? status.missing.join('、') : '';
+        return {
+          ok: false,
+          clientConfigured: true,
+          serverConfigured: false,
+          error:
+            String(status?.hint ?? '').trim() ||
+            `Vercel サーバ未設定（${missing || 'SUPABASE_SERVICE_ROLE_KEY 等'}）。設定後に再デプロイが必要です。`,
+          missing: status?.missing,
+        };
+      }
+    }
+    const json = await postCareSync({ action: 'ping' });
+    return { ok: true, clientConfigured: true, serverConfigured: true, ...json };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, clientConfigured: true, serverConfigured: false, error: msg };
+  }
+}
+
 /** @returns {{ enabled: boolean; configured: boolean; label: string; hint: string }} */
 export function getCareCloudSyncStatus() {
   const enabled = isCloudSyncEnabled();
@@ -138,8 +174,9 @@ export function getCareCloudSyncStatus() {
   return {
     enabled: true,
     configured: true,
-    label: 'クラウド同期 ON（自動）',
-    hint: '生活記録・傷病一覧の病名・予定カレンダーを全PCに自動共有します。保存・取込後すぐ反映、他PCは起動時・約1分ごとに自動取得します。',
+    label: 'クラウド同期（設定確認中…）',
+    hint:
+      '生活記録・傷病一覧CSVの病名を全PCで共有します。Vercel にはクライアント用（VITE_）に加え、サーバ用の SUPABASE_SERVICE_ROLE_KEY・CARE_SYNC_SECRET・VITE_SUPABASE_URL も必要です。',
   };
 }
 

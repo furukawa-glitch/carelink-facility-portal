@@ -1,11 +1,16 @@
-import { fetchSpreadsheetValuesByGid } from '../services/GoogleSheetService.js';
+import {
+  fetchSpreadsheetValuesByGid,
+  fetchSpreadsheetValuesViaCsvExport,
+} from '../services/GoogleSheetService.js';
 import { residentScheduleSheetForFacility } from '../config/residentScheduleSheets.js';
 import {
   buildPersonNameMatchCandidates,
   findResidentByPersonNameCandidates,
+  personNameMatchKey,
 } from './residentNameMatch.js';
 
 const LS_KEY = 'carelink_os_resident_daily_plans_v1';
+const LS_META_KEY = 'carelink_os_resident_daily_plans_meta_v1';
 
 const NAME_HEADER_HINTS = ['氏名', '名前', '利用者', '入居者', 'フリガナ', '部屋', '居室', '号室'];
 const SKIP_NAME = /^(合計|計|備考|メモ|時間|予定表|利用者|入居者|氏名|フリガナ|部屋|居室|—|-)$/u;
@@ -128,12 +133,234 @@ function findNameColumnIndex(headerRow) {
 }
 
 function looksLikePersonName(s) {
-  const t = normCell(s).replace(/様\s*$/u, '').trim();
-  if (!t || t.length < 2 || SKIP_NAME.test(t)) return false;
+  const raw = normCell(s);
+  if (!raw || SKIP_NAME.test(raw)) return false;
+  if ((raw.match(/様/g) || []).length > 1) return false;
+  if (/[\/／\n]/.test(raw)) return false;
+  if (/\d{1,2}[:：]\d{2}/.test(raw)) return false;
+  if (/\([^)]{2,}\)/.test(raw) && raw.length > 12) return false;
+  const t = raw.replace(/様\s*$/u, '').trim();
+  if (!t || t.length < 2 || t.length > 14 || SKIP_NAME.test(t)) return false;
   if (/^\d+$/.test(t)) return false;
   if (/^[0-9]{1,2}[:：]/.test(t)) return false;
   if (/^(月|火|水|木|金|土|日|曜)$/u.test(t)) return false;
-  return /[\u3040-\u30FF\u4E00-\u9FFF]/u.test(t);
+  return /^[\u3040-\u30FF\u4E00-\u9FFF]{2,12}$/u.test(t);
+}
+
+function readMetaStore() {
+  try {
+    const raw = localStorage.getItem(LS_META_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeMetaStore(all) {
+  try {
+    localStorage.setItem(LS_META_KEY, JSON.stringify(all && typeof all === 'object' ? all : {}));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @param {string} linkKey @param {string} ymd */
+export function setFacilityScheduleImportYmd(linkKey, ymd) {
+  const fk = String(linkKey ?? '').trim();
+  const y = String(ymd ?? '').trim();
+  if (!fk || !/^\d{4}-\d{2}-\d{2}$/.test(y)) return;
+  const all = readMetaStore();
+  all[fk] = { lastYmd: y, updatedAt: new Date().toISOString() };
+  writeMetaStore(all);
+}
+
+/**
+ * カード表示用の日付（取込日を優先。無ければ今日）
+ * @param {string} linkKey
+ * @param {string} [fallbackYmd]
+ */
+export function getFacilityScheduleDisplayYmd(linkKey, fallbackYmd = currentYmd()) {
+  const fk = String(linkKey ?? '').trim();
+  const meta = readMetaStore()[fk];
+  const last = String(meta?.lastYmd ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(last)) return last;
+  const fb = String(fallbackYmd ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(fb) ? fb : currentYmd();
+}
+
+/**
+ * 名簿照合（予定表取込専用・姓のみ一致や部分一致を使わない）
+ * @param {Record<string, unknown>[]} residents
+ * @param {string} nameKey
+ */
+export function findResidentForScheduleImport(residents, nameKey) {
+  const list = Array.isArray(residents) ? residents : [];
+  const keys = new Set(
+    buildPersonNameMatchCandidates(nameKey)
+      .map((c) => personNameMatchKey(c))
+      .filter((k) => k.length >= 2)
+  );
+  if (!keys.size) return null;
+  /** @type {Record<string, unknown>[]} */
+  const hits = [];
+  for (const res of list) {
+    const nk = personNameMatchKey(String(res.name ?? ''));
+    if (nk && keys.has(nk)) hits.push(res);
+  }
+  if (hits.length === 1) return hits[0];
+  return null;
+}
+
+/** @param {string} title @param {string} residentName */
+function cleanPlanTitleForDisplay(title, residentName) {
+  const parsed = parsePersonScheduleSegment(title);
+  if (parsed?.nameKey) {
+    return [parsed.time, parsed.title].filter(Boolean).join(' ').trim() || parsed.title;
+  }
+  let t = normCell(title);
+  t = t.replace(/^[\u3040-\u30FF\u4E00-\u9FFF]{2,14}様\s*/u, '');
+  return t.trim();
+}
+
+/** @param {string} a @param {string} b */
+function personKeysMatch(a, b) {
+  const ca = buildPersonNameMatchCandidates(a);
+  const cb = buildPersonNameMatchCandidates(b);
+  const setB = new Set(cb.map((x) => personNameMatchKey(x)));
+  return ca.some((x) => setB.has(personNameMatchKey(x)));
+}
+
+/**
+ * 1セルに「○○様 16:20 … / △△様 …」と複数人が入っているときに分割
+ * @param {string} text
+ */
+function splitScheduleCellSegments(text) {
+  const t = normCell(text);
+  if (!t) return [];
+  const samaCount = (t.match(/様/g) || []).length;
+  if (samaCount >= 2 || /[\/／]/.test(t)) {
+    return t
+      .split(/\s*[\/／\n]\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [t];
+}
+
+/**
+ * @param {string} seg
+ * @returns {{ nameKey: string; time: string; title: string } | null}
+ */
+function parsePersonScheduleSegment(seg) {
+  const s = normCell(seg);
+  if (!s) return null;
+  const m = s.match(/^([\u3040-\u30FF\u4E00-\u9FFF]{2,12}様)\s*(\d{1,2}[:：]\d{2})?\s*(.*)$/u);
+  if (!m) return null;
+  const nameKey = m[1].replace(/様\s*$/u, '').trim();
+  const time = m[2] ? m[2].replace(/：/g, ':') : '';
+  const detail = normCell(m[3]);
+  const title = detail || normCell(s.replace(m[1], '').replace(m[2] ?? '', '')) || s;
+  return { nameKey, time, title };
+}
+
+/**
+ * @param {Map<string, { time: string; title: string }[]>} plansByName
+ * @param {string} nameKey
+ * @param {{ time: string; title: string }} item
+ */
+function addPlanToMap(plansByName, nameKey, item) {
+  const key = String(nameKey ?? '')
+    .replace(/様\s*$/u, '')
+    .trim();
+  if (!key || !item?.title) return;
+  const list = plansByName.get(key) ?? [];
+  list.push(item);
+  plansByName.set(key, list);
+}
+
+/**
+ * 表の1セル → 氏名ごとの予定（複数人混在セルは分解して該当者へ）
+ * @param {Map<string, { time: string; title: string }[]>} plansByName
+ * @param {string} rowNameKey
+ * @param {string} cellText
+ * @param {string} colTime
+ */
+function appendPlansFromCell(plansByName, rowNameKey, cellText, colTime) {
+  const cell = normCell(cellText);
+  if (!cell || cell === '—' || cell === '-') return;
+  const rowKey = rowNameKey.replace(/様\s*$/u, '').trim();
+  const segments = splitScheduleCellSegments(cell);
+
+  let assignedToRow = false;
+  for (const seg of segments) {
+    const parsed = parsePersonScheduleSegment(seg);
+    if (parsed?.nameKey) {
+      const targetKey = parsed.nameKey;
+      const time = parsed.time || colTime;
+      const title = parsed.title;
+      if (personKeysMatch(rowKey, targetKey)) {
+        addPlanToMap(plansByName, rowKey, { time, title });
+        assignedToRow = true;
+      } else {
+        addPlanToMap(plansByName, targetKey, { time, title });
+      }
+      continue;
+    }
+    if (segments.length === 1) {
+      addPlanToMap(plansByName, rowKey, { time: colTime, title: seg });
+      assignedToRow = true;
+    }
+  }
+
+  if (!assignedToRow && segments.length === 1 && !parsePersonScheduleSegment(segments[0])) {
+    addPlanToMap(plansByName, rowKey, { time: colTime, title: cell });
+  }
+}
+
+/**
+ * 保存済み予定から、その利用者以外の氏名が混ざった行を除去
+ * @param {{ time: string; title: string; id: string; type: string; source: string; note?: string }[]} plans
+ * @param {string} residentName
+ */
+function sanitizePlansForResident(plans, residentName) {
+  const nm = String(residentName ?? '').trim();
+  if (!nm) return plans;
+  const selfKeys = new Set(
+    buildPersonNameMatchCandidates(nm)
+      .map((c) => personNameMatchKey(c))
+      .filter((k) => k.length >= 2)
+  );
+  const belongsToSelf = (nameKey) => {
+    const pk = personNameMatchKey(nameKey);
+    return Boolean(pk && selfKeys.has(pk));
+  };
+
+  return plans.flatMap((p) => {
+    const segments = splitScheduleCellSegments(p.title);
+    if (segments.length <= 1) {
+      const parsed = parsePersonScheduleSegment(segments[0] ?? p.title);
+      if (parsed?.nameKey) {
+        if (!belongsToSelf(parsed.nameKey)) return [];
+        return [{ ...p, time: parsed.time || p.time, title: parsed.title }];
+      }
+      if ((String(p.title).match(/様/g) || []).length >= 2) return [];
+      return [p];
+    }
+    return segments
+      .map((seg) => {
+        const parsed = parsePersonScheduleSegment(seg);
+        if (!parsed?.nameKey || !belongsToSelf(parsed.nameKey)) return null;
+        return {
+          ...p,
+          id: `${p.id}_${parsed.nameKey}`,
+          time: parsed.time || p.time,
+          title: parsed.title,
+        };
+      })
+      .filter(Boolean);
+  });
 }
 
 /**
@@ -259,35 +486,56 @@ export function parseResidentScheduleSheetRows(rows, targetYmd) {
   const unmatchedSamples = [];
   const dataStartRow = Math.max(headerRowIdx + 1, dataStartRowAfterCalendarHeader(grid));
 
+  let calendarDayHeaders = 0;
+  for (let r = 0; r < Math.min(12, grid.length); r++) {
+    let dayHits = 0;
+    for (const cell of grid[r] || []) {
+      const v = normCell(cell);
+      if (/^\d{1,2}$/.test(v) && Number(v) >= 1 && Number(v) <= 31) dayHits++;
+    }
+    calendarDayHeaders = Math.max(calendarDayHeaders, dayHits);
+  }
+  let personRows = 0;
+  for (let r = dataStartRow; r < grid.length; r++) {
+    if (looksLikePersonName(grid[r]?.[nameCol])) personRows++;
+  }
+  const calendarLayout = calendarDayHeaders >= 5 && personRows < 4 && activeCols.length > 0;
+
+  if (calendarLayout) {
+    for (const { col, time } of activeCols) {
+      for (let r = 0; r < grid.length; r++) {
+        appendPlansFromCell(plansByName, '', grid[r]?.[col], time);
+      }
+    }
+    for (const key of plansByName.keys()) {
+      if (unmatchedSamples.length < 3) unmatchedSamples.push(key);
+    }
+    return { ymd, plansByName, unmatchedSamples, layout: 'calendar' };
+  }
+
   for (let r = dataStartRow; r < grid.length; r++) {
     const row = grid[r] || [];
     const nameRaw = normCell(row[nameCol]);
     if (!looksLikePersonName(nameRaw)) continue;
 
-    /** @type {{ time: string; title: string }[]} */
-    const items = [];
+    const rowKey = nameRaw.replace(/様\s*$/u, '').trim();
+    const mapSizeBefore = plansByName.size;
+    const rowPlansBefore = (plansByName.get(rowKey) ?? []).length;
 
     if (activeCols.length) {
       for (const { col, time } of activeCols) {
-        const title = normCell(row[col]);
-        if (!title || title === '—' || title === '-') continue;
-        items.push({ time, title });
+        appendPlansFromCell(plansByName, rowKey, row[col], time);
       }
     } else {
-      const parts = [];
       for (let c = nameCol + 1; c < row.length; c++) {
-        const v = normCell(row[c]);
-        if (!v || v === '—') continue;
-        parts.push(v);
+        appendPlansFromCell(plansByName, rowKey, row[c], '');
       }
-      const joined = parts.join(' / ').trim();
-      if (joined) items.push({ time: '', title: joined });
     }
 
-    if (!items.length) continue;
-    const key = nameRaw.replace(/様\s*$/u, '').trim();
-    plansByName.set(key, items);
-    if (plansByName.size <= 3) unmatchedSamples.push(key);
+    const rowPlansAfter = (plansByName.get(rowKey) ?? []).length;
+    if (plansByName.size > mapSizeBefore || rowPlansAfter > rowPlansBefore) {
+      if (unmatchedSamples.length < 3 && !unmatchedSamples.includes(rowKey)) unmatchedSamples.push(rowKey);
+    }
   }
 
   return { ymd, plansByName, unmatchedSamples };
@@ -305,7 +553,7 @@ export function matchResidentScheduleImports(residents, plansByName) {
   let unmatched = 0;
 
   for (const [nameKey, items] of byName.entries()) {
-    const res = findResidentByPersonNameCandidates(list, buildPersonNameMatchCandidates(nameKey));
+    const res = findResidentForScheduleImport(list, nameKey);
     const plans = items.map((it) => ({
       time: String(it.time ?? '').trim(),
       title: String(it.title ?? '').trim(),
@@ -343,7 +591,7 @@ function inferPlanType(title) {
  * @param {string} ymd
  * @returns {{ id: string; time: string; title: string; type: string; source: string; note?: string }[]}
  */
-export function getResidentDailyPlans(linkKey, residentId, ymd) {
+export function getResidentDailyPlans(linkKey, residentId, ymd, residentName = '') {
   const fk = String(linkKey ?? '').trim();
   const rid = String(residentId ?? '').trim();
   const y = String(ymd ?? '').trim();
@@ -353,10 +601,48 @@ export function getResidentDailyPlans(linkKey, residentId, ymd) {
   if (!row || typeof row !== 'object') return [];
   const arr = row[y];
   if (!Array.isArray(arr)) return [];
-  return arr
+  const normalized = arr
     .map((p) => normalizePlanItem(p))
     .filter(Boolean)
     .sort((a, b) => String(a.time).localeCompare(String(b.time), 'ja'));
+  return sanitizePlansForResident(normalized, residentName);
+}
+
+/**
+ * 施設カレンダー用: 利用者お予定表から取り込んだ予定を日付単位で集約
+ * @param {string} linkKey
+ * @param {Record<string, unknown>[]} residents
+ * @param {string} ymd
+ */
+export function getResidentDailyPlansForFacilityCalendar(linkKey, residents, ymd) {
+  const fk = String(linkKey ?? '').trim();
+  const y = String(ymd ?? '').trim();
+  if (!fk || !/^\d{4}-\d{2}-\d{2}$/.test(y)) return [];
+  const list = Array.isArray(residents) ? residents : [];
+  /** @type {Record<string, unknown>[]} */
+  const out = [];
+  for (const res of list) {
+    const rid = String(res?.id ?? '').trim();
+    if (!rid) continue;
+    const nm = String(res?.name ?? '').trim();
+    const plans = getResidentDailyPlans(fk, rid, y, nm);
+    for (const p of plans) {
+      const shortName = nm.replace(/様\s*$/u, '').trim();
+      const titleClean = cleanPlanTitleForDisplay(p.title, nm);
+      out.push({
+        id: `rdaily_${rid}_${p.id}`,
+        date: y,
+        time: p.time || '—',
+        title: titleClean ? `${shortName}様 ${titleClean}` : `${shortName}様`,
+        type: p.type,
+        source: 'resident_schedule',
+        residentId: rid,
+        residentName: shortName,
+        room: String(res?.room ?? '').trim(),
+      });
+    }
+  }
+  return out.sort((a, b) => String(a.time).localeCompare(String(b.time), 'ja'));
 }
 
 function normalizePlanItem(p) {
@@ -445,18 +731,18 @@ export async function importResidentScheduleFromSheet(linkKey, apiKey, targetYmd
     return { ok: false, error: 'この施設は利用者お予定表の設定がありません' };
   }
   const key = String(apiKey ?? '').trim();
-  if (!key) {
-    return { ok: false, error: 'VITE_GOOGLE_SHEETS_API_KEY が未設定です' };
-  }
 
   let rows;
   try {
-    rows = await fetchSpreadsheetValuesByGid(
-      cfg.spreadsheetId,
-      key,
-      cfg.sheetGid,
-      cfg.rangeA1 ?? 'A1:ZZ150'
-    );
+    rows = key
+      ? await fetchSpreadsheetValuesByGid(
+          cfg.spreadsheetId,
+          key,
+          cfg.sheetGid,
+          cfg.rangeA1 ?? 'A1:ZZ150',
+          { label: 'お予定表' }
+        )
+      : await fetchSpreadsheetValuesViaCsvExport(cfg.spreadsheetId, cfg.sheetGid, 'お予定表');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return {
@@ -491,17 +777,21 @@ export function applyImportedResidentSchedules(linkKey, residents, parsed) {
   for (const row of matched) {
     setResidentDailyPlans(linkKey, row.residentId, parsed.ymd, row.plans, { merge: 'merge_sheet' });
   }
+  setFacilityScheduleImportYmd(linkKey, parsed.ymd);
   return { applied: matched.length, unmatched, ymd: parsed.ymd };
 }
 
 /** @param {string} linkKey @param {string} residentId @param {string} ymd */
-export function formatResidentPlansShort(linkKey, residentId, ymd) {
-  const plans = getResidentDailyPlans(linkKey, residentId, ymd);
+export function formatResidentPlansShort(linkKey, residentId, ymd, residentName = '') {
+  const displayYmd = getFacilityScheduleDisplayYmd(linkKey, ymd);
+  const plans = getResidentDailyPlans(linkKey, residentId, displayYmd, residentName);
   if (!plans.length) return '';
   return plans
     .map((p) => {
       const t = p.time ? `${p.time} ` : '';
-      return `${t}${p.title}`;
+      const title = cleanPlanTitleForDisplay(p.title, residentName);
+      return `${t}${title}`.trim();
     })
+    .filter(Boolean)
     .join(' / ');
 }

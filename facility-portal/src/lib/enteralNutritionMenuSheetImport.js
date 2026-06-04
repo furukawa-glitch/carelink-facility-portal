@@ -1,12 +1,16 @@
-import { fetchSpreadsheetValuesByGid } from '../services/GoogleSheetService.js';
+import {
+  fetchSpreadsheetValuesByGid,
+  fetchSpreadsheetValuesViaCsvExport,
+} from '../services/GoogleSheetService.js';
 import { enteralMenuSheetForFacility } from '../config/enteralNutritionMenuSheets.js';
 import {
   buildPersonNameMatchCandidates,
   findResidentByPersonNameCandidates,
 } from './residentNameMatch.js';
 import {
-  ENTERAL_MEDICATION_OPTIONS,
   currentYmd,
+  normalizeEnteralMedication,
+  parseEnteralTimeFromText,
   loadEnteralMenuDraft,
   mergeEnteralMenuRows,
   saveEnteralMenuDraft,
@@ -20,16 +24,13 @@ function normCell(s) {
 }
 
 function normalizeMed(v) {
-  const s = normCell(v);
-  if (!s || s === '—' || s === '-') return '';
-  if (/^[○◯〇]$/.test(s.replace(/\s/g, ''))) return '〇';
-  if (/^[×✕✖]$/.test(s.replace(/\s/g, ''))) return '×';
-  if (/日水のみ|日水/u.test(s)) return '日水のみ';
-  return ENTERAL_MEDICATION_OPTIONS.includes(s) ? s : s.slice(0, 8);
+  return normalizeEnteralMedication(normCell(v));
 }
 
 function slot(content, medication) {
-  return { content: normCell(content), medication: normalizeMed(medication) };
+  const raw = normCell(content);
+  const { time, rest } = parseEnteralTimeFromText(raw);
+  return { content: rest || raw, medication: normalizeMed(medication), time, shift: '' };
 }
 
 /**
@@ -184,18 +185,18 @@ export async function importEnteralMenuFromSheet(facilityLinkKey, apiKey, reside
     return { ok: false, error: 'この施設の経管メニュー表の設定がありません' };
   }
   const key = String(apiKey ?? '').trim();
-  if (!key) {
-    return { ok: false, error: 'VITE_GOOGLE_SHEETS_API_KEY が未設定です' };
-  }
 
   let rows;
   try {
-    rows = await fetchSpreadsheetValuesByGid(
-      cfg.spreadsheetId,
-      key,
-      cfg.sheetGid,
-      cfg.rangeA1 ?? 'A1:ZZ200'
-    );
+    rows = key
+      ? await fetchSpreadsheetValuesByGid(
+          cfg.spreadsheetId,
+          key,
+          cfg.sheetGid,
+          cfg.rangeA1 ?? 'A1:ZZ200',
+          { label: '経管メニュー表' }
+        )
+      : await fetchSpreadsheetValuesViaCsvExport(cfg.spreadsheetId, cfg.sheetGid, '経管メニュー表');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return {

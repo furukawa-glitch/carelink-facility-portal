@@ -211,7 +211,7 @@ export function HomeVisitNoteModal({
       aria-modal="true"
       aria-labelledby="home-visit-note-title"
     >
-      <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border-2 border-slate-300 bg-white shadow-2xl">
+      <div className="flex max-h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border-2 border-slate-300 bg-white shadow-2xl">
         <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
           <div>
             <h2 id="home-visit-note-title" className="flex items-center gap-2 text-base font-black text-slate-900 sm:text-lg">
@@ -347,7 +347,34 @@ export function HomeVisitNoteModal({
         )}
 
         <div className="min-h-0 flex-1 overflow-auto px-2 py-2 sm:px-3">
-          <table className="w-full min-w-[720px] border-collapse text-xs font-bold">
+          <table className="w-full min-w-[880px] border-collapse text-xs font-bold table-fixed">
+            <colgroup>
+              {aisaiLayout ? (
+                <>
+                  <col className="w-8" />
+                  <col className="w-[11%]" />
+                  <col className="w-12" />
+                  <col className="w-10" />
+                  <col className="w-14" />
+                  <col className="w-12" />
+                  <col className="w-[14%]" />
+                  <col />
+                </>
+              ) : (
+                <>
+                  <col className="w-8" />
+                  <col className="w-10" />
+                  <col className="w-[10%]" />
+                  <col className="w-11" />
+                  <col className="w-11" />
+                  <col className="w-9" />
+                  <col className="w-10" />
+                  <col className="w-10" />
+                  <col className="w-11" />
+                  <col />
+                </>
+              )}
+            </colgroup>
             <thead>
               {aisaiLayout ? (
                 <tr className="bg-slate-100 text-[10px] text-slate-700">
@@ -358,7 +385,7 @@ export function HomeVisitNoteModal({
                   <th className="border border-slate-200 px-1 py-1">BP</th>
                   <th className="border border-slate-200 px-1 py-1">SPO2</th>
                   <th className="border border-slate-200 px-2 py-1">備考（再検など）</th>
-                  <th className="border border-slate-200 px-2 py-1">往診時記入欄</th>
+                  <th className="border border-slate-200 px-2 py-1">往診メモ</th>
                 </tr>
               ) : (
                 <tr className="bg-slate-100 text-[10px] text-slate-700">
@@ -441,14 +468,15 @@ export function HomeVisitNoteModal({
                         className="w-full min-w-[5rem] rounded border border-slate-200 px-1 py-0.5"
                       />
                     </td>
-                    <td className="border border-slate-200 px-1 py-1">
-                      <input
-                        type="text"
+                    <td className="border border-slate-200 px-1 py-1 align-top">
+                      <textarea
                         value={row.visitEntry ?? row.note ?? ''}
                         onChange={(e) =>
                           patchRow(row.residentId, { visitEntry: e.target.value, note: e.target.value })
                         }
-                        className="w-full min-w-[6rem] rounded border border-slate-200 px-1 py-0.5"
+                        rows={4}
+                        placeholder="往診時の所見・処置・申し送りなど"
+                        className="w-full min-h-[5.5rem] resize-y rounded border border-slate-200 px-1.5 py-1 text-xs font-bold leading-snug"
                       />
                     </td>
                   </tr>
@@ -482,13 +510,13 @@ export function HomeVisitNoteModal({
                         />
                       </td>
                     ))}
-                    <td className="border border-slate-200 px-1 py-1">
-                      <input
-                        type="text"
+                    <td className="border border-slate-200 px-1 py-1 align-top">
+                      <textarea
                         value={row.note}
                         onChange={(e) => patchRow(row.residentId, { note: e.target.value })}
-                        placeholder="往診時の所見"
-                        className="w-full min-w-[6rem] rounded border border-slate-200 px-1 py-0.5"
+                        rows={4}
+                        placeholder="往診時の所見・処置・申し送りなど"
+                        className="w-full min-h-[5.5rem] resize-y rounded border border-slate-200 px-1.5 py-1 text-xs font-bold leading-snug"
                       />
                     </td>
                   </tr>
