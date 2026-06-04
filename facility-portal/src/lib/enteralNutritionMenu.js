@@ -4,26 +4,63 @@ const LS_KEY = 'carelink_os_enteral_nutrition_menu_v1';
 
 export const ENTERAL_MEDICATION_OPTIONS = Object.freeze(['', '〇', '×']);
 
-/** @type {ReadonlyArray<{ value: string; label: string }>} */
-export const ENTERAL_SHIFT_OPTIONS = Object.freeze([
-  { value: '', label: '—' },
-  { value: 'day', label: '日勤' },
-  { value: 'night', label: '夜勤' },
-  { value: 'short', label: 'ショート' },
+/**
+ * @typedef {{ id: string; label: string; color: string }} EnteralColorDef
+ */
+
+/** 用紙どおりの初期色（施設で名称・色を変更可能） */
+export const DEFAULT_ENTERAL_COLOR_LEGEND = Object.freeze([
+  { id: 'long', label: 'ロング', color: '#93c5fd' },
+  { id: 'short', label: 'ショート', color: '#fde047' },
+  { id: 'am', label: '朝日勤', color: '#f9a8d4' },
+  { id: 'pm', label: '夕日勤', color: '#fdba74' },
 ]);
 
-/** @param {string} shift */
-export function enteralShiftCellClass(shift) {
-  switch (String(shift ?? '').trim()) {
-    case 'day':
-      return 'bg-pink-100';
-    case 'night':
-      return 'bg-indigo-200';
-    case 'short':
-      return 'bg-amber-100';
-    default:
-      return 'bg-white';
+const LEGACY_SHIFT_TO_COLOR = Object.freeze({
+  day: 'am',
+  night: 'pm',
+  short: 'short',
+});
+
+/** @param {unknown} raw */
+export function normalizeEnteralColorLegend(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const id = String(item.id ?? '').trim() || `c_${out.length + 1}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const label = String(item.label ?? '').trim() || '担当';
+    let color = String(item.color ?? '').trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) color = '#ffffff';
+    out.push({ id, label, color });
   }
+  return out.length ? out : [...DEFAULT_ENTERAL_COLOR_LEGEND];
+}
+
+/** @param {EnteralColorDef[]} legend @param {string} colorId */
+export function getEnteralColorDef(legend, colorId) {
+  const id = String(colorId ?? '').trim();
+  if (!id) return null;
+  return normalizeEnteralColorLegend(legend).find((c) => c.id === id) ?? null;
+}
+
+/** @param {EnteralColorDef[]} legend @param {string} colorId */
+export function enteralSlotBackgroundColor(legend, colorId) {
+  return getEnteralColorDef(legend, colorId)?.color ?? '#ffffff';
+}
+
+/** @param {EnteralColorDef[]} legend */
+export function formatEnteralColorLegendNote(legend) {
+  return normalizeEnteralColorLegend(legend)
+    .map((c) => `${c.label}`)
+    .join('　');
+}
+
+export function newEnteralColorId() {
+  return `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
 }
 
 /** @param {string} raw */
@@ -47,11 +84,6 @@ export function formatEnteralSlotLine(slot) {
   return time || content;
 }
 
-/** @param {string} shift */
-export function enteralShiftLabel(shift) {
-  return ENTERAL_SHIFT_OPTIONS.find((o) => o.value === shift)?.label ?? '';
-}
-
 /** @param {string} med */
 export function normalizeEnteralMedication(med) {
   const s = String(med ?? '').trim();
@@ -67,7 +99,7 @@ export function normalizeEnteralMedication(med) {
  *   content: string;
  *   medication: string;
  *   time?: string;
- *   shift?: '' | 'day' | 'night' | 'short';
+ *   colorId?: string;
  * }} EnteralMenuSlot
  */
 
@@ -81,8 +113,8 @@ export function normalizeEnteralMedication(med) {
  *   noon: EnteralMenuSlot;
  *   evening: EnteralMenuSlot;
  *   note: string;
- *   /** 名簿の経管対象・メニューあり（印刷はこのフラグで絞る） */
  *   enteralTarget?: boolean;
+ *   // 名簿の経管対象・メニューあり（印刷は enteralTarget で絞る）
  * }} EnteralMenuRow
  */
 
@@ -91,6 +123,7 @@ export function normalizeEnteralMedication(med) {
  *   updatedYmd: string;
  *   footerNote: string;
  *   legendNote: string;
+ *   colorLegend?: EnteralColorDef[];
  *   rows: EnteralMenuRow[];
  * }} EnteralMenuDraft
  */
@@ -107,7 +140,7 @@ export function formatYmdSlashed(ymd) {
 }
 
 function emptySlot() {
-  return { content: '', medication: '', time: '', shift: '' };
+  return { content: '', medication: '', time: '', colorId: '' };
 }
 
 function readStore() {
@@ -140,13 +173,16 @@ function normalizeSlot(raw) {
       content = parsed.rest;
     }
   }
-  const shiftRaw = String(s.shift ?? '').trim();
-  const shift = ['day', 'night', 'short'].includes(shiftRaw) ? shiftRaw : '';
+  let colorId = String(s.colorId ?? '').trim();
+  if (!colorId) {
+    const shiftRaw = String(s.shift ?? '').trim();
+    colorId = LEGACY_SHIFT_TO_COLOR[shiftRaw] || '';
+  }
   return {
     content,
     medication: normalizeEnteralMedication(s.medication),
     time,
-    shift,
+    colorId,
   };
 }
 
@@ -314,14 +350,17 @@ export function loadEnteralMenuDraft(facilityLinkKey) {
     return {
       updatedYmd: currentYmd(),
       footerNote: '',
-      legendNote: 'ロング　ショート　ピンク：朝日勤　オレンジ：夕日勤',
+      legendNote: formatEnteralColorLegendNote(DEFAULT_ENTERAL_COLOR_LEGEND),
+      colorLegend: [...DEFAULT_ENTERAL_COLOR_LEGEND],
       rows: [],
     };
   }
+  const colorLegend = normalizeEnteralColorLegend(rec.colorLegend);
   return {
     updatedYmd: String(rec.updatedYmd ?? currentYmd()).slice(0, 10) || currentYmd(),
     footerNote: String(rec.footerNote ?? '').trim(),
-    legendNote: String(rec.legendNote ?? 'ロング　ショート　ピンク：朝日勤　オレンジ：夕日勤').trim(),
+    legendNote: String(rec.legendNote ?? formatEnteralColorLegendNote(colorLegend)).trim(),
+    colorLegend,
     rows: Array.isArray(rec.rows) ? rec.rows.map((r) => normalizeRow(r, r)) : [],
   };
 }
@@ -334,6 +373,7 @@ export function saveEnteralMenuDraft(facilityLinkKey, draft) {
     updatedYmd: String(draft.updatedYmd ?? currentYmd()).slice(0, 10),
     footerNote: String(draft.footerNote ?? '').trim(),
     legendNote: String(draft.legendNote ?? '').trim(),
+    colorLegend: normalizeEnteralColorLegend(draft.colorLegend),
     rows: Array.isArray(draft.rows) ? draft.rows : [],
     savedAt: new Date().toISOString(),
   };
@@ -353,22 +393,37 @@ function escHtml(s) {
  * @param {string} facilityLabel
  * @param {EnteralMenuDraft} draft
  */
+function printSlotTd(slot, legend) {
+  const bg = enteralSlotBackgroundColor(legend, slot?.colorId);
+  const label = getEnteralColorDef(legend, slot?.colorId)?.label ?? '';
+  const tag = label ? ` <span style="font-size:9pt;color:#333">[${escHtml(label)}]</span>` : '';
+  return `<td style="background:${escHtml(bg)}">${escHtml(formatEnteralSlotLine(slot))}${tag}</td>`;
+}
+
 export function buildEnteralMenuHtml(facilityLabel, draft) {
   const rows = filterEnteralMenuPrintRows(draft.rows);
+  const legend = normalizeEnteralColorLegend(draft.colorLegend);
   const updated = formatYmdSlashed(draft.updatedYmd) || formatYmdSlashed(currentYmd());
   const bodyRows = rows
     .map(
       (r) => `<tr>
   <td class="name">${escHtml(r.name)}</td>
-  <td>${escHtml(formatEnteralSlotLine(r.morning))}${r.morning.shift ? ` <span style="font-size:9pt;color:#555">[${escHtml(enteralShiftLabel(r.morning.shift))}]</span>` : ''}</td>
-  <td class="med">${escHtml(r.morning.medication || '—')}</td>
-  <td>${escHtml(formatEnteralSlotLine(r.noon))}${r.noon.shift ? ` <span style="font-size:9pt;color:#555">[${escHtml(enteralShiftLabel(r.noon.shift))}]</span>` : ''}</td>
-  <td class="med">${escHtml(r.noon.medication || '—')}</td>
-  <td>${escHtml(formatEnteralSlotLine(r.evening))}${r.evening.shift ? ` <span style="font-size:9pt;color:#555">[${escHtml(enteralShiftLabel(r.evening.shift))}]</span>` : ''}</td>
-  <td class="med">${escHtml(r.evening.medication || '—')}</td>
+  ${printSlotTd(r.morning, legend)}
+  <td class="med" style="background:${escHtml(enteralSlotBackgroundColor(legend, r.morning.colorId))}">${escHtml(r.morning.medication || '—')}</td>
+  ${printSlotTd(r.noon, legend)}
+  <td class="med" style="background:${escHtml(enteralSlotBackgroundColor(legend, r.noon.colorId))}">${escHtml(r.noon.medication || '—')}</td>
+  ${printSlotTd(r.evening, legend)}
+  <td class="med" style="background:${escHtml(enteralSlotBackgroundColor(legend, r.evening.colorId))}">${escHtml(r.evening.medication || '—')}</td>
 </tr>`
     )
     .join('\n');
+
+  const colorLegendHtml = legend
+    .map(
+      (c) =>
+        `<span style="display:inline-block;margin-right:12px;padding:2px 8px;background:${escHtml(c.color)};border:1px solid #333">${escHtml(c.label)}</span>`
+    )
+    .join('');
 
   const rowNotes = rows
     .filter((r) => String(r.note ?? '').trim())
@@ -421,6 +476,7 @@ export function buildEnteralMenuHtml(facilityLabel, draft) {
 ${bodyRows || '<tr><td colspan="7" style="text-align:center;padding:16px;">経管対象の利用者がいません</td></tr>'}
   </tbody>
 </table>
+${colorLegendHtml ? `<p class="legend">${colorLegendHtml}</p>` : ''}
 ${draft.legendNote ? `<p class="legend">${escHtml(draft.legendNote)}</p>` : ''}
 ${footer ? `<div class="footer">${footer.replace(/\n/g, '<br/>')}</div>` : ''}
 <p class="no-print" style="margin-top:16px;font-size:10pt;color:#666;">印刷ダイアログで「PDFに保存」もできます。</p>

@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Download, FileSpreadsheet, Loader2, Printer, RefreshCw, Save, Utensils, X } from 'lucide-react';
+import { Check, Download, FileSpreadsheet, Loader2, Plus, Printer, RefreshCw, Save, Trash2, Utensils, X } from 'lucide-react';
 import {
+  DEFAULT_ENTERAL_COLOR_LEGEND,
   ENTERAL_MEDICATION_OPTIONS,
-  ENTERAL_SHIFT_OPTIONS,
   currentYmd,
   downloadEnteralMenuHtml,
-  enteralShiftCellClass,
+  enteralSlotBackgroundColor,
+  formatEnteralColorLegendNote,
   loadEnteralMenuDraft,
   mergeEnteralMenuRows,
   filterEnteralMenuPrintRows,
+  newEnteralColorId,
+  normalizeEnteralColorLegend,
   openEnteralMenuPrint,
   parseEnteralTimeFromText,
   saveEnteralMenuDraft,
@@ -46,7 +49,8 @@ export function EnteralNutritionMenuModal({
 }) {
   const [updatedYmd, setUpdatedYmd] = useState(() => currentYmd());
   const [footerNote, setFooterNote] = useState('');
-  const [legendNote, setLegendNote] = useState('ロング　ショート　ピンク：日勤　オレンジ：夜勤　黄：ショート');
+  const [legendNote, setLegendNote] = useState('');
+  const [colorLegend, setColorLegend] = useState(() => [...DEFAULT_ENTERAL_COLOR_LEGEND]);
   const [enteralOnly, setEnteralOnly] = useState(false);
   const [rows, setRows] = useState(/** @type {import('../lib/enteralNutritionMenu.js').EnteralMenuRow[]} */ ([]));
   const [sheetImporting, setSheetImporting] = useState(false);
@@ -57,8 +61,8 @@ export function EnteralNutritionMenuModal({
   const roster = useMemo(() => (Array.isArray(residents) ? residents : []), [residents]);
 
   const draft = useMemo(
-    () => ({ updatedYmd, footerNote, legendNote, rows }),
-    [updatedYmd, footerNote, legendNote, rows]
+    () => ({ updatedYmd, footerNote, legendNote, colorLegend, rows }),
+    [updatedYmd, footerNote, legendNote, colorLegend, rows]
   );
 
   const persistDraft = useCallback(
@@ -92,7 +96,9 @@ export function EnteralNutritionMenuModal({
     const loaded = loadEnteralMenuDraft(facilityLinkKey);
     setUpdatedYmd(String(loaded.updatedYmd ?? currentYmd()).slice(0, 10));
     setFooterNote(String(loaded.footerNote ?? ''));
-    setLegendNote(String(loaded.legendNote ?? ''));
+    const legend = normalizeEnteralColorLegend(loaded.colorLegend);
+    setColorLegend(legend);
+    setLegendNote(String(loaded.legendNote ?? formatEnteralColorLegendNote(legend)));
     setRows(mergeEnteralMenuRows(roster, loaded.rows, { enteralOnly, facilityLinkKey }));
     setSaveState('saved');
     setSaveHint('');
@@ -161,6 +167,38 @@ export function EnteralNutritionMenuModal({
     () => (enteralOnly ? rows.filter((r) => r.enteralTarget) : rows.filter((r) => r.included !== false)),
     [rows, enteralOnly]
   );
+
+  const patchColorLegendItem = (id, patch) => {
+    setColorLegend((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    );
+    markDirty();
+  };
+
+  const addColorLegendItem = () => {
+    setColorLegend((prev) => [
+      ...prev,
+      { id: newEnteralColorId(), label: '担当', color: '#e2e8f0' },
+    ]);
+    markDirty();
+  };
+
+  const removeColorLegendItem = (id) => {
+    setColorLegend((prev) => (prev.length <= 1 ? prev : prev.filter((c) => c.id !== id)));
+    setRows((prev) =>
+      prev.map((row) => {
+        const patchSlotColor = (slot) =>
+          slot?.colorId === id ? { ...slot, colorId: '' } : slot;
+        return {
+          ...row,
+          morning: patchSlotColor(row.morning),
+          noon: patchSlotColor(row.noon),
+          evening: patchSlotColor(row.evening),
+        };
+      })
+    );
+    markDirty();
+  };
 
   if (!open) return null;
 
@@ -278,11 +316,54 @@ export function EnteralNutritionMenuModal({
           ) : null}
         </div>
 
-        <div className="shrink-0 flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] font-black text-slate-800 sm:px-4">
-          <span>勤務の色:</span>
-          <span className="rounded border border-pink-300 bg-pink-100 px-2 py-0.5">ピンク＝日勤</span>
-          <span className="rounded border border-indigo-400 bg-indigo-200 px-2 py-0.5">青紫＝夜勤</span>
-          <span className="rounded border border-amber-400 bg-amber-100 px-2 py-0.5">黄＝ショート</span>
+        <div className="shrink-0 border-b border-violet-100 bg-violet-50/80 px-3 py-2 sm:px-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-black text-violet-950">
+              担当の色分け（誰が経管するか）— 色と名前を施設で指定
+            </p>
+            <button
+              type="button"
+              onClick={addColorLegendItem}
+              className="inline-flex items-center gap-1 rounded-lg border-2 border-violet-500 bg-white px-2 py-1 text-[11px] font-black text-violet-900 hover:bg-violet-100"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              色を追加
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {colorLegend.map((c) => (
+              <div
+                key={c.id}
+                className="flex items-center gap-1 rounded-lg border-2 border-slate-300 bg-white px-1.5 py-1 shadow-sm"
+              >
+                <input
+                  type="color"
+                  value={c.color}
+                  onChange={(e) => patchColorLegendItem(c.id, { color: e.target.value })}
+                  className="h-8 w-10 cursor-pointer rounded border border-slate-200"
+                  title="セルの色"
+                />
+                <input
+                  value={c.label}
+                  onChange={(e) => patchColorLegendItem(c.id, { label: e.target.value })}
+                  className="w-24 rounded border border-slate-200 px-1 py-0.5 text-xs font-black text-slate-900"
+                  placeholder="例: ロング"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeColorLegendItem(c.id)}
+                  className="rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-700"
+                  title="この色を削除"
+                  disabled={colorLegend.length <= 1}
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[10px] font-bold text-slate-600">
+            各枠の「担当」で色を選ぶと、用紙と同じ背景色になります（青＝ロング、黄＝ショート等は上で変更可）
+          </p>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto px-2 py-2 sm:px-3">
@@ -321,7 +402,7 @@ export function EnteralNutritionMenuModal({
                       薬
                     </th>
                     <th className={`border border-violet-300 px-1 py-0.5 text-[10px] ${slot.headerBg}`}>
-                      勤務
+                      担当
                     </th>
                   </React.Fragment>
                 ))}
@@ -346,10 +427,10 @@ export function EnteralNutritionMenuModal({
                     {MEAL_SLOTS.map((meal) => {
                       const slotKey = meal.key;
                       const slot = row[slotKey];
-                      const shiftClass = enteralShiftCellClass(slot.shift);
+                      const slotBg = enteralSlotBackgroundColor(colorLegend, slot.colorId);
                       return (
                         <React.Fragment key={`${row.residentId}-${slotKey}`}>
-                          <td className={`border border-slate-300 p-0 ${shiftClass}`}>
+                          <td className="border border-slate-300 p-0" style={{ backgroundColor: slotBg }}>
                             <input
                               type="time"
                               value={slot.time || ''}
@@ -358,7 +439,7 @@ export function EnteralNutritionMenuModal({
                               title="実施時刻"
                             />
                           </td>
-                          <td className={`border border-slate-300 p-0 ${shiftClass}`}>
+                          <td className="border border-slate-300 p-0" style={{ backgroundColor: slotBg }}>
                             <input
                               value={slot.content}
                               onChange={(e) => patchSlot(row.residentId, slotKey, { content: e.target.value })}
@@ -367,7 +448,7 @@ export function EnteralNutritionMenuModal({
                               className={`${INPUT_CLASS} min-w-[9rem] border-0`}
                             />
                           </td>
-                          <td className={`border border-slate-300 p-0 ${shiftClass}`}>
+                          <td className="border border-slate-300 p-0" style={{ backgroundColor: slotBg }}>
                             <select
                               value={slot.medication}
                               onChange={(e) =>
@@ -382,16 +463,17 @@ export function EnteralNutritionMenuModal({
                               ))}
                             </select>
                           </td>
-                          <td className={`border border-slate-300 p-0 ${shiftClass}`}>
+                          <td className="border border-slate-300 p-0" style={{ backgroundColor: slotBg }}>
                             <select
-                              value={slot.shift || ''}
-                              onChange={(e) => patchSlot(row.residentId, slotKey, { shift: e.target.value })}
-                              className={`${INPUT_CLASS} min-w-[4.5rem] border-0 font-black`}
-                              title="日勤・夜勤・ショート"
+                              value={slot.colorId || ''}
+                              onChange={(e) => patchSlot(row.residentId, slotKey, { colorId: e.target.value })}
+                              className={`${INPUT_CLASS} min-w-[5rem] border-0 font-black`}
+                              title="この枠を担当する人・勤務（色）"
                             >
-                              {ENTERAL_SHIFT_OPTIONS.map((opt) => (
-                                <option key={opt.value || 'none'} value={opt.value}>
-                                  {opt.label}
+                              <option value="">—</option>
+                              {colorLegend.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.label}
                                 </option>
                               ))}
                             </select>
@@ -416,16 +498,29 @@ export function EnteralNutritionMenuModal({
 
         <div className="shrink-0 space-y-2 border-t border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
           <label className="block text-xs font-black text-slate-800">
-            凡例（用紙下部）
+            凡例の補足文（用紙下部・任意）
             <input
               value={legendNote}
               onChange={(e) => {
                 setLegendNote(e.target.value);
                 markDirty();
               }}
-              className="mt-0.5 w-full rounded-lg border-2 border-slate-300 bg-white px-2 py-1.5 text-sm font-bold text-slate-900"
+              placeholder={formatEnteralColorLegendNote(colorLegend)}
+              className="mt-0.5 w-full rounded-lg border-2 border-slate-300 bg-white px-2 py-1.5 text-sm font-bold text-slate-900 placeholder:text-slate-500"
             />
           </label>
+          <p className="text-[10px] font-bold text-slate-600">
+            印刷時の色凡例:{' '}
+            {colorLegend.map((c) => (
+              <span
+                key={c.id}
+                className="mr-2 inline-block rounded border border-slate-400 px-1.5 py-0.5"
+                style={{ backgroundColor: c.color }}
+              >
+                {c.label}
+              </span>
+            ))}
+          </p>
           <label className="block text-xs font-black text-slate-800">
             施設共通メモ（※で始まる注意書きなど）
             <textarea

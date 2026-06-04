@@ -30,7 +30,7 @@ function normalizeMed(v) {
 function slot(content, medication) {
   const raw = normCell(content);
   const { time, rest } = parseEnteralTimeFromText(raw);
-  return { content: rest || raw, medication: normalizeMed(medication), time, shift: '' };
+  return { content: rest || raw, medication: normalizeMed(medication), time, colorId: '' };
 }
 
 /**
