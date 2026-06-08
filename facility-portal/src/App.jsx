@@ -1177,6 +1177,32 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    const refreshBoard = () => {
+      setPanoramaNursingRev((n) => n + 1);
+      const lk = String(panoramaFacilityLinkKey ?? '').trim();
+      if (lk) {
+        setFacilityNoticeDraft(Report.getFacilityNotice(lk));
+      }
+    };
+    const onStorage = (ev) => {
+      const k = String(ev?.key ?? '');
+      if (
+        k === 'carelink_os_facility_notice_v1' ||
+        k === 'carelink_os_nursing_directives_v1' ||
+        k === 'carelink_os_nursing_directives_meta_v1'
+      ) {
+        refreshBoard();
+      }
+    };
+    window.addEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [panoramaFacilityLinkKey]);
+
+  useEffect(() => {
     if (!requirePortalAuth) return;
     const onVis = () => {
       if (document.visibilityState === 'hidden') {
@@ -1534,7 +1560,8 @@ const App = () => {
     }
     Report.setFacilityNotice(lk, facilityNoticeDraft);
     Report.setFacilityHandoverNote(lk, facilityHandoverDraft);
-    setSaveStatus('周知事項・申し送りを保存しました');
+    setPanoramaNursingRev((n) => n + 1);
+    setSaveStatus('周知事項・申し送りを保存しました（他PCへ同期）');
     setTimeout(() => setSaveStatus(''), 1600);
   };
 

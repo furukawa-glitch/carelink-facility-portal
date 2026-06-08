@@ -8,7 +8,9 @@ import {
   BarChart3,
   CalendarClock,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
   ClipboardList,
   Clock,
   ExternalLink,
@@ -117,6 +119,13 @@ import {
   findResidentForHomeVisitCalendarName,
 } from '../lib/residentNameMatch.js';
 import { STAY_STATUS_CHANGED_EVENT } from '../lib/residentStayStatus.js';
+import {
+  buildStayStatusPlansForDate,
+  filterImportantPlans,
+  PLAN_CALENDAR_EXPANDED_LS,
+  planTypeChipClass,
+  sortPlansByTime,
+} from '../lib/planCalendarDisplay.js';
 import { ResidentStayStatusBadges } from '../components/ResidentStayStatusBadges.jsx';
 import { ResidentMonitorBoard } from '../components/ResidentMonitorBoard.jsx';
 import { formatCardMonitorAlertLine } from '../lib/residentMonitorAlertShort.js';
@@ -1215,11 +1224,20 @@ export function RecordPage({
   const [nursingStartDate, setNursingStartDate] = useState(currentYmd);
   const [nursingEndDate, setNursingEndDate] = useState('');
   const [nursingRev, setNursingRev] = useState(0);
+  const [facilityNoticeDraft, setFacilityNoticeDraft] = useState('');
+  const [facilityNoticeSaveFlash, setFacilityNoticeSaveFlash] = useState(false);
   const [planDraftDate, setPlanDraftDate] = useState(currentYmd);
   const [planDraftTime, setPlanDraftTime] = useState('10:00');
-  const [planDraftType, setPlanDraftType] = useState('外出');
+  const [planDraftType, setPlanDraftType] = useState('受診');
   const [planDraftTitle, setPlanDraftTitle] = useState('');
   const [planRev, setPlanRev] = useState(0);
+  const [planCalendarExpanded, setPlanCalendarExpanded] = useState(() => {
+    try {
+      return localStorage.getItem(PLAN_CALENDAR_EXPANDED_LS) === '1';
+    } catch {
+      return false;
+    }
+  });
   /** 予定カレンダー表示範囲: 今週 / 来週 / 1か月 */
   const [planCalendarRange, setPlanCalendarRange] = useState(
     /** @type {'this_week' | 'next_week' | 'month'} */ ('this_week')
@@ -1780,7 +1798,7 @@ export function RecordPage({
 
   const board = useMemo(
     () => boardForFacilityLinkKey(linkKeyForSheetTitle(selectedSheetTitle)),
-    [selectedSheetTitle]
+    [selectedSheetTitle, tick, roomNotesRev, nursingRev]
   );
   const extLinks = useMemo(
     () => getExternalLinksForFacility(selectedDef?.linkKey ?? ''),
@@ -1847,16 +1865,48 @@ export function RecordPage({
   }, [continuousHandoverText, selectedDef?.linkKey]);
 
   useEffect(() => {
-    const bump = () => setRoomNotesRev((n) => n + 1);
-    window.addEventListener('focus', bump);
-    window.addEventListener('carelink-handover-storage', bump);
-    window.addEventListener('carelink-care-events-sync', bump);
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    setFacilityNoticeDraft(k ? Report.getFacilityNotice(k) : '');
+  }, [selectedDef?.linkKey, tick, nursingRev, roomNotesRev]);
+
+  useEffect(() => {
+    const bumpBoard = () => {
+      setRoomNotesRev((n) => n + 1);
+      setNursingRev((n) => n + 1);
+      setTick((n) => n + 1);
+    };
+    const onStorage = (ev) => {
+      const k = String(ev?.key ?? '');
+      if (
+        k === 'carelink_os_facility_notice_v1' ||
+        k === 'carelink_os_nursing_directives_v1' ||
+        k === 'carelink_os_nursing_directives_meta_v1'
+      ) {
+        bumpBoard();
+      }
+    };
+    window.addEventListener('focus', bumpBoard);
+    window.addEventListener('carelink-handover-storage', bumpBoard);
+    window.addEventListener('carelink-care-events-sync', bumpBoard);
+    window.addEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, bumpBoard);
+    window.addEventListener('storage', onStorage);
     return () => {
-      window.removeEventListener('focus', bump);
-      window.removeEventListener('carelink-handover-storage', bump);
-      window.removeEventListener('carelink-care-events-sync', bump);
+      window.removeEventListener('focus', bumpBoard);
+      window.removeEventListener('carelink-handover-storage', bumpBoard);
+      window.removeEventListener('carelink-care-events-sync', bumpBoard);
+      window.removeEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, bumpBoard);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
+
+  const saveFacilityNoticeBoard = useCallback(() => {
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    if (!k) return;
+    Report.setFacilityNotice(k, facilityNoticeDraft);
+    setFacilityNoticeSaveFlash(true);
+    window.setTimeout(() => setFacilityNoticeSaveFlash(false), 1500);
+    setTick((n) => n + 1);
+  }, [selectedDef, facilityNoticeDraft]);
 
   const saveFacilityHandoverFromList = useCallback(() => {
     const k = String(selectedDef?.linkKey ?? '').trim();
@@ -1914,10 +1964,12 @@ export function RecordPage({
       const residentDaily = displayResidents.length
         ? getResidentDailyPlansForFacilityCalendar(k, displayResidents, String(day.date))
         : [];
-      const merged = [...day.plans, ...gcal, ...hvc, ...residentDaily].sort((a, b) =>
-        String(a.time ?? '').localeCompare(String(b.time ?? ''), 'ja')
-      );
-      return { ...day, plans: merged, homeVisit: hvc[0] ?? null };
+      const stayStatus = displayResidents.length
+        ? buildStayStatusPlansForDate(displayResidents, String(day.date))
+        : [];
+      const merged = sortPlansByTime([...day.plans, ...gcal, ...hvc, ...residentDaily, ...stayStatus]);
+      const importantPlans = filterImportantPlans(merged);
+      return { ...day, plans: importantPlans, homeVisit: hvc[0] ?? null };
     });
     return out;
   }, [
@@ -1931,7 +1983,16 @@ export function RecordPage({
     planRangeMeta,
     residentScheduleSheetCfg,
     displayResidents,
+    stayStatusRev,
   ]);
+  const planCalendarImportantTotal = useMemo(
+    () => weeklyPlanDays.reduce((n, d) => n + (d.plans?.length ?? 0), 0),
+    [weeklyPlanDays]
+  );
+  const todayImportantPlans = useMemo(() => {
+    const d = weeklyPlanDays.find((x) => x.isToday);
+    return d?.plans ?? [];
+  }, [weeklyPlanDays]);
   const todayHomeVisit = useMemo(() => {
     const d = weeklyPlanDays.find((x) => x.isToday);
     return d?.homeVisit ?? null;
@@ -2187,10 +2248,20 @@ export function RecordPage({
       setTick((n) => n + 1);
       setPlanRev((n) => n + 1);
       setHomeVisitCalendarRev((n) => n + 1);
+      setNursingRev((n) => n + 1);
+      setRoomNotesRev((n) => n + 1);
     };
     window.addEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
     return () => window.removeEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PLAN_CALENDAR_EXPANDED_LS, planCalendarExpanded ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [planCalendarExpanded]);
 
   const openDaySvcExternalEditor = useCallback((res) => {
     const rid = String(res?.id ?? '').trim();
@@ -4329,22 +4400,101 @@ export function RecordPage({
                 onOpenAdmin={() => setNearMissAwarenessAdminOpen(true)}
               />
               <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border-2 border-amber-400 bg-gradient-to-br from-amber-50 via-orange-50/80 to-amber-100/60 p-2.5 shadow-md sm:p-3">
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-amber-950">
-                  <Megaphone className="h-6 w-6 shrink-0 sm:h-7 sm:w-7" />
-                  <h2 className="text-base font-black sm:text-lg 2xl:text-xl">本日の周知事項</h2>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-amber-950">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Megaphone className="h-6 w-6 shrink-0 sm:h-7 sm:w-7" />
+                    <h2 className="text-base font-black sm:text-lg 2xl:text-xl">本日の周知事項</h2>
+                  </div>
+                  {facilityNoticeSaveFlash ? (
+                    <span className="text-[11px] font-black text-emerald-700">保存しました</span>
+                  ) : null}
                 </div>
-                <p className="min-h-0 flex-1 text-sm font-bold leading-relaxed text-amber-950 sm:text-base 2xl:text-lg">
-                  {board.notice}
-                </p>
+                <textarea
+                  value={facilityNoticeDraft}
+                  onChange={(e) => setFacilityNoticeDraft(e.target.value)}
+                  rows={4}
+                  placeholder="施設全体への周知（面会制限・感染対策・本日の連絡事項など）"
+                  className="min-h-[5.5rem] w-full flex-1 resize-y rounded-xl border-2 border-amber-300 bg-white/95 px-3 py-2 text-sm font-bold leading-relaxed text-amber-950 outline-none focus:ring-2 focus:ring-amber-400 sm:text-base"
+                />
+                <button
+                  type="button"
+                  onClick={saveFacilityNoticeBoard}
+                  className="mt-2 w-full rounded-lg bg-amber-600 px-3 py-2 text-sm font-black text-white hover:bg-amber-500"
+                >
+                  周知事項を保存（他PC・パノラマ画面と同期）
+                </button>
+                {!String(facilityNoticeDraft ?? '').trim() && board.notice !== facilityNoticeDraft ? (
+                  <p className="mt-1 text-[10px] font-bold text-amber-800/80">
+                    未入力時はサンプル文が表示されることがあります。保存すると全端末で同じ内容になります。
+                  </p>
+                ) : null}
               </div>
               <div className="flex min-w-0 flex-col rounded-2xl border-2 border-teal-300/90 bg-teal-50/95 p-3 shadow-md">
-                <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-teal-900">
-                  <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlanCalendarExpanded((v) => !v)}
+                  className="mb-1 flex w-full flex-wrap items-center justify-between gap-2 rounded-lg text-left text-teal-900 hover:bg-teal-100/60"
+                  aria-expanded={planCalendarExpanded}
+                >
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <CalendarDays className="h-5 w-5 shrink-0" />
                     <h3 className="text-base font-black">
-                      予定カレンダー（{planRangeMeta.countLabel}）
+                      予定カレンダー（重要のみ・時間順）
                     </h3>
+                    <span className="rounded-full bg-teal-600 px-2 py-0.5 text-[10px] font-black text-white">
+                      {planRangeMeta.label} {planCalendarImportantTotal}件
+                    </span>
                   </div>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-black text-teal-800">
+                    {planCalendarExpanded ? (
+                      <>
+                        閉じる <ChevronUp className="h-4 w-4" />
+                      </>
+                    ) : (
+                      <>
+                        開く <ChevronDown className="h-4 w-4" />
+                      </>
+                    )}
+                  </span>
+                </button>
+                {!planCalendarExpanded ? (
+                  <div className="mb-1 space-y-2">
+                    <p className="text-[10px] font-bold leading-snug text-teal-800/90">
+                      往診・外部受診・入院・入居・退院のみ表示します。デイ・外出・入浴などは各利用者カードの予定から確認できます。
+                    </p>
+                    {todayImportantPlans.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-teal-300 bg-white/70 px-2 py-2 text-center text-[11px] font-bold text-slate-600">
+                        本日の重要予定はありません
+                      </p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {todayImportantPlans.map((p) => (
+                          <li
+                            key={String(p.id)}
+                            className={`flex gap-2 rounded-lg border px-2 py-1.5 text-[11px] shadow-sm ${planTypeChipClass(p)}`}
+                          >
+                            <span className="w-11 shrink-0 font-mono font-black">{p.time || '—'}</span>
+                            <div className="min-w-0 flex-1">
+                              <span className="mr-1 inline-block rounded bg-white/80 px-1 py-0.5 text-[9px] font-black ring-1 ring-inset ring-black/10">
+                                {p.type}
+                              </span>
+                              {String(p.source ?? '') === 'home_visit_calendar' ? (
+                                <HomeVisitFaxBadge
+                                  className="mr-1 align-middle"
+                                  onClick={() => openHomeVisitNoteForVisit({ ...p, date: currentYmd() })}
+                                />
+                              ) : null}
+                              <span className="font-bold leading-snug">{p.title}</span>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
+                {planCalendarExpanded ? (
+                  <>
+                <div className="mb-1 flex flex-wrap items-center justify-end gap-2">
                   <div className="flex flex-wrap gap-1 rounded-lg border border-teal-300 bg-white/90 p-0.5">
                     {(
                       [
@@ -4370,11 +4520,11 @@ export function RecordPage({
                 </div>
                 <p className="mb-2 text-[10px] font-bold text-teal-800/90">
                   表示中: {planRangeMeta.label}（{weeklyPlanDays[0]?.date ?? '—'} 〜{' '}
-                  {weeklyPlanDays[weeklyPlanDays.length - 1]?.date ?? '—'}）— 横スクロールで全日程を確認できます
+                  {weeklyPlanDays[weeklyPlanDays.length - 1]?.date ?? '—'}）— 各日の予定は時刻順・横スクロールで全日程を確認できます
                 </p>
                 <p className="mb-2 text-[11px] font-bold leading-snug text-teal-900/85">
-                  公式LINEの面会予約が入った Google カレンダーの予定も、ここに自動で載ります（緑の Google 表示）。手入力の外出・受診なども下のフォームから追記できます。
-                  往診カレンダーPDFを取り込むと、往診日ごとに<strong className="font-black">対象利用者名</strong>が紫の「往診」表示で載ります。紫の<strong className="font-black">【往診】</strong>を押すと FAX用の往診ノート作成画面が開きます。
+                  <strong className="font-black">往診・外部受診・入院・入居・退院</strong>のみ掲載しています。デイ・外出・面会などは利用者カードの予定をご覧ください。
+                  往診カレンダーPDF取込・紫の<strong className="font-black">【往診】</strong>から FAX用往診ノートを作成できます。
                 </p>
                 {todayHomeVisit ? (
                   <div className="mb-2 rounded-xl border-2 border-violet-500 bg-violet-50 px-3 py-2.5 shadow-sm">
@@ -4469,15 +4619,9 @@ export function RecordPage({
                             day.plans.map((p) => (
                               <li
                                 key={String(p.id)}
-                                className={`rounded-lg border px-2 py-1.5 shadow-sm ${
-                                  String(p.source ?? '') === 'home_visit_calendar'
-                                    ? 'border-violet-300 bg-violet-50/95'
-                                    : String(p.source ?? '') === 'resident_schedule'
-                                      ? 'border-purple-300 bg-purple-50/95'
-                                      : 'border-teal-200 bg-teal-50/90'
-                                }`}
+                                className={`rounded-lg border px-2 py-1.5 shadow-sm ${planTypeChipClass(p)}`}
                               >
-                                <div className="font-mono text-[11px] font-black text-teal-900">{p.time}</div>
+                                <div className="font-mono text-[11px] font-black">{p.time}</div>
                                 {String(p.source ?? '') === 'home_visit_calendar' ? (
                                   <HomeVisitFaxBadge
                                     className="mt-0.5"
@@ -4490,12 +4634,17 @@ export function RecordPage({
                                 )}
                                 {String(p.source ?? '') === 'google_calendar' ? (
                                   <span className="ml-1 mt-0.5 inline-block rounded bg-emerald-600 px-1 py-0.5 text-[9px] font-black text-white">
-                                    {p.type === '面会' ? 'LINE/Google' : 'Google'}
+                                    Google
                                   </span>
                                 ) : null}
                                 {String(p.source ?? '') === 'resident_schedule' ? (
                                   <span className="ml-1 mt-0.5 inline-block rounded bg-purple-700 px-1 py-0.5 text-[9px] font-black text-white">
-                                    利用者予定
+                                    受診
+                                  </span>
+                                ) : null}
+                                {String(p.source ?? '') === 'stay_status' ? (
+                                  <span className="ml-1 mt-0.5 inline-block rounded bg-slate-700 px-1 py-0.5 text-[9px] font-black text-white">
+                                    カード登録
                                   </span>
                                 ) : null}
                                 {String(p.source ?? '') === 'home_visit_calendar' ? (
@@ -4526,7 +4675,8 @@ export function RecordPage({
                                 )}
                                 {String(p.source ?? '') === 'google_calendar' ||
                                 String(p.source ?? '') === 'home_visit_calendar' ||
-                                String(p.source ?? '') === 'resident_schedule' ? null : (
+                                String(p.source ?? '') === 'resident_schedule' ||
+                                String(p.source ?? '') === 'stay_status' ? null : (
                                   <button
                                     type="button"
                                     onClick={() => removeWeeklyPlan(p.id)}
@@ -4543,7 +4693,9 @@ export function RecordPage({
                     ))}
                   </div>
                 )}
-                <p className="mb-2 text-[10px] font-bold text-slate-500">予定を追加・更新する（任意）</p>
+                <p className="mb-2 text-[10px] font-bold text-slate-500">
+                  施設共通の重要予定を追加（受診・往診など）。デイ・外出は利用者カードから登録してください。
+                </p>
                 <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <input
                     type="date"
@@ -4562,18 +4714,15 @@ export function RecordPage({
                     onChange={(e) => setPlanDraftType(e.target.value)}
                     className="rounded-lg border border-teal-300 bg-white px-2 py-1.5 text-sm font-bold text-slate-900"
                   >
-                    <option value="外出">外出</option>
-                    <option value="外泊">外泊</option>
-                    <option value="受診">受診</option>
+                    <option value="受診">受診（外部）</option>
                     <option value="往診">往診</option>
-                    <option value="面会">面会</option>
-                    <option value="その他">その他</option>
+                    <option value="その他">その他（重要）</option>
                   </select>
                   <input
                     type="text"
                     value={planDraftTitle}
                     onChange={(e) => setPlanDraftTitle(e.target.value)}
-                    placeholder="例: 〇〇様 14:00 内科（薬手帳・頓服）"
+                    placeholder="例: 〇〇様 14:00 〇〇病院 内科"
                     className="rounded-lg border border-teal-300 bg-white px-2 py-1.5 text-sm font-bold text-slate-900"
                   />
                 </div>
@@ -4582,8 +4731,10 @@ export function RecordPage({
                   onClick={registerWeeklyPlan}
                   className="mb-2 w-full rounded-lg bg-teal-600 px-3 py-2 text-sm font-black text-white hover:bg-teal-500"
                 >
-                  上記の日付に予定を1件追加
+                  上記の日付に重要予定を1件追加
                 </button>
+                  </>
+                ) : null}
               </div>
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3 xl:gap-3 xl:items-stretch">
               <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border-2 border-rose-300 bg-gradient-to-br from-rose-50 to-rose-100/40 p-2.5 shadow-md sm:p-3">

@@ -71,6 +71,7 @@ export function nursingFacilityLinkKeyFromContext(resident, portalSheetTitle = '
 const LS = {
   careEvents: 'carelink_os_care_events_v1',
   nursing: 'carelink_os_nursing_directives_v1',
+  nursingMeta: 'carelink_os_nursing_directives_meta_v1',
   weeklyPlans: 'carelink_os_weekly_plans_v1',
   lastStool: 'carelink_os_last_stool_v1',
   /** 最終の排尿記録・トイレ誘導実施時刻（6時間アラート用） */
@@ -924,7 +925,7 @@ export function addNursingDirective(linkKey, text, by = '看護', opts = {}) {
   const list = Array.isArray(all[linkKey]) ? all[linkKey] : [];
   const startDate = String(opts?.startDate ?? '').trim();
   const endDate = String(opts?.endDate ?? '').trim();
-  list.unshift({
+  const directive = {
     id: `dir_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     text: t,
     ts: new Date().toISOString(),
@@ -934,13 +935,31 @@ export function addNursingDirective(linkKey, text, by = '看護', opts = {}) {
     targetResidentRoom,
     startDate: /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : '',
     endDate: /^\d{4}-\d{2}-\d{2}$/.test(endDate) ? endDate : '',
-  });
+  };
+  list.unshift(directive);
   all[linkKey] = list.slice(0, 30);
   writeJson(LS.nursing, all);
+  const meta = readJson(LS.nursingMeta, {});
+  meta[linkKey] = directive.ts;
+  writeJson(LS.nursingMeta, meta);
+  dispatchFacilityBoardStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    logCareEvent({
+      type: 'nursing_directive_add',
+      residentId: '',
+      residentName: '',
+      facilitySheetTitle: linkKey,
+      ts: directive.ts,
+      meta: { linkKey, directive, updatedAt: directive.ts },
+    });
+  }
+  void import('../lib/facilityPortalStoreSync.js').then((m) =>
+    m.syncFacilityStoreNow(m.FACILITY_STORE_NURSING_DIRECTIVES, linkKey)
+  );
   return true;
 }
 
-export function removeNursingDirective(linkKey, directiveId, tsFallback = '') {
+export function removeNursingDirective(linkKey, directiveId, tsFallback = '', opts = {}) {
   const k = String(linkKey ?? '').trim();
   if (!k) return false;
   const all = readJson(LS.nursing, {});
@@ -953,6 +972,28 @@ export function removeNursingDirective(linkKey, directiveId, tsFallback = '') {
   if (next.length === list.length) return false;
   all[k] = next;
   writeJson(LS.nursing, all);
+  const meta = readJson(LS.nursingMeta, {});
+  const removedAt = new Date().toISOString();
+  meta[k] = removedAt;
+  writeJson(LS.nursingMeta, meta);
+  dispatchFacilityBoardStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    logCareEvent({
+      type: 'nursing_directive_remove',
+      residentId: '',
+      residentName: '',
+      facilitySheetTitle: k,
+      ts: removedAt,
+      meta: {
+        linkKey: k,
+        directiveId: String(directiveId ?? '').trim(),
+        updatedAt: removedAt,
+      },
+    });
+  }
+  void import('../lib/facilityPortalStoreSync.js').then((m) =>
+    m.syncFacilityStoreNow(m.FACILITY_STORE_NURSING_DIRECTIVES, k)
+  );
   return true;
 }
 
@@ -973,8 +1014,17 @@ export function getFacilityHandoverMeta(linkKey) {
   };
 }
 
+export const FACILITY_BOARD_STORAGE_EVENT = 'carelink-facility-board-storage';
+
 function dispatchHandoverStorageEvent() {
   if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('carelink-handover-storage'));
+  }
+}
+
+function dispatchFacilityBoardStorageEvent() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(FACILITY_BOARD_STORAGE_EVENT));
     window.dispatchEvent(new Event('carelink-handover-storage'));
   }
 }
@@ -1300,12 +1350,28 @@ export function getFacilityNotice(linkKey) {
  * @param {string} linkKey
  * @param {string} text
  */
-export function setFacilityNotice(linkKey, text) {
+export function setFacilityNotice(linkKey, text, opts = {}) {
   const k = String(linkKey ?? '').trim();
   if (!k) return false;
   const all = readJson(LS.facilityNotice, {});
-  all[k] = { text: String(text ?? '').trim(), updatedAt: new Date().toISOString() };
+  const updatedAt = new Date().toISOString();
+  const row = { text: String(text ?? '').trim(), updatedAt };
+  all[k] = row;
   writeJson(LS.facilityNotice, all);
+  dispatchFacilityBoardStorageEvent();
+  if (!opts?.skipCloudEvent) {
+    logCareEvent({
+      type: 'facility_notice',
+      residentId: '',
+      residentName: '',
+      facilitySheetTitle: k,
+      ts: updatedAt,
+      meta: { linkKey: k, text: row.text, updatedAt },
+    });
+  }
+  void import('../lib/facilityPortalStoreSync.js').then((m) =>
+    m.syncFacilityStoreNow(m.FACILITY_STORE_FACILITY_NOTICE, k)
+  );
   return true;
 }
 
@@ -1412,6 +1478,9 @@ function applyHandoverStoresFromEvents(events) {
   const facilityStore = readJson(LS.facilityHandover, {});
   const facilityItemStore = readJson(LS.facilityHandoverItems, {});
   const roomStore = readJson(LS.residentRoomNotes, {});
+  const noticeStore = readJson(LS.facilityNotice, {});
+  const nursingStore = readJson(LS.nursing, {});
+  const nursingMetaStore = readJson(LS.nursingMeta, {});
   let changed = 0;
   for (const e of list) {
     const typ = String(e?.type ?? '').trim();
@@ -1468,13 +1537,59 @@ function applyHandoverStoresFromEvents(events) {
       if (next.length === list.length) continue;
       facilityItemStore[linkKey] = next;
       changed++;
+      continue;
+    }
+    if (typ === 'facility_notice') {
+      const linkKey = String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+      if (!linkKey) continue;
+      const prev = noticeStore[linkKey] && typeof noticeStore[linkKey] === 'object' ? noticeStore[linkKey] : {};
+      const prevAt = new Date(String(prev.updatedAt ?? '')).getTime();
+      const nextAt = new Date(ts).getTime();
+      if (Number.isFinite(prevAt) && Number.isFinite(nextAt) && prevAt > nextAt) continue;
+      noticeStore[linkKey] = {
+        text: String(meta.text ?? '').trim(),
+        updatedAt: ts || new Date().toISOString(),
+      };
+      changed++;
+      continue;
+    }
+    if (typ === 'nursing_directive_add') {
+      const linkKey = String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+      const directive = meta.directive && typeof meta.directive === 'object' ? meta.directive : null;
+      if (!linkKey || !directive) continue;
+      const id = String(directive.id ?? '').trim();
+      if (!id) continue;
+      const rows = Array.isArray(nursingStore[linkKey]) ? nursingStore[linkKey] : [];
+      const dirTs = String(directive.ts ?? e?.ts ?? '').trim() || new Date().toISOString();
+      const next = [
+        { ...directive, ts: dirTs },
+        ...rows.filter((d) => String(d?.id ?? '').trim() !== id),
+      ].slice(0, 30);
+      nursingStore[linkKey] = next;
+      nursingMetaStore[linkKey] = ts || dirTs;
+      changed++;
+      continue;
+    }
+    if (typ === 'nursing_directive_remove') {
+      const linkKey = String(meta.linkKey ?? e?.facilitySheetTitle ?? '').trim();
+      const id = String(meta.directiveId ?? meta.id ?? '').trim();
+      if (!linkKey || !id) continue;
+      const rows = Array.isArray(nursingStore[linkKey]) ? nursingStore[linkKey] : [];
+      const next = rows.filter((d) => String(d?.id ?? '').trim() !== id);
+      if (next.length === rows.length) continue;
+      nursingStore[linkKey] = next;
+      nursingMetaStore[linkKey] = ts || new Date().toISOString();
+      changed++;
     }
   }
   if (changed > 0) {
     writeJson(LS.facilityHandover, facilityStore);
     writeJson(LS.facilityHandoverItems, facilityItemStore);
     writeJson(LS.residentRoomNotes, roomStore);
-    dispatchHandoverStorageEvent();
+    writeJson(LS.facilityNotice, noticeStore);
+    writeJson(LS.nursing, nursingStore);
+    writeJson(LS.nursingMeta, nursingMetaStore);
+    dispatchFacilityBoardStorageEvent();
   }
   return changed;
 }

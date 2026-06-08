@@ -11,10 +11,15 @@ export const FACILITY_STORE_ENTERAL_MENU = 'enteral_nutrition_menu';
 export const FACILITY_STORE_BATH_SCHEDULE = 'bath_schedule';
 export const FACILITY_STORE_RESIDENT_SCHEDULE = 'resident_daily_schedule';
 export const FACILITY_STORE_BULK_DRAFT = 'bulk_table_draft';
+export const FACILITY_STORE_NURSING_DIRECTIVES = 'nursing_directives';
+export const FACILITY_STORE_FACILITY_NOTICE = 'facility_notice';
 /** 組織全体で1つ（利用者IDキー） */
 export const FACILITY_STORE_ORG_KEY = '__org__';
 
 const LS_WEEKLY = 'carelink_os_weekly_plans_v1';
+const LS_NURSING = 'carelink_os_nursing_directives_v1';
+const LS_NURSING_META = 'carelink_os_nursing_directives_meta_v1';
+const LS_FACILITY_NOTICE = 'carelink_os_facility_notice_v1';
 const LS_HOME_VISIT = 'carelink_os_home_visit_calendar_v1';
 const LS_INJURY_DISEASE = 'carelink_os_injury_disease_by_resident_v1';
 const LS_ENTERAL_MENU = 'carelink_os_enteral_nutrition_menu_v1';
@@ -114,6 +119,63 @@ function mergeEnteralMenuFacilityStore(local, remote) {
  * @param {Record<string, unknown> | null | undefined} local
  * @param {Record<string, unknown> | null | undefined} remote
  */
+/**
+ * @param {unknown} payload
+ * @returns {{ savedAt: string; directives: unknown[] }}
+ */
+/**
+ * @param {unknown[]} local
+ * @param {unknown[]} remote
+ */
+function mergeNursingDirectiveLists(local, remote) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const byId = new Map();
+  for (const d of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
+    if (!d || typeof d !== 'object') continue;
+    const row = /** @type {Record<string, unknown>} */ (d);
+    const id = String(row.id ?? row.ts ?? '').trim();
+    if (!id) continue;
+    const prev = byId.get(id);
+    const ts = String(row.ts ?? '');
+    const pts = String(prev?.ts ?? '');
+    if (!prev || ts >= pts) byId.set(id, row);
+  }
+  return [...byId.values()]
+    .sort((a, b) => String(b.ts ?? '').localeCompare(String(a.ts ?? ''), 'ja'))
+    .slice(0, 30);
+}
+
+function parseNursingDirectivesPayload(payload) {
+  if (Array.isArray(payload)) {
+    return { savedAt: '', directives: payload };
+  }
+  if (payload && typeof payload === 'object') {
+    const row = /** @type {Record<string, unknown>} */ (payload);
+    return {
+      savedAt: String(row.savedAt ?? ''),
+      directives: Array.isArray(row.directives) ? row.directives : [],
+    };
+  }
+  return { savedAt: '', directives: [] };
+}
+
+/**
+ * @param {{ text?: string; updatedAt?: string } | null | undefined} local
+ * @param {{ text?: string; updatedAt?: string } | null | undefined} remote
+ */
+function mergeFacilityNoticeRow(local, remote) {
+  if (!remote || typeof remote !== 'object') return local ?? null;
+  const remoteAt = String(remote.updatedAt ?? '');
+  const localAt = String(local?.updatedAt ?? '');
+  if (!local || remoteAt >= localAt) {
+    return {
+      text: String(remote.text ?? '').trim(),
+      updatedAt: remoteAt || new Date().toISOString(),
+    };
+  }
+  return local;
+}
+
 function mergeResidentScheduleFacilityStore(local, remote) {
   if (!remote || typeof remote !== 'object') return local ?? null;
   const remoteAt = String(remote.savedAt ?? '');
@@ -142,7 +204,12 @@ function applyFacilityStoresToLocal(rows) {
   let bathChanged = 0;
   let residentScheduleChanged = 0;
   let bulkDraftChanged = 0;
+  let nursingChanged = 0;
+  let facilityNoticeChanged = 0;
   const weeklyAll = readJson(LS_WEEKLY, {});
+  const nursingAll = readJson(LS_NURSING, {});
+  const nursingMetaAll = readJson(LS_NURSING_META, {});
+  const facilityNoticeAll = readJson(LS_FACILITY_NOTICE, {});
   const homeAll = readJson(LS_HOME_VISIT, {});
   let injuryAll = readJson(LS_INJURY_DISEASE, {});
   let enteralAll = readJson(LS_ENTERAL_MENU, {});
@@ -241,6 +308,32 @@ function applyFacilityStoresToLocal(rows) {
           bulkDraftChanged = 1;
         }
       }
+    } else if (type === FACILITY_STORE_NURSING_DIRECTIVES) {
+      const { savedAt: remoteSavedAt, directives: remoteList } = parseNursingDirectivesPayload(row.payload);
+      const remoteAt =
+        String(remoteSavedAt ?? '').trim() ||
+        String(row.updated_at ?? '').trim();
+      const localList = Array.isArray(nursingAll[linkKey]) ? nursingAll[linkKey] : [];
+      const merged = mergeNursingDirectiveLists(localList, remoteList);
+      if (JSON.stringify(merged) !== JSON.stringify(localList)) {
+        nursingAll[linkKey] = merged;
+        const localAt = String(nursingMetaAll[linkKey] ?? '').trim();
+        nursingMetaAll[linkKey] = remoteAt && remoteAt >= localAt ? remoteAt : localAt || remoteAt;
+        nursingChanged = 1;
+      }
+    } else if (type === FACILITY_STORE_FACILITY_NOTICE) {
+      const remote =
+        row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload) ? row.payload : null;
+      if (!remote) continue;
+      const local = facilityNoticeAll[linkKey];
+      const merged = mergeFacilityNoticeRow(
+        local && typeof local === 'object' ? local : null,
+        remote
+      );
+      if (merged && JSON.stringify(merged) !== JSON.stringify(local)) {
+        facilityNoticeAll[linkKey] = merged;
+        facilityNoticeChanged = 1;
+      }
     }
   }
 
@@ -265,6 +358,20 @@ function applyFacilityStoresToLocal(rows) {
     writeJson(LS_BULK_DRAFT, bulkDraftAll);
     writeJson(LS_BULK_DRAFT_META, bulkDraftMetaAll);
   }
+  if (nursingChanged) {
+    writeJson(LS_NURSING, nursingAll);
+    writeJson(LS_NURSING_META, nursingMetaAll);
+  }
+  if (facilityNoticeChanged) {
+    writeJson(LS_FACILITY_NOTICE, facilityNoticeAll);
+  }
+  if (nursingChanged || facilityNoticeChanged) {
+    if (typeof window !== 'undefined') {
+      void import('../services/ReportService.js').then((m) => {
+        window.dispatchEvent(new Event(m.FACILITY_BOARD_STORAGE_EVENT));
+      });
+    }
+  }
   const storesMerged =
     weeklyChanged +
     homeChanged +
@@ -272,7 +379,9 @@ function applyFacilityStoresToLocal(rows) {
     enteralChanged +
     bathChanged +
     residentScheduleChanged +
-    bulkDraftChanged;
+    bulkDraftChanged +
+    nursingChanged +
+    facilityNoticeChanged;
   if (storesMerged > 0 && typeof window !== 'undefined') {
     void import('./careEventsRealtimeSync.js').then((m) => {
       window.dispatchEvent(
@@ -290,8 +399,20 @@ function applyFacilityStoresToLocal(rows) {
     bathChanged,
     residentScheduleChanged,
     bulkDraftChanged,
+    nursingChanged,
+    facilityNoticeChanged,
     storesMerged,
   };
+}
+
+/** 看護重要指示の保存直後にクラウドへ送る */
+export function queueNursingDirectivesCloudSync(facilityLinkKey) {
+  queueFacilityPortalStoreSync(FACILITY_STORE_NURSING_DIRECTIVES, facilityLinkKey);
+}
+
+/** 本日の周知事項の保存直後にクラウドへ送る */
+export function queueFacilityNoticeCloudSync(facilityLinkKey) {
+  queueFacilityPortalStoreSync(FACILITY_STORE_FACILITY_NOTICE, facilityLinkKey);
 }
 
 /** 経管メニュー下書き保存後にクラウドへ送る */
@@ -419,6 +540,18 @@ export async function flushFacilityPortalStoresCloud() {
           residents: residents && typeof residents === 'object' ? residents : {},
           recurring: recurring && typeof recurring === 'object' ? recurring : {},
         };
+      } else if (storeType === FACILITY_STORE_NURSING_DIRECTIVES) {
+        const all = readJson(LS_NURSING, {});
+        const metaAll = readJson(LS_NURSING_META, {});
+        const directives = Array.isArray(all[facilityLinkKey]) ? all[facilityLinkKey] : [];
+        if (!directives.length && !metaAll[facilityLinkKey]) continue;
+        updatedAt = String(metaAll[facilityLinkKey] ?? updatedAt);
+        payload = { savedAt: updatedAt, directives };
+      } else if (storeType === FACILITY_STORE_FACILITY_NOTICE) {
+        const all = readJson(LS_FACILITY_NOTICE, {});
+        payload = all[facilityLinkKey] ?? null;
+        if (!payload || typeof payload !== 'object') continue;
+        updatedAt = String(payload.updatedAt ?? updatedAt);
       } else {
         continue;
       }
@@ -456,6 +589,8 @@ export async function pullAndMergeFacilityPortalStores() {
       FACILITY_STORE_BATH_SCHEDULE,
       FACILITY_STORE_RESIDENT_SCHEDULE,
       FACILITY_STORE_BULK_DRAFT,
+      FACILITY_STORE_NURSING_DIRECTIVES,
+      FACILITY_STORE_FACILITY_NOTICE,
     ],
   });
   const rows = Array.isArray(result?.stores) ? result.stores : [];
@@ -472,6 +607,8 @@ export async function pullAndMergeFacilityPortalStores() {
     bathChanged: applied.bathChanged,
     residentScheduleChanged: applied.residentScheduleChanged,
     bulkDraftChanged: applied.bulkDraftChanged,
+    nursingChanged: applied.nursingChanged,
+    facilityNoticeChanged: applied.facilityNoticeChanged,
   };
 }
 
@@ -559,6 +696,32 @@ export async function pushAllFacilityPortalStoresCloud() {
       facilityLinkKey: FACILITY_STORE_ORG_KEY,
       payload: { savedAt: updatedAt, drafts: bulkDraftAll },
       updatedAt,
+    });
+    upserted++;
+  }
+  const nursingAll = readJson(LS_NURSING, {});
+  const nursingMetaAll = readJson(LS_NURSING_META, {});
+  for (const [facilityLinkKey, directives] of Object.entries(nursingAll)) {
+    if (!facilityLinkKey || !Array.isArray(directives) || !directives.length) continue;
+    const updatedAt = String(nursingMetaAll[facilityLinkKey] ?? new Date().toISOString());
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_NURSING_DIRECTIVES,
+      facilityLinkKey,
+      payload: { savedAt: updatedAt, directives },
+      updatedAt,
+    });
+    upserted++;
+  }
+  const facilityNoticeAll = readJson(LS_FACILITY_NOTICE, {});
+  for (const [facilityLinkKey, row] of Object.entries(facilityNoticeAll)) {
+    if (!facilityLinkKey || !row || typeof row !== 'object') continue;
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_FACILITY_NOTICE,
+      facilityLinkKey,
+      payload: row,
+      updatedAt: String(row.updatedAt ?? new Date().toISOString()),
     });
     upserted++;
   }

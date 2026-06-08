@@ -41,7 +41,25 @@ Vercel → プロジェクト → **Settings → Environment Variables**
 1. マイグレーション適用済みであること（`care_events`, `facility_portal_stores` 等）
 2. `organizations` に貴社の行（UUID が `VITE_CARELINK_ORGANIZATION_ID` と一致）
 
-## 4. 「最新の状態です」なのに別PCに反映されない
+## 4. 黄色表示＋ `Could not find the table 'public.care_events'`（PGRST205）
+
+**意味:** Vercel の環境変数は入っているが、**Supabase に同期用テーブルがまだ無い**状態です。  
+アプリの不具合ではなく、**データベースのマイグレーション未実行**です。
+
+**対処（Supabase Dashboard）**
+
+1. [Supabase](https://supabase.com) → 対象プロジェクト → **SQL Editor** → New query
+2. リポジトリの次の SQL を **この順に** 実行（`organizations` が既にある場合は 2 と 3 だけで可）  
+   - `supabase/migrations/20260530120000_care_events_cloud_sync.sql`  
+   - `supabase/migrations/20260603120000_facility_portal_stores.sql`
+3. **Table Editor** で `care_events` と `facility_portal_stores` ができたか確認
+4. `organizations` に、Vercel の `VITE_CARELINK_ORGANIZATION_ID` と **同じ UUID** の行があるか確認（無ければ追加）
+5. 記録画面を **Ctrl+Shift+R** → **「今すぐ同期」**  
+   → 青い **「クラウド同期 ON」** になり、送信件数が出ればOK
+
+`residents` だけあって `care_events` が無い、という組み合わせでこのエラーが出ます。
+
+## 5. 「最新の状態です」なのに別PCに反映されない
 
 **古い本番ビルド**では「今すぐ同期」が **クラウドから取るだけ** で、入れたPCのバイタル・生活記録を **まとめて送っていません**。  
 そのため両方のPCで「手動同期: 最新の状態です」と出ても、**クラウドが空のまま** になります。
@@ -56,14 +74,14 @@ Vercel → プロジェクト → **Settings → Environment Variables**
 
 組織ID: Vercel の `VITE_CARELINK_ORGANIZATION_ID` が、Supabase の `organizations` テーブルの **id（UUID）** と完全一致している必要があります。
 
-## 5. 動作確認手順
+## 6. 動作確認手順
 
 1. 再デプロイ完了後、記録画面を **Ctrl+Shift+R** で強制リロード
 2. 同期ボックスが **青い ON** になるか確認
 3. **記録を入れたPC** で「今すぐ同期」→ 送信件数が表示されるか
 4. **別PC** で同じ URL を開き「今すぐ同期」→ 記録・病名が反映されるか
 
-## 6. 診断 URL（管理者向け）
+## 7. 診断 URL（管理者向け）
 
 ブラウザで開く（JSON が表示されます）:
 
