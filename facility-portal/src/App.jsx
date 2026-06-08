@@ -1177,32 +1177,6 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    const refreshBoard = () => {
-      setPanoramaNursingRev((n) => n + 1);
-      const lk = String(panoramaFacilityLinkKey ?? '').trim();
-      if (lk) {
-        setFacilityNoticeDraft(Report.getFacilityNotice(lk));
-      }
-    };
-    const onStorage = (ev) => {
-      const k = String(ev?.key ?? '');
-      if (
-        k === 'carelink_os_facility_notice_v1' ||
-        k === 'carelink_os_nursing_directives_v1' ||
-        k === 'carelink_os_nursing_directives_meta_v1'
-      ) {
-        refreshBoard();
-      }
-    };
-    window.addEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, [panoramaFacilityLinkKey]);
-
-  useEffect(() => {
     if (!requirePortalAuth) return;
     const onVis = () => {
       if (document.visibilityState === 'hidden') {
@@ -1316,6 +1290,32 @@ const App = () => {
     () => (panoramaFacilityLinkKey ? Report.getNursingDirectives(panoramaFacilityLinkKey) : []),
     [panoramaFacilityLinkKey, panoramaNursingRev]
   );
+
+  useEffect(() => {
+    const refreshBoard = () => {
+      setPanoramaNursingRev((n) => n + 1);
+      const lk = String(panoramaFacilityLinkKey ?? '').trim();
+      if (lk) {
+        setFacilityNoticeDraft(Report.getFacilityNotice(lk));
+      }
+    };
+    const onStorage = (ev) => {
+      const k = String(ev?.key ?? '');
+      if (
+        k === 'carelink_os_facility_notice_v1' ||
+        k === 'carelink_os_nursing_directives_v1' ||
+        k === 'carelink_os_nursing_directives_meta_v1'
+      ) {
+        refreshBoard();
+      }
+    };
+    window.addEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [panoramaFacilityLinkKey]);
 
   const applyResidentDetailState = useCallback((res, ymd = localYmd()) => {
     const id = String(res?.id ?? '').trim();
