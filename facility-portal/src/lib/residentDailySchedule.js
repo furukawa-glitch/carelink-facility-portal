@@ -969,6 +969,7 @@ export function applyImportedResidentSchedules(linkKey, residents, parsed) {
     setResidentDailyPlans(linkKey, row.residentId, parsed.ymd, row.plans, { merge: 'merge_sheet' });
   }
   setFacilityScheduleImportYmd(linkKey, parsed.ymd);
+  void import('./facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
   return { applied: matched.length, unmatched, ymd: parsed.ymd };
 }
 

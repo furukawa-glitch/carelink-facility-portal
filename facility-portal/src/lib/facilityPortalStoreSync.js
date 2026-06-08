@@ -118,8 +118,20 @@ function mergeResidentScheduleFacilityStore(local, remote) {
   if (!remote || typeof remote !== 'object') return local ?? null;
   const remoteAt = String(remote.savedAt ?? '');
   const localAt = String(local?.savedAt ?? '');
-  if (!local || remoteAt >= localAt) return remote;
-  return local;
+  const localResidents = local?.residents && typeof local.residents === 'object' ? local.residents : {};
+  const remoteResidents = remote.residents && typeof remote.residents === 'object' ? remote.residents : {};
+  const localRecurring = local?.recurring && typeof local.recurring === 'object' ? local.recurring : {};
+  const remoteRecurring = remote.recurring && typeof remote.recurring === 'object' ? remote.recurring : {};
+  const remoteIsNewer = !localAt || remoteAt >= localAt;
+  return {
+    savedAt: remoteIsNewer ? remoteAt || localAt : localAt || remoteAt,
+    residents: remoteIsNewer
+      ? { ...localResidents, ...remoteResidents }
+      : { ...remoteResidents, ...localResidents },
+    recurring: remoteIsNewer
+      ? { ...localRecurring, ...remoteRecurring }
+      : { ...remoteRecurring, ...localRecurring },
+  };
 }
 
 function applyFacilityStoresToLocal(rows) {
@@ -198,7 +210,11 @@ function applyFacilityStoresToLocal(rows) {
         recurring: residentRecurringAll[linkKey] ?? {},
       };
       const merged = mergeResidentScheduleFacilityStore(localPayload, remote);
-      if (merged && merged !== localPayload) {
+      const residentScheduleDirty =
+        JSON.stringify(merged.residents ?? {}) !== JSON.stringify(localPayload.residents ?? {}) ||
+        JSON.stringify(merged.recurring ?? {}) !== JSON.stringify(localPayload.recurring ?? {}) ||
+        String(merged.savedAt ?? '') !== String(localPayload.savedAt ?? '');
+      if (merged && residentScheduleDirty) {
         if (merged.residents && typeof merged.residents === 'object') {
           residentPlansAll[linkKey] = merged.residents;
         }
@@ -257,6 +273,15 @@ function applyFacilityStoresToLocal(rows) {
     bathChanged +
     residentScheduleChanged +
     bulkDraftChanged;
+  if (storesMerged > 0 && typeof window !== 'undefined') {
+    void import('./careEventsRealtimeSync.js').then((m) => {
+      window.dispatchEvent(
+        new CustomEvent(m.CARE_EVENTS_SYNC_EVENT, {
+          detail: { storesMerged, weeklyChanged, residentScheduleChanged },
+        })
+      );
+    });
+  }
   return {
     weeklyChanged,
     homeChanged,

@@ -4,6 +4,7 @@ import {
   findResidentForScheduleImport,
   setResidentDailyPlans,
 } from './residentDailySchedule.js';
+import { flushFacilityPortalStoresCloud } from './facilityPortalStoreSync.js';
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -239,6 +240,8 @@ export function importR8VisitCalendarMonth(linkKey, residents, wb, monthYm) {
       appliedDays++;
     }
   }
+
+  void flushFacilityPortalStoresCloud();
 
   return {
     ok: true,

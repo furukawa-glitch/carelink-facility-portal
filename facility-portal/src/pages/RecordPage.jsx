@@ -1906,10 +1906,9 @@ export function RecordPage({
     const out = base.map((day) => {
       const gcal = googleCalendarPlansByDate.get(String(day.date)) ?? [];
       const hvc = homeVisitByDate.get(String(day.date)) ?? [];
-      const residentDaily =
-        residentScheduleSheetCfg && displayResidents.length
-          ? getResidentDailyPlansForFacilityCalendar(k, displayResidents, String(day.date))
-          : [];
+      const residentDaily = displayResidents.length
+        ? getResidentDailyPlansForFacilityCalendar(k, displayResidents, String(day.date))
+        : [];
       const merged = [...day.plans, ...gcal, ...hvc, ...residentDaily].sort((a, b) =>
         String(a.time ?? '').localeCompare(String(b.time ?? ''), 'ja')
       );
@@ -2265,6 +2264,7 @@ export function RecordPage({
         }
         setPlanRev((n) => n + 1);
         setTick((n) => n + 1);
+        void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
         alert(
           `R8カレンダー（${result.monthYm}）を取り込みました。\n` +
             `名簿に一致した利用者: ${result.residentsTouched}名\n` +
@@ -2948,6 +2948,7 @@ export function RecordPage({
       if (!k) return;
       if (Report.removeWeeklyPlan(k, String(planId ?? ''))) {
         setPlanRev((n) => n + 1);
+        void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
       }
     },
     [selectedDef]
@@ -6198,7 +6199,11 @@ export function RecordPage({
         facilityLinkKey={selectedFacilityLinkKey}
         resident={scheduleModalResident ?? {}}
         residentNameFmt={residentNameWithoutSama}
-        onSaved={() => setTick((n) => n + 1)}
+        onSaved={() => {
+          setTick((n) => n + 1);
+          setPlanRev((n) => n + 1);
+          void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
+        }}
       />
     </div>
   );
