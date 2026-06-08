@@ -1621,7 +1621,7 @@ export function addWeeklyPlan(linkKey, plan) {
   all[k] = list.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)).slice(-90);
   writeJson(LS.weeklyPlans, all);
   void import('../lib/facilityPortalStoreSync.js').then((m) =>
-    m.queueFacilityPortalStoreSync(m.FACILITY_STORE_WEEKLY_PLANS, k)
+    m.syncFacilityStoreNow(m.FACILITY_STORE_WEEKLY_PLANS, k)
   );
   return true;
 }
@@ -1636,7 +1636,7 @@ export function removeWeeklyPlan(linkKey, planId) {
   all[k] = next;
   writeJson(LS.weeklyPlans, all);
   void import('../lib/facilityPortalStoreSync.js').then((m) =>
-    m.queueFacilityPortalStoreSync(m.FACILITY_STORE_WEEKLY_PLANS, k)
+    m.syncFacilityStoreNow(m.FACILITY_STORE_WEEKLY_PLANS, k)
   );
   return true;
 }

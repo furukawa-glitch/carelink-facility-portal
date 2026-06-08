@@ -64,7 +64,12 @@ import {
 } from '../lib/careQuickCareFields.js';
 import { CARE_EVENTS_SYNC_EVENT } from '../lib/careEventsRealtimeSync.js';
 import { flushCareEventsCloudSync } from '../lib/careEventsSupabaseSync.js';
-import { queueBulkTableDraftCloudSync } from '../lib/facilityPortalStoreSync.js';
+import {
+  FACILITY_STORE_RESIDENT_SCHEDULE,
+  FACILITY_STORE_WEEKLY_PLANS,
+  queueBulkTableDraftCloudSync,
+  syncFacilityStoreNow,
+} from '../lib/facilityPortalStoreSync.js';
 import {
   buildHourlyCareFromEvents,
   buildHourlyUrineCellsFromEvents,
@@ -2264,7 +2269,7 @@ export function RecordPage({
         }
         setPlanRev((n) => n + 1);
         setTick((n) => n + 1);
-        void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
+        void syncFacilityStoreNow(FACILITY_STORE_RESIDENT_SCHEDULE, lk);
         alert(
           `R8カレンダー（${result.monthYm}）を取り込みました。\n` +
             `名簿に一致した利用者: ${result.residentsTouched}名\n` +
@@ -2939,7 +2944,7 @@ export function RecordPage({
     if (!ok) return;
     setPlanDraftTitle('');
     setPlanRev((n) => n + 1);
-    void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
+    void syncFacilityStoreNow(FACILITY_STORE_WEEKLY_PLANS, k);
   }, [selectedDef, planDraftDate, planDraftTime, planDraftType, planDraftTitle]);
 
   const removeWeeklyPlan = useCallback(
@@ -2948,7 +2953,7 @@ export function RecordPage({
       if (!k) return;
       if (Report.removeWeeklyPlan(k, String(planId ?? ''))) {
         setPlanRev((n) => n + 1);
-        void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
+        void syncFacilityStoreNow(FACILITY_STORE_WEEKLY_PLANS, k);
       }
     },
     [selectedDef]
@@ -6202,7 +6207,7 @@ export function RecordPage({
         onSaved={() => {
           setTick((n) => n + 1);
           setPlanRev((n) => n + 1);
-          void import('../lib/facilityPortalStoreSync.js').then((m) => m.flushFacilityPortalStoresCloud());
+          void syncFacilityStoreNow(FACILITY_STORE_RESIDENT_SCHEDULE, selectedFacilityLinkKey);
         }}
       />
     </div>

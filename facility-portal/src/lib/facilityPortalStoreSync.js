@@ -337,6 +337,20 @@ export function queueFacilityPortalStoreSync(storeType, facilityLinkKey) {
   }, FLUSH_DEBOUNCE_MS);
 }
 
+/** キュー登録と送信を連続実行（予定カレンダー等の保存直後用） */
+export async function syncFacilityStoreNow(storeType, facilityLinkKey) {
+  if (!isCareCloudSyncConfigured()) return { ok: true, skipped: true, upserted: 0 };
+  const k = String(facilityLinkKey ?? '').trim();
+  const t = String(storeType ?? '').trim();
+  if (!k || !t) return { ok: true, upserted: 0 };
+  pendingKeys.add(`${t}:${k}`);
+  if (flushTimer) {
+    window.clearTimeout(flushTimer);
+    flushTimer = 0;
+  }
+  return flushFacilityPortalStoresCloud();
+}
+
 export async function flushFacilityPortalStoresCloud() {
   if (!isCareCloudSyncConfigured() || flushing || pendingKeys.size === 0) {
     return { ok: true, upserted: 0 };
