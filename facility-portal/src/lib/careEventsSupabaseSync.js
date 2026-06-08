@@ -5,12 +5,11 @@
 
 const SYNC_DEBOUNCE_MS = 3_000;
 const MAX_BATCH = 200;
-const DEFAULT_PULL_LIMIT = 3000;
+const DEFAULT_PULL_LIMIT = 5000;
+const DEFAULT_PULL_SINCE_DAYS = 21;
 
 /** @type {Map<string, Record<string, unknown>>} */
 const pendingById = new Map();
-/** @type {Set<string>} */
-const pendingDeleteIds = new Set();
 let flushTimer = 0;
 let flushing = false;
 
@@ -74,57 +73,19 @@ export function queueCareEventsCloudSync(events) {
   scheduleFlush();
 }
 
-/**
- * ローカルで削除したイベントをクラウドからも消す（上書き保存時の古い行対策）
- * @param {string | string[]} eventIds
- */
-export function queueCareEventsCloudDelete(eventIds) {
-  if (!isCloudSyncEnabled()) return;
-  const list = Array.isArray(eventIds) ? eventIds : [eventIds];
-  for (const id of list) {
-    const s = String(id ?? '').trim();
-    if (s) pendingDeleteIds.add(s);
-  }
-  scheduleFlush();
-}
-
 /** キューを即送信 */
 export async function flushCareEventsCloudSync() {
-  if (!isCloudSyncEnabled() || flushing) {
-    return { ok: true, upserted: 0, deleted: 0 };
-  }
-  if (pendingById.size === 0 && pendingDeleteIds.size === 0) {
-    return { ok: true, upserted: 0, deleted: 0 };
-  }
+  if (!isCloudSyncEnabled() || flushing || pendingById.size === 0) return { ok: true, upserted: 0 };
   flushing = true;
-  let upserted = 0;
-  let deleted = 0;
+  const batch = [...pendingById.values()].slice(0, MAX_BATCH);
+  for (const e of batch) {
+    const id = String(e?.id ?? '').trim();
+    if (id) pendingById.delete(id);
+  }
   try {
-    if (pendingDeleteIds.size > 0) {
-      const delBatch = [...pendingDeleteIds].slice(0, MAX_BATCH);
-      try {
-        const delResult = await postCareSync({ action: 'delete_events', clientEventIds: delBatch });
-        deleted = Number(delResult?.deleted ?? delBatch.length);
-        for (const id of delBatch) pendingDeleteIds.delete(id);
-      } catch {
-        /* 削除は次回 flush で再試行 */
-      }
-    }
-    if (pendingById.size > 0) {
-      const batch = [...pendingById.values()].slice(0, MAX_BATCH);
-      try {
-        const result = await postCareSync({ action: 'upsert_events', events: batch });
-        upserted = Number(result?.upserted ?? batch.length);
-        for (const e of batch) {
-          const id = String(e?.id ?? '').trim();
-          if (id) pendingById.delete(id);
-        }
-      } catch {
-        /* upsert 失敗時は pending に残す */
-      }
-    }
-    if (pendingById.size > 0 || pendingDeleteIds.size > 0) scheduleFlush();
-    return { ok: true, upserted, deleted };
+    const result = await postCareSync({ action: 'upsert_events', events: batch });
+    if (pendingById.size > 0) scheduleFlush();
+    return result;
   } finally {
     flushing = false;
   }
@@ -216,7 +177,7 @@ export function getCareCloudSyncStatus() {
     configured: true,
     label: 'クラウド同期（設定確認中…）',
     hint:
-      '生活記録・バイタル排泄一覧表（保存後）・傷病名・予定を全PCで共有します。Vercel にはクライアント用（VITE_）と SUPABASE_SERVICE_ROLE_KEY・CARE_SYNC_SECRET・VITE_SUPABASE_URL が必要です。',
+      '生活記録・傷病一覧CSVの病名を全PCで共有します。Vercel にはクライアント用（VITE_）に加え、サーバ用の SUPABASE_SERVICE_ROLE_KEY・CARE_SYNC_SECRET・VITE_SUPABASE_URL も必要です。',
   };
 }
 
@@ -226,7 +187,13 @@ export function getCareCloudSyncStatus() {
  */
 export async function pullCareEventsCloudSync(opts = {}) {
   if (!isCloudSyncEnabled()) return { ok: true, pulled: 0, merged: 0, skipped: true };
-  const sinceTs = String(opts?.sinceTs ?? '').trim();
+  let sinceTs = String(opts?.sinceTs ?? '').trim();
+  if (!sinceTs && opts?.sinceDays !== 0) {
+    const days = Number(opts?.sinceDays ?? DEFAULT_PULL_SINCE_DAYS);
+    const since = new Date();
+    since.setDate(since.getDate() - (Number.isFinite(days) && days > 0 ? days : DEFAULT_PULL_SINCE_DAYS));
+    sinceTs = since.toISOString();
+  }
   const limitRaw = Number(opts?.limit ?? DEFAULT_PULL_LIMIT);
   const limit = Math.max(100, Math.min(5000, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : DEFAULT_PULL_LIMIT));
   const result = await postCareSync({ action: 'pull_events', sinceTs, limit });
@@ -258,7 +225,7 @@ export async function pushAllLocalCareEventsCloud() {
  */
 export async function pullAndApplyCareEventsCloud(opts = {}) {
   const result = await pullCareEventsCloudSync();
-  if (opts.reload !== false && Number(result?.pulled ?? 0) > 0) {
+  if (opts.reload !== false && (Number(result?.merged ?? 0) > 0 || Number(result?.pulled ?? 0) > 0)) {
     const report = await import('../services/ReportService.js');
     report.reloadCareEventsFromStorage();
   }

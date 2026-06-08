@@ -304,6 +304,7 @@ function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident, faci
 }
 
 const BULK_DRAFT_LS_KEY = 'carelink_os_bulk_table_draft_v1';
+const BULK_DRAFT_META_LS_KEY = 'carelink_os_bulk_table_draft_meta_v1';
 const AUTO_URINE_DAILY_TOTAL_LS_KEY = 'carelink_os_auto_urine_daily_total_v1';
 
 function readBulkDraftStore() {
@@ -320,6 +321,11 @@ function readBulkDraftStore() {
 function writeBulkDraftStore(store) {
   try {
     localStorage.setItem(BULK_DRAFT_LS_KEY, JSON.stringify(store && typeof store === 'object' ? store : {}));
+    localStorage.setItem(
+      BULK_DRAFT_META_LS_KEY,
+      JSON.stringify({ savedAt: new Date().toISOString() })
+    );
+    queueBulkTableDraftCloudSync();
   } catch {
     // localStorage が使えない環境は黙って無視
   }
@@ -1632,18 +1638,13 @@ export function RecordPage({
     }
     const store = readBulkDraftStore();
     store[bulkDraftScopeKey] = scoped;
-    store[`${bulkDraftScopeKey}__savedAt`] = new Date().toISOString();
     // ストレージ肥大化防止: 直近 90 スコープ（施設×日付）だけ保持
-    const keys = Object.keys(store).filter((k) => !k.endsWith('__savedAt'));
+    const keys = Object.keys(store);
     if (keys.length > 90) {
       keys.sort();
-      for (const k of keys.slice(0, keys.length - 90)) {
-        delete store[k];
-        delete store[`${k}__savedAt`];
-      }
+      for (const k of keys.slice(0, keys.length - 90)) delete store[k];
     }
     writeBulkDraftStore(store);
-    queueBulkTableDraftCloudSync(bulkDraftScopeKey);
   }, [residentInputView, bulkDraft, bulkDraftScopeKey, displayResidents]);
 
   const insuranceBreakdown = useMemo(() => {

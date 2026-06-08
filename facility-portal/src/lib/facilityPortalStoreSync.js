@@ -23,6 +23,7 @@ const LS_RESIDENT_PLANS = 'carelink_os_resident_daily_plans_v1';
 const LS_RESIDENT_RECURRING = 'carelink_os_resident_recurring_plans_v1';
 const LS_RESIDENT_PLANS_META = 'carelink_os_resident_daily_plans_meta_v1';
 const LS_BULK_DRAFT = 'carelink_os_bulk_table_draft_v1';
+const LS_BULK_DRAFT_META = 'carelink_os_bulk_table_draft_meta_v1';
 const FLUSH_DEBOUNCE_MS = 2_000;
 
 /** @type {Set<string>} */
@@ -138,6 +139,7 @@ function applyFacilityStoresToLocal(rows) {
   let residentRecurringAll = readJson(LS_RESIDENT_RECURRING, {});
   let residentMetaAll = readJson(LS_RESIDENT_PLANS_META, {});
   let bulkDraftAll = readJson(LS_BULK_DRAFT, {});
+  let bulkDraftMetaAll = readJson(LS_BULK_DRAFT_META, {});
 
   for (const row of rows) {
     const type = String(row?.store_type ?? '').trim();
@@ -214,15 +216,14 @@ function applyFacilityStoresToLocal(rows) {
     } else if (type === FACILITY_STORE_BULK_DRAFT) {
       const remote = row.payload && typeof row.payload === 'object' ? row.payload : null;
       if (!remote) continue;
-      const remoteRows = remote.rows && typeof remote.rows === 'object' ? remote.rows : null;
-      if (!remoteRows) continue;
-      const localRows = bulkDraftAll[linkKey];
       const remoteAt = String(remote.savedAt ?? remote.updated_at ?? '');
-      const localAt = String(bulkDraftAll[`${linkKey}__savedAt`] ?? '');
-      if (!localRows || remoteAt >= localAt) {
-        bulkDraftAll[linkKey] = remoteRows;
-        if (remoteAt) bulkDraftAll[`${linkKey}__savedAt`] = remoteAt;
-        bulkDraftChanged = 1;
+      const localAt = String(bulkDraftMetaAll.savedAt ?? '');
+      if (!localAt || remoteAt >= localAt) {
+        if (remote.drafts && typeof remote.drafts === 'object') {
+          bulkDraftAll = { ...bulkDraftAll, ...remote.drafts };
+          bulkDraftMetaAll.savedAt = remoteAt || new Date().toISOString();
+          bulkDraftChanged = 1;
+        }
       }
     }
   }
@@ -244,7 +245,10 @@ function applyFacilityStoresToLocal(rows) {
     writeJson(LS_RESIDENT_RECURRING, residentRecurringAll);
     writeJson(LS_RESIDENT_PLANS_META, residentMetaAll);
   }
-  if (bulkDraftChanged) writeJson(LS_BULK_DRAFT, bulkDraftAll);
+  if (bulkDraftChanged) {
+    writeJson(LS_BULK_DRAFT, bulkDraftAll);
+    writeJson(LS_BULK_DRAFT_META, bulkDraftMetaAll);
+  }
   const storesMerged =
     weeklyChanged +
     homeChanged +
@@ -281,9 +285,9 @@ export function queueResidentScheduleCloudSync(facilityLinkKey) {
   queueFacilityPortalStoreSync(FACILITY_STORE_RESIDENT_SCHEDULE, facilityLinkKey);
 }
 
-/** 一覧表の入力下書き（施設×日付スコープ） */
-export function queueBulkTableDraftCloudSync(scopeKey) {
-  queueFacilityPortalStoreSync(FACILITY_STORE_BULK_DRAFT, scopeKey);
+/** 一覧表の入力下書きをクラウドへ送る（組織共通） */
+export function queueBulkTableDraftCloudSync() {
+  queueFacilityPortalStoreSync(FACILITY_STORE_BULK_DRAFT, FACILITY_STORE_ORG_KEY);
 }
 
 /** 傷病一覧CSV取り込み後にクラウドへ送る */
@@ -353,12 +357,11 @@ export async function flushFacilityPortalStoresCloud() {
         if (!payload) continue;
         updatedAt = String(payload.savedAt ?? updatedAt);
       } else if (storeType === FACILITY_STORE_BULK_DRAFT) {
-        const all = readJson(LS_BULK_DRAFT, {});
-        const rows = all[facilityLinkKey];
-        if (!rows || typeof rows !== 'object' || !Object.keys(rows).length) continue;
-        const savedAt = String(all[`${facilityLinkKey}__savedAt`] ?? new Date().toISOString());
-        payload = { savedAt, rows };
-        updatedAt = savedAt;
+        const drafts = readJson(LS_BULK_DRAFT, {});
+        const meta = readJson(LS_BULK_DRAFT_META, {});
+        if (!drafts || !Object.keys(drafts).length) continue;
+        updatedAt = String(meta.savedAt ?? updatedAt);
+        payload = { savedAt: updatedAt, drafts };
       } else if (storeType === FACILITY_STORE_RESIDENT_SCHEDULE) {
         const plansAll = readJson(LS_RESIDENT_PLANS, {});
         const recurringAll = readJson(LS_RESIDENT_RECURRING, {});
@@ -508,17 +511,15 @@ export async function pushAllFacilityPortalStoresCloud() {
   const recurringAll = readJson(LS_RESIDENT_RECURRING, {});
   const metaAll = readJson(LS_RESIDENT_PLANS_META, {});
   const bulkDraftAll = readJson(LS_BULK_DRAFT, {});
-  for (const facilityLinkKey of Object.keys(bulkDraftAll)) {
-    if (facilityLinkKey.endsWith('__savedAt')) continue;
-    const rows = bulkDraftAll[facilityLinkKey];
-    if (!rows || typeof rows !== 'object' || !Object.keys(rows).length) continue;
-    const savedAt = String(bulkDraftAll[`${facilityLinkKey}__savedAt`] ?? new Date().toISOString());
+  const bulkDraftMeta = readJson(LS_BULK_DRAFT_META, {});
+  if (bulkDraftAll && Object.keys(bulkDraftAll).length) {
+    const updatedAt = String(bulkDraftMeta.savedAt ?? new Date().toISOString());
     await careSyncPost({
       action: 'upsert_facility_store',
       storeType: FACILITY_STORE_BULK_DRAFT,
-      facilityLinkKey,
-      payload: { savedAt, rows },
-      updatedAt: savedAt,
+      facilityLinkKey: FACILITY_STORE_ORG_KEY,
+      payload: { savedAt: updatedAt, drafts: bulkDraftAll },
+      updatedAt,
     });
     upserted++;
   }

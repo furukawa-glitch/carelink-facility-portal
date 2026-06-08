@@ -1770,10 +1770,12 @@ function readCareEventsRawFromLs() {
 function startCareEventsIdbHydrate() {
   if (careEventsIdbHydrateStarted) return;
   careEventsIdbHydrateStarted = true;
-  const local = careEventsCache ?? readCareEventsRawFromLs();
-  void idbMigrateFromLocalStorage(local).then(() =>
+  void idbMigrateFromLocalStorage(readCareEventsRawFromLs()).then(() =>
     idbLoadAllCareEvents().then((fromIdb) => {
-      const merged = mergeCareEventsById(local, fromIdb);
+      // クラウド pull 後に古いスナップショットで上書きしない（LS と現在キャッシュの両方をマージ）
+      const fromLs = readCareEventsRawFromLs();
+      const fromCache = Array.isArray(careEventsCache) ? careEventsCache : [];
+      const merged = mergeCareEventsById(mergeCareEventsById(fromLs, fromCache), fromIdb);
       persistCareEventsList(merged, { skipIdbFullSave: fromIdb.length > 0 });
       applyHandoverStoresFromEvents(merged);
     })
@@ -1849,6 +1851,11 @@ export function mergeCareEventsFromCloud(cloudEvents) {
   const merged = mergeCareEventsById(local, incoming);
   persistCareEventsList(merged);
   applyHandoverStoresFromEvents(merged);
+  if (changed > 0 && typeof window !== 'undefined') {
+    void import('../lib/careEventsRealtimeSync.js').then((m) => {
+      window.dispatchEvent(new CustomEvent(m.CARE_EVENTS_SYNC_EVENT, { detail: { merged: changed, pulled: incoming.length } }));
+    });
+  }
   return changed;
 }
 
@@ -1883,20 +1890,8 @@ export function removeCareEventsByResidentAtMinute(residentId, isoTs, types = []
     if (allow && !allow.has(String(e.type ?? '').trim())) return true;
     return false;
   });
-  const removedRows = list.filter((e) => {
-    if (String(e.residentId ?? '').trim() !== rid) return false;
-    if (minuteKey(e.ts) !== mk) return false;
-    if (allow && !allow.has(String(e.type ?? '').trim())) return false;
-    return true;
-  });
-  const removed = removedRows.length;
-  if (removed > 0) {
-    persistCareEventsList(next);
-    const ids = removedRows.map((e) => String(e?.id ?? '').trim()).filter(Boolean);
-    if (ids.length) {
-      void import('../lib/careEventsSupabaseSync.js').then((m) => m.queueCareEventsCloudDelete(ids));
-    }
-  }
+  const removed = list.length - next.length;
+  if (removed > 0) persistCareEventsList(next);
   return removed;
 }
 
