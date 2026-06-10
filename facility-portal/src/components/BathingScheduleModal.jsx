@@ -37,27 +37,51 @@ export function BathingScheduleModal({
   const [saveState, setSaveState] = useState(/** @type {'saved' | 'dirty' | 'saving'} */ ('saved'));
   const [saveHint, setSaveHint] = useState('');
   const saveTimerRef = useRef(0);
+  const rowsRef = useRef(rows);
+  const weekStartRef = useRef(weekStartYmd);
+  const rosterRef = useRef(/** @type {Record<string, unknown>[]} */ ([]));
+  const facilityKeyRef = useRef('');
+  const onSavedRef = useRef(onSaved);
+  const sessionOpenRef = useRef(false);
+
+  rowsRef.current = rows;
+  weekStartRef.current = weekStartYmd;
+  onSavedRef.current = onSaved;
 
   const roster = useMemo(() => (Array.isArray(residents) ? residents : []), [residents]);
+  rosterRef.current = roster;
   const weekYmds = useMemo(() => weekYmdsFromMonday(weekStartYmd), [weekStartYmd]);
 
-  const draft = useMemo(() => ({ weekStartYmd, rows }), [weekStartYmd, rows]);
+  const persistDraft = useCallback((opts = {}) => {
+    const silent = opts.silent === true;
+    const notifyParent = opts.notifyParent === true;
+    const fk = facilityKeyRef.current;
+    if (!fk) return;
+    const draft = { weekStartYmd: weekStartRef.current, rows: rowsRef.current };
+    if (!silent) setSaveState('saving');
+    saveBathScheduleDraft(fk, draft);
+    if (!silent) {
+      setSaveState('saved');
+      setSaveHint(`保存しました ${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`);
+    } else {
+      setSaveState('saved');
+    }
+    if (notifyParent) onSavedRef.current?.();
+  }, []);
 
-  const persistDraft = useCallback(
-    (opts = {}) => {
-      const silent = opts.silent === true;
-      if (!silent) setSaveState('saving');
-      saveBathScheduleDraft(facilityLinkKey, draft);
-      if (!silent) {
-        setSaveState('saved');
-        setSaveHint(`保存しました ${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`);
-      } else {
-        setSaveState('saved');
-      }
-      onSaved?.();
-    },
-    [draft, facilityLinkKey, onSaved]
-  );
+  const loadWeek = useCallback((startYmd, { keepCurrent = false } = {}) => {
+    const fk = facilityKeyRef.current;
+    if (!fk) return;
+    const start = mondayOfWeek(startYmd);
+    const loaded = loadBathScheduleDraft(fk);
+    setWeekStartYmd(start);
+    const current = keepCurrent ? rowsRef.current : [];
+    if (loaded.weekStartYmd === start) {
+      setRows(mergeBathScheduleRows(rosterRef.current, loaded.rows, current));
+    } else {
+      setRows(mergeBathScheduleRows(rosterRef.current, [], current));
+    }
+  }, []);
 
   const markDirty = useCallback(() => {
     setSaveState('dirty');
@@ -65,38 +89,44 @@ export function BathingScheduleModal({
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = 0;
-      persistDraft({ silent: true });
+      persistDraft({ silent: true, notifyParent: true });
       setSaveHint('自動保存しました');
-    }, 2000);
+    }, 800);
   }, [persistDraft]);
-
-  const loadWeek = useCallback(
-    (startYmd) => {
-      const start = mondayOfWeek(startYmd);
-      const loaded = loadBathScheduleDraft(facilityLinkKey);
-      setWeekStartYmd(start);
-      if (loaded.weekStartYmd === start) {
-        setRows(mergeBathScheduleRows(roster, loaded.rows));
-      } else {
-        setRows(mergeBathScheduleRows(roster, []));
-      }
-    },
-    [facilityLinkKey, roster]
-  );
 
   const shiftWeek = (delta) => {
     if (saveState === 'dirty') persistDraft({ silent: true });
-    loadWeek(addDaysYmd(weekStartYmd, delta));
+    loadWeek(addDaysYmd(weekStartRef.current, delta));
     setSaveState('saved');
     setSaveHint('');
   };
 
   useEffect(() => {
-    if (!open) return;
-    loadWeek(mondayOfWeek());
-    setSaveState('saved');
-    setSaveHint('');
-  }, [open, loadWeek]);
+    if (!open) {
+      sessionOpenRef.current = false;
+      facilityKeyRef.current = '';
+      return;
+    }
+    const fk = String(facilityLinkKey ?? '').trim();
+    if (!fk) return;
+
+    const prevFk = facilityKeyRef.current;
+    const wasOpen = sessionOpenRef.current;
+    facilityKeyRef.current = fk;
+    sessionOpenRef.current = true;
+
+    if (!wasOpen) {
+      loadWeek(mondayOfWeek());
+      setSaveState('saved');
+      setSaveHint('');
+      return;
+    }
+    if (prevFk && prevFk !== fk) {
+      loadWeek(mondayOfWeek());
+      setSaveState('saved');
+      setSaveHint('');
+    }
+  }, [open, facilityLinkKey, loadWeek]);
 
   useEffect(() => {
     return () => {
@@ -170,7 +200,7 @@ export function BathingScheduleModal({
           </button>
           <button
             type="button"
-            onClick={() => persistDraft()}
+            onClick={() => persistDraft({ notifyParent: true })}
             className="ml-auto inline-flex items-center gap-1.5 rounded-xl border-2 border-sky-700 bg-sky-600 px-4 py-2 text-sm font-black text-white"
           >
             {saveState === 'saving' ? (
@@ -247,7 +277,7 @@ export function BathingScheduleModal({
         </div>
 
         <div className="shrink-0 border-t border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-600">
-          種別「×」は入浴お休み。保存後、各利用者カードの本日予定に「入浴」として反映されます（クラウド同期ON時は他PCとも共有）。
+          種別「×」は入浴お休み。入力後は約1秒で自動保存され、カードの「本日の予定」にも反映されます（クラウド同期ON時は他PCとも共有）。
         </div>
       </div>
     </div>

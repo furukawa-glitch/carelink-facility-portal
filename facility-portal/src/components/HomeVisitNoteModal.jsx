@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, ExternalLink, Printer, RefreshCw, Stethoscope, X } from 'lucide-react';
 import * as Report from '../services/ReportService.js';
 import { homeVisitNoteSheetConfigForLinkKey, homeVisitNoteUsesAisaiLayout } from '../config/homeVisitNoteSpreadsheet.js';
@@ -19,6 +19,84 @@ import {
   toReiwaDateLabel,
   weekRangeLabelFromEndYmd,
 } from '../lib/homeVisitNote.js';
+
+/** @param {Record<string, unknown>[]} residents @param {'all' | 'visit_nursing'} filterMode @param {boolean} nursingOfficeUi */
+function rosterForHomeVisitFilter(residents, filterMode, nursingOfficeUi) {
+  const list = Array.isArray(residents) ? residents : [];
+  if (filterMode !== 'visit_nursing' || !nursingOfficeUi) return list;
+  return list.filter((r) => Report.residentHasVisitNursingSpecial(r));
+}
+
+/**
+ * @param {import('../lib/homeVisitNote.js').HomeVisitNoteRow[]} prevRows
+ * @param {Record<string, unknown>[]} roster
+ */
+function mergeHomeVisitRowsWithRoster(prevRows, roster) {
+  const byId = new Map(prevRows.map((r) => [String(r.residentId), r]));
+  return roster.map((res) => {
+    const id = String(res?.id ?? '').trim();
+    const saved = byId.get(id);
+    if (saved) {
+      return {
+        ...homeVisitRowFromResident(res, { included: saved.included !== false }),
+        ...saved,
+        residentId: id,
+      };
+    }
+    return homeVisitRowFromResident(res);
+  });
+}
+
+/**
+ * @param {HomeVisitNoteLaunch | null | undefined} launch
+ * @param {Record<string, unknown>[]} roster
+ * @param {string} facilitySheetTitle
+ */
+function buildInitialHomeVisitRows(launch, roster, facilitySheetTitle) {
+  const fromVisit = launch && typeof launch === 'object';
+  let endYmd = currentYmd();
+  let facilityMemo = '';
+  let headerTitle = '往診ノート　《１・３週》　水曜　女性';
+  /** @type {'all' | 'visit_nursing'} */
+  let filterMode = 'all';
+
+  const draft = !fromVisit ? loadHomeVisitNoteDraft(facilitySheetTitle) : null;
+  if (!fromVisit && draft) {
+    if (draft.weekEndYmd) endYmd = String(draft.weekEndYmd);
+    if (draft.facilityMemo != null) facilityMemo = String(draft.facilityMemo);
+    if (draft.headerTitle != null) headerTitle = String(draft.headerTitle);
+    if (draft.filterMode === 'visit_nursing' || draft.filterMode === 'all') filterMode = draft.filterMode;
+  } else if (fromVisit) {
+    endYmd = String(launch.visitDateYmd ?? '').slice(0, 10) || currentYmd();
+    const memoParts = [launch.doctor, launch.visitType].filter(Boolean);
+    facilityMemo = memoParts.length ? memoParts.join('・') : '';
+  }
+
+  const visitIdSet = fromVisit
+    ? new Set((launch.residentIds ?? []).map((id) => String(id).trim()).filter(Boolean))
+    : null;
+  const draftRows = !fromVisit && Array.isArray(draft?.rows) ? draft.rows : null;
+  const byId = new Map((draftRows ?? []).map((r) => [String(r.residentId), r]));
+
+  let rows = roster.map((res) => {
+    const id = String(res?.id ?? '').trim();
+    if (fromVisit) {
+      const included = visitIdSet && visitIdSet.size > 0 ? visitIdSet.has(id) : true;
+      return homeVisitRowFromResident(res, { included });
+    }
+    const saved = byId.get(id);
+    if (saved) {
+      return {
+        ...homeVisitRowFromResident(res, { included: saved.included !== false }),
+        ...saved,
+        residentId: id,
+      };
+    }
+    return homeVisitRowFromResident(res);
+  });
+  rows = applyLatestVitalsToHomeVisitRows(rows, endYmd);
+  return { rows, weekEndYmd: endYmd, facilityMemo, headerTitle, filterMode };
+}
 
 /**
  * @typedef {{
@@ -71,65 +149,62 @@ export function HomeVisitNoteModal({
     [aisaiLayout, headerTitle]
   );
 
-  const roster = useMemo(() => {
-    const list = Array.isArray(residents) ? residents : [];
-    if (filterMode !== 'visit_nursing' || !nursingOfficeUi) return list;
-    return list.filter((r) => Report.residentHasVisitNursingSpecial(r));
-  }, [residents, filterMode, nursingOfficeUi]);
-
-  const initRows = useCallback(
-    (launch = null) => {
-      const fromVisit = launch && typeof launch === 'object';
-      let endYmd = currentYmd();
-
-      const draft = !fromVisit ? loadHomeVisitNoteDraft(facilitySheetTitle) : null;
-      if (!fromVisit && draft) {
-        if (draft.weekEndYmd) endYmd = String(draft.weekEndYmd);
-        if (draft.facilityMemo != null) setFacilityMemo(String(draft.facilityMemo));
-        if (draft.headerTitle != null) setHeaderTitle(String(draft.headerTitle));
-        if (draft.filterMode === 'visit_nursing' || draft.filterMode === 'all') {
-          setFilterMode(draft.filterMode);
-        }
-      } else if (fromVisit) {
-        endYmd = String(launch.visitDateYmd ?? '').slice(0, 10) || currentYmd();
-        const memoParts = [launch.doctor, launch.visitType].filter(Boolean);
-        setFacilityMemo(memoParts.length ? memoParts.join('・') : '');
-      }
-      setWeekEndYmd(endYmd);
-
-      const visitIdSet = fromVisit
-        ? new Set((launch.residentIds ?? []).map((id) => String(id).trim()).filter(Boolean))
-        : null;
-
-      const draftRows = !fromVisit && Array.isArray(draft?.rows) ? draft.rows : null;
-      const byId = new Map((draftRows ?? []).map((r) => [String(r.residentId), r]));
-
-      let next = roster.map((res) => {
-        const id = String(res?.id ?? '').trim();
-        if (fromVisit) {
-          const included = visitIdSet && visitIdSet.size > 0 ? visitIdSet.has(id) : true;
-          return homeVisitRowFromResident(res, { included });
-        }
-        const saved = byId.get(id);
-        if (saved) {
-          return {
-            ...homeVisitRowFromResident(res, { included: saved.included !== false }),
-            ...saved,
-            residentId: id,
-          };
-        }
-        return homeVisitRowFromResident(res);
-      });
-      next = applyLatestVitalsToHomeVisitRows(next, endYmd);
-      setRows(next);
-    },
-    [facilitySheetTitle, roster]
+  const roster = useMemo(
+    () => rosterForHomeVisitFilter(residents, filterMode, nursingOfficeUi),
+    [residents, filterMode, nursingOfficeUi]
   );
+  const rosterKey = useMemo(() => roster.map((r) => String(r.id)).join('|'), [roster]);
+
+  const visitNoteSessionRef = useRef({ open: false, launchKey: '', facility: '' });
+  const rosterSyncReadyRef = useRef(false);
+  const skipNextRosterSyncRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
-    initRows(launchContext ?? null);
-  }, [open, initRows, filterMode, launchContext]);
+    if (!open) {
+      visitNoteSessionRef.current.open = false;
+      rosterSyncReadyRef.current = false;
+      return;
+    }
+    const launchKey = launchContext ? JSON.stringify(launchContext) : '';
+    const facility = String(facilitySheetTitle ?? '').trim();
+    const sess = visitNoteSessionRef.current;
+    const justOpened = !sess.open;
+    const launchChanged = sess.open && sess.launchKey !== launchKey;
+    const facilityChanged = sess.open && sess.facility !== facility;
+    sess.open = true;
+    sess.launchKey = launchKey;
+    sess.facility = facility;
+    if (!justOpened && !launchChanged && !facilityChanged) return;
+
+    rosterSyncReadyRef.current = false;
+    const fromVisit = launchContext && typeof launchContext === 'object';
+    let initFilter = /** @type {'all' | 'visit_nursing'} */ ('all');
+    if (!fromVisit) {
+      const draft = loadHomeVisitNoteDraft(facilitySheetTitle);
+      if (draft?.filterMode === 'visit_nursing' || draft?.filterMode === 'all') {
+        initFilter = draft.filterMode;
+      }
+    }
+    const initRoster = rosterForHomeVisitFilter(residents, initFilter, nursingOfficeUi);
+    const built = buildInitialHomeVisitRows(launchContext ?? null, initRoster, facilitySheetTitle);
+    setFilterMode(built.filterMode);
+    setFacilityMemo(built.facilityMemo);
+    setHeaderTitle(built.headerTitle);
+    setWeekEndYmd(built.weekEndYmd);
+    setRows(built.rows);
+    skipNextRosterSyncRef.current = true;
+    rosterSyncReadyRef.current = true;
+  }, [open, launchContext, facilitySheetTitle, residents, nursingOfficeUi]);
+
+  /** 表示フィルタ変更時は現在の入力を維持したまま行リストだけ組み替え */
+  useEffect(() => {
+    if (!open || !rosterSyncReadyRef.current) return;
+    if (skipNextRosterSyncRef.current) {
+      skipNextRosterSyncRef.current = false;
+      return;
+    }
+    setRows((prev) => mergeHomeVisitRowsWithRoster(prev, roster));
+  }, [open, rosterKey, roster]);
 
   useEffect(() => {
     if (!open || !rows.length) return;

@@ -1411,8 +1411,13 @@ const App = () => {
     const start = new Date(now);
     start.setDate(start.getDate() - 6);
     start.setHours(0, 0, 0, 0);
+    const ctx = Report.careEventResidentContext(selectedResident);
     const events = Report.getAllCareEvents()
-      .filter((e) => String(e?.residentId ?? '').trim() === rid && String(e?.type ?? '') === 'vital_snapshot')
+      .filter(
+        (e) =>
+          String(e?.type ?? '') === 'vital_snapshot' &&
+          Report.isCareEventForResident(e, rid, ctx)
+      )
       .map((e) => ({
         ts: String(e?.ts ?? ''),
         meta: e?.meta && typeof e.meta === 'object' ? e.meta : {},

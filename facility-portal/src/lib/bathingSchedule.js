@@ -1,4 +1,5 @@
 import { currentYmd, getResidentDailyPlans, setResidentDailyPlans } from './residentDailySchedule.js';
+import { personNameMatchKey } from './residentNameMatch.js';
 
 const LS_KEY = 'carelink_os_bath_schedule_v1';
 
@@ -106,20 +107,80 @@ function rowHasBath(row) {
   });
 }
 
+function dayEntryHasInput(entry) {
+  const d = entry && typeof entry === 'object' ? entry : {};
+  return Boolean(String(d.time ?? '').trim() || String(d.kind ?? '').trim() || String(d.note ?? '').trim());
+}
+
+function mergeDayMaps(...maps) {
+  /** @type {Record<string, { time: string; kind: string; note: string }>} */
+  const out = {};
+  for (const map of maps) {
+    if (!map || typeof map !== 'object') continue;
+    for (const [ymd, entry] of Object.entries(map)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+      const next = normalizeDayEntry(entry);
+      const prev = out[ymd];
+      if (!prev) out[ymd] = next;
+      else if (dayEntryHasInput(next)) out[ymd] = next;
+    }
+  }
+  return out;
+}
+
+function savedRowForResident(saved, res) {
+  const list = Array.isArray(saved) ? saved : [];
+  const id = String(res?.id ?? '').trim();
+  const byId = list.find((r) => String(r?.residentId ?? '').trim() === id);
+  if (byId) return byId;
+  const wantKey = personNameMatchKey(String(res?.name ?? ''));
+  if (!wantKey) return null;
+  return (
+    list.find((r) => personNameMatchKey(String(r?.name ?? '')) === wantKey) ??
+    list.find((r) => personNameMatchKey(parseNameFromResidentId(r?.residentId)) === wantKey) ??
+    null
+  );
+}
+
+function parseNameFromResidentId(id) {
+  const parts = String(id ?? '')
+    .split('::')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length >= 4) return parts[2];
+  if (parts.length === 3) return parts[1];
+  return '';
+}
+
 /**
  * @param {Record<string, unknown>[]} roster
  * @param {import('./bathingSchedule.js').BathScheduleRow[]} [savedRows]
+ * @param {import('./bathingSchedule.js').BathScheduleRow[]} [currentRows] 画面上の未保存行
  */
-export function mergeBathScheduleRows(roster, savedRows) {
+export function mergeBathScheduleRows(roster, savedRows, currentRows = []) {
   const list = Array.isArray(roster) ? roster : [];
   const saved = Array.isArray(savedRows) ? savedRows : [];
-  const byId = new Map(saved.map((r) => [String(r.residentId), r]));
-  const rows = list.map((res) => normalizeRow(byId.get(String(res.id)), res));
+  const current = Array.isArray(currentRows) ? currentRows : [];
+  const rows = list.map((res) => {
+    const id = String(res.id);
+    const savedRow = savedRowForResident(saved, res);
+    const liveRow = current.find(
+      (r) =>
+        String(r?.residentId ?? '').trim() === id ||
+        personNameMatchKey(String(r?.name ?? '')) === personNameMatchKey(String(res?.name ?? ''))
+    );
+    const days = mergeDayMaps(savedRow?.days, liveRow?.days);
+    return normalizeRow({ residentId: id, name: res.name, room: res.room, days }, res);
+  });
+  const usedKeys = new Set(rows.map((r) => personNameMatchKey(String(r.name ?? ''))));
   for (const s of saved) {
     const id = String(s.residentId ?? '').trim();
-    if (!id || rows.some((r) => r.residentId === id)) continue;
+    const nameKey = personNameMatchKey(String(s.name ?? parseNameFromResidentId(id)));
+    if (id && rows.some((r) => r.residentId === id)) continue;
+    if (nameKey && usedKeys.has(nameKey)) continue;
     if (!rowHasBath(s)) continue;
     rows.push(normalizeRow(s, { id, name: s.name, room: s.room }));
+    if (nameKey) usedKeys.add(nameKey);
   }
   return rows.sort((a, b) => {
     const ra = String(a.room ?? '').trim();

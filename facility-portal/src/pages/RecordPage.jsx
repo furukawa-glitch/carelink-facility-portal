@@ -359,12 +359,51 @@ function pickMealDraftFromStored(stored, mealSlot) {
   return out;
 }
 
+/** 今日: 保存済みログをベースに、未保存の localStorage 下書きを24時間表へマージ */
+function mergeHourlyDraftFromStored(row, stored, savedHourly) {
+  const s = stored && typeof stored === 'object' ? stored : {};
+  const saved =
+    savedHourly && typeof savedHourly === 'object'
+      ? savedHourly
+      : { patrol: Array(24).fill(false), urine: Array(24).fill(false), stool: Array(24).fill(false) };
+  let out = { ...row };
+
+  const storedPatrol = Array.isArray(s.hourPatrol) ? s.hourPatrol : null;
+  if (storedPatrol && Array.isArray(out.hourPatrol)) {
+    const merged = [...out.hourPatrol];
+    for (let h = 0; h < 24; h++) {
+      if (saved.patrol[h]) continue;
+      if (storedPatrol[h] === true) merged[h] = true;
+      else if (storedPatrol[h] === false) merged[h] = false;
+    }
+    out = { ...out, hourPatrol: merged };
+  }
+
+  const mergeStrHour = (key, savedFlags) => {
+    const storedArr = Array.isArray(s[key]) ? s[key] : null;
+    const eventArr = Array.isArray(out[key]) ? out[key] : null;
+    if (!storedArr || !eventArr) return;
+    const merged = [...eventArr];
+    for (let h = 0; h < 24; h++) {
+      if (savedFlags[h]) continue;
+      const v = String(storedArr[h] ?? '').trim();
+      if (v) merged[h] = storedArr[h];
+    }
+    out = { ...out, [key]: merged };
+  };
+
+  mergeStrHour('hourUrine', saved.urine);
+  mergeStrHour('hourUrineMl', saved.urine);
+  mergeStrHour('hourStool', saved.stool);
+  return out;
+}
+
 /** 食事保存後: 入力欄は空、バイタル・24h・巡視排泄は維持 */
 function bulkRowAfterMealSave(prevRow, residentId, ymd, mealSlot, resident, facilityLinkKey = '') {
   const care = bulkCareSeedForResidentDay(residentId, ymd);
   const base = {
     ...(prevRow && typeof prevRow === 'object' ? prevRow : {}),
-    ...vitalSeedForBulkTableRow(residentId, ymd),
+    ...vitalSeedForBulkTableRow(residentId, ymd, resident),
     ...hourlyDraftSeedForResidentDay(residentId, ymd),
     ...bulkMealFieldsEmpty(mealSlot),
     ...bulkNonMealCareFromSeed(care),
@@ -1105,10 +1144,14 @@ function vitalFieldsFromSnapshotMeta(meta) {
 }
 
 /** 対象日の最終 vital_snapshot から一覧表1行分のバイタル初期値 */
-function vitalSeedForBulkTableRow(residentId, bulkSheetDate) {
+function vitalSeedForBulkTableRow(residentId, bulkSheetDate, residentOrCtx = null) {
   const ymd = bulkTableYmd(bulkSheetDate);
   const rid = String(residentId ?? '');
-  const fromEvents = vitalFieldsFromSnapshotMeta(Report.getLatestVitalSnapshotMetaForResidentDay(rid, ymd));
+  const ctx =
+    residentOrCtx && typeof residentOrCtx === 'object'
+      ? Report.careEventResidentContext(residentOrCtx)
+      : null;
+  const fromEvents = vitalFieldsFromSnapshotMeta(Report.getLatestVitalSnapshotMetaForResidentDay(rid, ymd, ctx));
   const hasAny = Object.values(fromEvents).some((v) => String(v ?? '').trim() !== '');
   if (hasAny) return fromEvents;
   if (ymd === currentYmd()) {
@@ -1678,11 +1721,12 @@ export function RecordPage({
       for (const r of list) {
         const id = String(r.id);
         const stored = !isPastDay && storedRows[id] && typeof storedRows[id] === 'object' ? storedRows[id] : {};
-        const vital = vitalSeedForBulkTableRow(id, ymd);
+        const vital = vitalSeedForBulkTableRow(id, ymd, r);
         const hourly = hourlyDraftSeedForResidentDay(id, ymd);
         const savedCare = bulkCareSeedForResidentDay(id, ymd);
         let row;
         if (isToday) {
+          const savedHourly = buildHourlyCareFromEvents(Report.getCareEventsForResidentDay(id, ymd), ymd);
           row = {
             ...vital,
             ...hourly,
@@ -1690,6 +1734,7 @@ export function RecordPage({
             ...pickMealDraftFromStored(stored, mealSlot),
             ...enteralSeedForResidentMealSlot(id, ymd, mealSlot),
           };
+          row = mergeHourlyDraftFromStored(row, stored, savedHourly);
           if (!String(row.mealSlot ?? '').trim()) row = { ...row, mealSlot };
           row.vitalHandwritingDataUrl = '';
           row = applyEnteralBulkPlanToRow(row, r, selectedFacilityLinkKey, mealSlot);
@@ -1711,7 +1756,7 @@ export function RecordPage({
       }
       return next;
     });
-  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey, tick]);
+  }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey]);
 
   /** 一覧入力の下書きを施設×日付ごとに保存（保存押し忘れの復元用） */
   useEffect(() => {
@@ -2749,7 +2794,7 @@ export function RecordPage({
       const id = String(r.id);
       const savedCare = bulkCareSeedForResidentDay(id, ymd);
       init[id] = {
-        ...vitalSeedForBulkTableRow(id, ymd),
+        ...vitalSeedForBulkTableRow(id, ymd, r),
         ...hourlyDraftSeedForResidentDay(id, ymd),
         ...(isToday
           ? {
@@ -2815,7 +2860,7 @@ export function RecordPage({
       const base =
         prev[id] ??
         (() => ({
-          ...vitalSeedForBulkTableRow(id, ymd),
+          ...vitalSeedForBulkTableRow(id, ymd, r),
           ...hourlyDraftSeedForResidentDay(id, ymd),
           ...(isToday
             ? {
@@ -2941,7 +2986,7 @@ export function RecordPage({
         if (!next[id]) continue;
         next[id] = {
           ...next[id],
-          ...vitalSeedForBulkTableRow(id, ymd),
+          ...vitalSeedForBulkTableRow(id, ymd, r),
         };
       }
       return next;
@@ -2961,7 +3006,7 @@ export function RecordPage({
             (() => {
               const ymd = bulkTableYmd(bulkSheetDate);
               return {
-                ...vitalSeedForBulkTableRow(id, ymd),
+                ...vitalSeedForBulkTableRow(id, ymd, r),
                 ...bulkCareSeedForResidentDay(id, ymd),
                 mealSlot: bulkGlobalMealSlot,
                 ...hourlyDraftSeedForResidentDay(id, ymd),
@@ -2995,7 +3040,7 @@ export function RecordPage({
           next[id] ??
           (() => {
             return {
-              ...vitalSeedForBulkTableRow(id, ymd),
+              ...vitalSeedForBulkTableRow(id, ymd, r),
               ...bulkCareSeedForResidentDay(id, ymd),
               mealSlot: bulkGlobalMealSlot,
               ...hourlyDraftSeedForResidentDay(id, ymd),
@@ -3020,7 +3065,7 @@ export function RecordPage({
         const id = String(r.id);
         if (!next[id]) {
           next[id] = {
-            ...vitalSeedForBulkTableRow(id, ymd),
+            ...vitalSeedForBulkTableRow(id, ymd, r),
             ...bulkCareSeedForResidentDay(id, ymd),
             mealSlot: bulkGlobalMealSlot,
             ...hourlyDraftSeedForResidentDay(id, ymd),
@@ -3392,7 +3437,8 @@ export function RecordPage({
           applied += 1;
         }
         for (const id of affectedIds) {
-          Report.syncResidentVitalSnapshotFromLatestEvent(id);
+          const hit = displayResidents.find((r) => String(r.id) === String(id));
+          Report.syncResidentVitalSnapshotFromLatestEvent(id, hit ? Report.careEventResidentContext(hit) : null);
         }
         if (applied > 0) {
           setTick((n) => n + 1);

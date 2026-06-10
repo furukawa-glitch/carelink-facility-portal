@@ -34,6 +34,7 @@ import {
   idbSaveAllCareEvents,
   mergeCareEventsById,
 } from '../lib/careEventsIdb.js';
+import { personNameMatchKey } from '../lib/residentNameMatch.js';
 
 export { CARE_RECORD_RETENTION_YEARS, careEventsRetentionSummary };
 
@@ -586,13 +587,13 @@ export function setResidentVitalSnapshot(residentId, patch) {
 }
 
 /** 記録ログの最新 vital_snapshot を名簿スナップショットへ反映 */
-export function syncResidentVitalSnapshotFromLatestEvent(residentId) {
+export function syncResidentVitalSnapshotFromLatestEvent(residentId, ctx = null) {
   const rid = String(residentId ?? '').trim();
   if (!rid) return;
   /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getAllCareEvents()) {
-    if (String(e?.residentId ?? '').trim() !== rid) continue;
+    if (!careEventMatchesResidentIdentity(e, rid, ctx)) continue;
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
     const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
@@ -2060,6 +2061,57 @@ export function aggregateMonthlyCareEvents(facilitySheetTitle, yearMonth) {
   return { ...c, total: events.length, events };
 }
 
+/** @typedef {{ residentName?: string; facilitySheetTitle?: string; sourceSheetTitle?: string }} CareEventResidentContext */
+
+/** @param {Record<string, unknown> | null | undefined} resident @param {string} [facilitySheetTitle] */
+export function careEventResidentContext(resident, facilitySheetTitle = '') {
+  const r = resident && typeof resident === 'object' ? resident : {};
+  return {
+    residentName: String(r.name ?? r.residentName ?? '').trim(),
+    facilitySheetTitle: String(
+      facilitySheetTitle || r.sourceSheetTitle || r.facility || r.facilitySheetTitle || ''
+    ).trim(),
+  };
+}
+
+function parseNameFromResidentId(id) {
+  const parts = String(id ?? '')
+    .split('::')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length >= 4) return parts[2];
+  if (parts.length === 3) return parts[1];
+  return '';
+}
+
+function facilityLabelsLooselyMatch(a, b) {
+  const left = String(a ?? '').trim();
+  const right = String(b ?? '').trim();
+  if (!left || !right) return true;
+  if (left === right || left.includes(right) || right.includes(left)) return true;
+  const defA = facilityDefBySheetTitle(left);
+  const defB = facilityDefBySheetTitle(right);
+  return Boolean(defA && defB && defA.linkKey === defB.linkKey);
+}
+
+/** 名簿IDが端末間でずれても、氏名＋施設で同一利用者のログを拾う */
+export function isCareEventForResident(e, residentId, ctx = null) {
+  return careEventMatchesResidentIdentity(e, residentId, ctx);
+}
+
+function careEventMatchesResidentIdentity(e, residentId, ctx = null) {
+  const rid = String(residentId ?? '').trim();
+  if (rid && String(e?.residentId ?? '').trim() === rid) return true;
+  if (!ctx || !String(ctx.residentName ?? '').trim()) return false;
+  const wantNameKey = personNameMatchKey(ctx.residentName);
+  if (!wantNameKey) return false;
+  const eventNameRaw =
+    String(e?.residentName ?? '').trim() || parseNameFromResidentId(e?.residentId);
+  if (personNameMatchKey(eventNameRaw) !== wantNameKey) return false;
+  const wantFac = String(ctx.facilitySheetTitle ?? ctx.sourceSheetTitle ?? '').trim();
+  return facilityLabelsLooselyMatch(wantFac, e?.facilitySheetTitle);
+}
+
 /**
  * 利用者・対象月のケアイベント（時系列）
  * @param {string} residentId
@@ -2110,14 +2162,15 @@ function careEventTsForResidentDay(e) {
  * 利用者×暦日（ローカル日付）のケアイベント
  * @param {string} residentId
  * @param {string} ymd YYYY-MM-DD
+ * @param {CareEventResidentContext | null} [ctx] 氏名照合（端末間で名簿IDが異なる場合）
  */
-export function getCareEventsForResidentDay(residentId, ymd) {
+export function getCareEventsForResidentDay(residentId, ymd, ctx = null) {
   const rid = String(residentId ?? '').trim();
   const day = String(ymd ?? '').trim();
   if (!rid || !day) return [];
   return getAllCareEvents()
     .filter((e) => {
-      if (String(e.residentId) !== rid) return false;
+      if (!careEventMatchesResidentIdentity(e, rid, ctx)) return false;
       const tsForDay = careEventTsForResidentDay(e);
       const t = new Date(tsForDay);
       if (!Number.isFinite(t.getTime())) return false;
@@ -2130,25 +2183,27 @@ export function getCareEventsForResidentDay(residentId, ymd) {
  * その暦日の vital_snapshot のうち時刻が最も遅い 1 件の meta（一覧表の対象日切替用）
  * @param {string} residentId
  * @param {string} ymd YYYY-MM-DD
+ * @param {CareEventResidentContext | null} [ctx]
  * @returns {Record<string, unknown> | null}
  */
-export function getLatestVitalSnapshotMetaForResidentDay(residentId, ymd) {
-  return getLatestVitalMetaForResidentDay(residentId, ymd).meta;
+export function getLatestVitalSnapshotMetaForResidentDay(residentId, ymd, ctx = null) {
+  return getLatestVitalMetaForResidentDay(residentId, ymd, ctx).meta;
 }
 
 /**
  * 指定日の最新バイタル（フォールバックなし）
  * @param {string} residentId
  * @param {string} ymd YYYY-MM-DD
+ * @param {CareEventResidentContext | null} [ctx]
  * @returns {{ meta: Record<string, unknown> | null; measuredAt: string }}
  */
-export function getLatestVitalMetaForResidentDay(residentId, ymd) {
+export function getLatestVitalMetaForResidentDay(residentId, ymd, ctx = null) {
   const rid = String(residentId ?? '').trim();
   const day = String(ymd ?? '').trim();
   if (!rid || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return { meta: null, measuredAt: '' };
   /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
-  for (const e of getCareEventsForResidentDay(rid, day)) {
+  for (const e of getCareEventsForResidentDay(rid, day, ctx)) {
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
     const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
@@ -2165,9 +2220,10 @@ export function getLatestVitalMetaForResidentDay(residentId, ymd) {
 /**
  * 利用者の最新バイタル（スナップショットキャッシュ → 記録ログの最終 vital_snapshot）
  * @param {string} residentId
+ * @param {CareEventResidentContext | null} [ctx]
  * @returns {{ meta: Record<string, unknown> | null; measuredAt: string }}
  */
-export function getLatestVitalMetaForResident(residentId) {
+export function getLatestVitalMetaForResident(residentId, ctx = null) {
   const rid = String(residentId ?? '').trim();
   if (!rid) return { meta: null, measuredAt: '' };
   const snap = getResidentVitalSnapshot(rid);
@@ -2179,7 +2235,7 @@ export function getLatestVitalMetaForResident(residentId) {
   /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getAllCareEvents()) {
-    if (String(e?.residentId ?? '').trim() !== rid) continue;
+    if (!careEventMatchesResidentIdentity(e, rid, ctx)) continue;
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
     const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
@@ -2189,7 +2245,10 @@ export function getLatestVitalMetaForResident(residentId) {
       latest = { meta: /** @type {Record<string, unknown>} */ (e.meta), measuredAt };
     }
   }
-  if (latest) return { meta: latest.meta, measuredAt: latest.measuredAt };
+  if (latest) {
+    setResidentVitalSnapshot(rid, { ...latest.meta, updatedAt: latest.measuredAt });
+    return { meta: latest.meta, measuredAt: latest.measuredAt };
+  }
   return { meta: null, measuredAt: '' };
 }
 
@@ -2198,18 +2257,19 @@ export function getLatestVitalMetaForResident(residentId) {
  * @param {string} residentId
  * @param {string} startYmd YYYY-MM-DD
  * @param {string} endYmd YYYY-MM-DD
+ * @param {CareEventResidentContext | null} [ctx]
  */
-export function getLatestVitalMetaForResidentInRange(residentId, startYmd, endYmd) {
+export function getLatestVitalMetaForResidentInRange(residentId, startYmd, endYmd, ctx = null) {
   const rid = String(residentId ?? '').trim();
   const start = new Date(`${String(startYmd ?? '').trim()}T00:00:00`).getTime();
   const end = new Date(`${String(endYmd ?? '').trim()}T23:59:59.999`).getTime();
   if (!rid || !Number.isFinite(start) || !Number.isFinite(end)) {
-    return getLatestVitalMetaForResident(rid);
+    return getLatestVitalMetaForResident(rid, ctx);
   }
   /** @type {{ meta: Record<string, unknown>; measuredAt: string } | null} */
   let latest = null;
   for (const e of getAllCareEvents()) {
-    if (String(e?.residentId ?? '').trim() !== rid) continue;
+    if (!careEventMatchesResidentIdentity(e, rid, ctx)) continue;
     if (e?.type !== 'vital_snapshot') continue;
     if (!e.meta || typeof e.meta !== 'object') continue;
     const measuredAt = resolveVitalMeasuredAt(e.meta, e.ts);
@@ -2221,7 +2281,7 @@ export function getLatestVitalMetaForResidentInRange(residentId, startYmd, endYm
     }
   }
   if (latest) return { meta: latest.meta, measuredAt: latest.measuredAt };
-  return getLatestVitalMetaForResident(rid);
+  return getLatestVitalMetaForResident(rid, ctx);
 }
 
 /**
@@ -3068,14 +3128,16 @@ dailyLife / nurseProblems / careNotes / other に、上記の補足情報（病�
 /**
  * 直近7日のバイタルログ（スナップショット履歴は簡易: careEvents type vital から）
  * @param {string} residentId
+ * @param {CareEventResidentContext | null} [ctx]
  */
-export function getWeeklyVitalTimeline(residentId) {
+export function getWeeklyVitalTimeline(residentId, ctx = null) {
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 3600000;
+  const rid = String(residentId ?? '').trim();
   return getAllCareEvents()
     .filter(
       (e) =>
-        String(e.residentId) === String(residentId) &&
+        careEventMatchesResidentIdentity(e, rid, ctx) &&
         e.type === 'vital_snapshot' &&
         new Date(e.ts).getTime() >= weekAgo
     )

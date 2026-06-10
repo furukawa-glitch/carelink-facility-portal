@@ -224,32 +224,10 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (action === 'delete_events') {
-      const ids = Array.isArray(payload.clientEventIds)
-        ? payload.clientEventIds
-        : Array.isArray(payload.client_event_ids)
-          ? payload.client_event_ids
-          : [];
-      const clean = [...new Set(ids.map((x) => String(x ?? '').trim()).filter(Boolean))].slice(0, 500);
-      if (!clean.length) {
-        sendJson(res, 200, { ok: true, deleted: 0 });
-        return;
-      }
-      const quoted = clean.map((id) => `"${id.replace(/"/g, '')}"`).join(',');
-      await supabaseRest(
-        supabaseUrl,
-        serviceKey,
-        `care_events?organization_id=eq.${organizationId}&client_event_id=in.(${quoted})`,
-        'DELETE'
-      );
-      sendJson(res, 200, { ok: true, deleted: clean.length });
-      return;
-    }
-
     if (action === 'pull_events') {
       const sinceTs = String(payload.sinceTs ?? '').trim();
       const parsedSince = sinceTs ? new Date(sinceTs) : null;
-      const limitRaw = Number(payload.limit ?? 3000);
+      const limitRaw = Number(payload.limit ?? 1500);
       const limit = Math.max(100, Math.min(5000, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 1500));
       const sinceIso = parsedSince && Number.isFinite(parsedSince.getTime()) ? parsedSince.toISOString() : '';
       const whereSince = sinceIso ? `&event_ts=gt.${encodeURIComponent(sinceIso)}` : '';

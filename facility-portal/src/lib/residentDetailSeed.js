@@ -16,7 +16,8 @@ function hasVitalMeta(meta) {
 export function vitalStateFromSaved(res, ymd = localYmd()) {
   const id = String(res?.id ?? '').trim();
   if (!id) return null;
-  const fromDay = Report.getLatestVitalSnapshotMetaForResidentDay(id, ymd);
+  const ctx = Report.careEventResidentContext(res);
+  const fromDay = Report.getLatestVitalSnapshotMetaForResidentDay(id, ymd, ctx);
   if (fromDay && hasVitalMeta(fromDay)) {
     return {
       temp: fromDay.temp != null ? String(fromDay.temp) : '',

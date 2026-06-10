@@ -96,7 +96,8 @@ export function toReiwaDateLabel(ymd) {
  */
 export function homeVisitRowFromResident(res, opts = {}) {
   const id = String(res?.id ?? '').trim();
-  const { meta, measuredAt } = Report.getLatestVitalMetaForResident(id);
+  const ctx = Report.careEventResidentContext(res);
+  const { meta, measuredAt } = Report.getLatestVitalMetaForResident(id, ctx);
   const v = vitalFieldsFromMeta(meta);
   return {
     included: opts.included !== false,
@@ -129,10 +130,11 @@ export function applyLatestVitalsToHomeVisitRows(rows, weekEndYmd = '') {
   const endYmd = String(weekEndYmd ?? '').trim();
   const startYmd = endYmd ? weekStartYmdFromEndYmd(endYmd) : '';
   return rows.map((row) => {
+    const ctx = { residentName: row.name, facilitySheetTitle: '' };
     const { meta, measuredAt } =
       endYmd && startYmd
-        ? Report.getLatestVitalMetaForResidentInRange(row.residentId, startYmd, endYmd)
-        : Report.getLatestVitalMetaForResident(row.residentId);
+        ? Report.getLatestVitalMetaForResidentInRange(row.residentId, startYmd, endYmd, ctx)
+        : Report.getLatestVitalMetaForResident(row.residentId, ctx);
     const v = vitalFieldsFromMeta(meta);
     return { ...row, ...v, measuredAt: measuredAt || row.measuredAt };
   });
