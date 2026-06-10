@@ -13,6 +13,7 @@ import {
   medicineItemsFromStoredProfile,
   normalizeMedicineList,
 } from '../lib/pharmacyMedicineFormat.js';
+import { normalizeBulkMealSlot, resolveBulkMealSlotForEvent } from '../lib/bulkCareEventTs.js';
 import { tokyoYmdFromTs } from '../lib/hourlyCareGrid.js';
 import {
   buildResidentStayStatusBadges,
@@ -1993,6 +1994,33 @@ function minuteKey(isoLike) {
  * @param {string[]} [types]
  * @returns {number} 削除件数
  */
+/**
+ * 一覧表: 利用者×暦日×食事区分（朝・昼・夜）の経管ログだけ削除（他区分は残す）
+ * @param {string} residentId
+ * @param {string} ymd YYYY-MM-DD
+ * @param {string} mealSlot 朝|昼|夜|夕
+ * @returns {number}
+ */
+export function removeCareEventsForResidentDayEnteralSlot(residentId, ymd, mealSlot) {
+  const rid = String(residentId ?? '').trim();
+  const day = String(ymd ?? '').trim();
+  const slot = normalizeBulkMealSlot(mealSlot);
+  if (!rid || !day || !slot) return 0;
+  const list = getAllCareEvents();
+  const next = list.filter((e) => {
+    if (String(e.residentId ?? '').trim() !== rid) return true;
+    if (String(e.type ?? '') !== 'enteral') return true;
+    const tsForDay = careEventTsForResidentDay(e);
+    if (tokyoYmdFromTs(tsForDay) !== day) return true;
+    const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+    const evSlot = resolveBulkMealSlotForEvent(meta, String(e?.ts ?? ''));
+    return evSlot !== slot;
+  });
+  const removed = list.length - next.length;
+  if (removed > 0) persistCareEventsList(next);
+  return removed;
+}
+
 export function removeCareEventsByResidentAtMinute(residentId, isoTs, types = []) {
   const rid = String(residentId ?? '').trim();
   const mk = minuteKey(isoTs);

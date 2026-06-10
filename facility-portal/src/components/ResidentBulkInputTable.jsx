@@ -308,7 +308,7 @@ export function ResidentBulkInputTable({
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
         下の表では<strong>食事形態（主食・副食）</strong>と<strong>摂取割</strong>を行ごとに入力します（食事区分は上で統一）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。
         <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>・<strong>ソリタ</strong>は割合を選ぶと食事メモに残ります（例: エンシュア1/2 ソリタ1/3）。
-        <strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。<strong className="text-slate-700"> 経管メニュー</strong>はメニュー表の内容を表示し、<strong className="text-slate-700">実施／未実施</strong>だけ選ぶと記録されます（実施のみ算定ログに含まれます）。
+        <strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。<strong className="text-slate-700"> 経管メニュー</strong>は上の<strong className="text-slate-700">朝・昼・夜</strong>に合わせて記録され、保存後は左の食事列の<strong className="text-slate-700">朝／昼／夕</strong>行に表示されます（1日2〜3回は区分を切り替えてそれぞれ保存）。
         <span className="ml-1 text-slate-700">横移動は上の「← 左へ / 右へ →」か、Shift+ホイールでも可能です。</span>
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-amber-50 px-3 py-2.5 shadow-sm">
@@ -602,7 +602,6 @@ export function ResidentBulkInputTable({
                 朝: String(savedMealSlots['朝'] ?? '').trim() || '—',
                 昼: String(savedMealSlots['昼'] ?? '').trim() || '—',
                 夜: String(savedMealSlots['夜'] ?? '').trim() || '—',
-                enteral: String(savedMealSlots.enteral ?? '').trim(),
               };
               const draftMealPreview =
                 mealSlotLabel && draftMealLabel ? `入力中 ${mealSlotLabel}:${draftMealLabel}` : '';
@@ -665,12 +664,21 @@ export function ResidentBulkInputTable({
                   </td>
                   <td className="border border-slate-200 bg-orange-50/50 px-1 py-1 text-[10px] font-bold text-orange-900 sm:text-xs">
                     <div className="space-y-0.5 leading-snug">
-                      <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">朝</span>{mealFrontBySlot.朝}</p>
-                      <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">昼</span>{mealFrontBySlot.昼}</p>
-                      <p className="truncate"><span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">夜</span>{mealFrontBySlot.夜}</p>
-                      {mealFrontBySlot.enteral ? (
-                        <p className="truncate border-t border-orange-200 pt-0.5 text-[9px] text-violet-800">経管: {mealFrontBySlot.enteral}</p>
-                      ) : null}
+                      {(
+                        [
+                          ['朝', mealFrontBySlot.朝],
+                          ['昼', mealFrontBySlot.昼],
+                          ['夕', mealFrontBySlot.夜],
+                        ]
+                      ).map(([label, text]) => {
+                        const isEnteral = /（実施）|（未実施）|ラコール|エンシュア|経管/u.test(String(text));
+                        return (
+                          <p key={label} className={`truncate ${isEnteral ? 'text-violet-900' : ''}`}>
+                            <span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">{label}</span>
+                            {text}
+                          </p>
+                        );
+                      })}
                       {draftMealPreview ? <p className="mt-1 border-t border-orange-200 pt-0.5 text-[9px] text-orange-700">{draftMealPreview}</p> : null}
                     </div>
                   </td>
@@ -1145,6 +1153,7 @@ export function ResidentBulkInputTable({
                               onClick={() =>
                                 patchBulkRow(id, {
                                   enteralStatus: st === 'done' ? '' : 'done',
+                                  mealSlot: bulkGlobalMealSlot,
                                 })
                               }
                               className={`rounded-lg border-2 px-2 py-1 text-[10px] font-black sm:text-xs ${
@@ -1162,6 +1171,7 @@ export function ResidentBulkInputTable({
                               onClick={() =>
                                 patchBulkRow(id, {
                                   enteralStatus: st === 'not_done' ? '' : 'not_done',
+                                  mealSlot: bulkGlobalMealSlot,
                                 })
                               }
                               className={`rounded-lg border-2 px-2 py-1 text-[10px] font-black sm:text-xs ${
