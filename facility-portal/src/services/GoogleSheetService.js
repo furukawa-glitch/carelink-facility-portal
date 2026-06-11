@@ -22,6 +22,34 @@ export const CARELINK_DEFAULT_CSV_GID = import.meta.env.VITE_GOOGLE_SHEET_GID ||
 
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
+/** 本番は Vercel の /api/sheets-proxy 経由（APIキーをブラウザに載せずリファラー制限を回避） */
+function useSheetsServerProxy() {
+  return Boolean(import.meta.env.PROD && typeof window !== 'undefined');
+}
+
+function sheetsApiRoot() {
+  return useSheetsServerProxy() ? '/api/sheets-proxy/v4/spreadsheets' : SHEETS_API;
+}
+
+/** @param {URLSearchParams} params @param {string} apiKey */
+function withSheetsApiKey(params, apiKey) {
+  if (!useSheetsServerProxy() && apiKey) params.set('key', apiKey);
+}
+
+/** @param {string} pathWithQuery path starting with /v4/... or spreadsheet id segment @param {string} apiKey */
+function buildSheetsApiUrl(pathAfterSpreadsheets, apiKey) {
+  const root = sheetsApiRoot();
+  const path = pathAfterSpreadsheets.startsWith('/')
+    ? pathAfterSpreadsheets
+    : `/${pathAfterSpreadsheets}`;
+  const qIdx = path.indexOf('?');
+  const pathOnly = qIdx >= 0 ? path.slice(0, qIdx) : path;
+  const params = new URLSearchParams(qIdx >= 0 ? path.slice(qIdx + 1) : '');
+  withSheetsApiKey(params, apiKey);
+  const qs = params.toString();
+  return qs ? `${root}${pathOnly}?${qs}` : `${root}${pathOnly}`;
+}
+
 /** 名簿の短時間キャッシュ（同一画面の再マウント・連打で Sheets 読み取りを抑える） */
 const RESIDENTS_CACHE_TTL_MS = 90_000;
 /** キャッシュに含めるシート上段サマリーの版（フィールド追加時に上げる） */
@@ -332,11 +360,11 @@ async function fetchSpreadsheetValuesBatch(spreadsheetId, apiKey, rangesA1) {
   for (let i = 0; i < rangesA1.length; i += maxPerReq) {
     const chunk = rangesA1.slice(i, i + maxPerReq);
     const params = new URLSearchParams();
-    params.set('key', apiKey);
+    withSheetsApiKey(params, apiKey);
     for (const r of chunk) {
       params.append('ranges', r);
     }
-    const url = `${SHEETS_API}/${sid}/values:batchGet?${params.toString()}`;
+    const url = buildSheetsApiUrl(`/${sid}/values:batchGet?${params.toString()}`, apiKey);
     const { res, data } = await sheetsGetJsonWithRetry(url);
     if (!res.ok || data.error) {
       throw new Error(
@@ -1718,7 +1746,10 @@ export async function fetchResidentsStatsByFacility(apiKey) {
 export async function fetchSpreadsheetTabs(spreadsheetId, apiKey) {
   const id = encodeURIComponent(String(spreadsheetId ?? '').trim());
   if (!id) throw new Error('スプレッドシート ID が空です');
-  const url = `${SHEETS_API}/${id}?fields=sheets(properties(sheetId,title,hidden))&key=${encodeURIComponent(apiKey)}`;
+  const url = buildSheetsApiUrl(
+    `/${id}?fields=sheets(properties(sheetId,title,hidden))`,
+    apiKey
+  );
   const { res, data } = await sheetsGetJsonWithRetry(url);
   if (!res.ok || data.error) {
     const msg = data.error?.message ?? 'スプレッドシートのメタデータ取得に失敗しました';
@@ -1791,7 +1822,7 @@ async function fetchAnySheetValues(spreadsheetId, apiKey, sheetTitle, rangeA1Wit
   const sid = encodeURIComponent(spreadsheetId);
   const a1 = sheetRangeA1(sheetTitle, rangeA1WithinSheet);
   const range = encodeURIComponent(a1);
-  const url = `${SHEETS_API}/${sid}/values/${range}?key=${encodeURIComponent(apiKey)}`;
+  const url = buildSheetsApiUrl(`/${sid}/values/${range}`, apiKey);
   const { res, data } = await sheetsGetJsonWithRetry(url);
   if (!res.ok || data.error) {
     throw new Error(data.error?.message ?? `シート「${sheetTitle}」の取得に失敗しました`);
@@ -2122,23 +2153,9 @@ async function loadResidentsFromSource() {
   }
 
   const apiKey = (import.meta.env.VITE_GOOGLE_SHEETS_API_KEY ?? '').trim();
-  if (apiKey) {
-    const gidRaw = import.meta.env.VITE_GOOGLE_SHEET_GID;
-    const gidTrim = gidRaw != null ? String(gidRaw).trim() : '';
-    if (gidTrim !== '') {
-      const sheetIdNum = parseInt(gidTrim, 10);
-      if (Number.isNaN(sheetIdNum)) {
-        throw new Error('VITE_GOOGLE_SHEET_GID は数値（URL の gid=）を指定してください');
-      }
-      const residents = await fetchResidentsSingleTabBySheetId(apiKey, sheetIdNum);
-      return {
-        residents,
-        source: 'sheets_api',
-        mode: 'single_gid',
-        cacheVersion: RESIDENT_SUMMARY_CACHE_VERSION,
-        ...snapshotFacilitySheetSummaryMaps(),
-      };
-    }
+  const canUseSheetsApi = apiKey || useSheetsServerProxy();
+  if (canUseSheetsApi) {
+    // 複数施設ポータルは常に全タブ読込。VITE_GOOGLE_SHEET_GID は CSV 単一タブ用のみ（Vercel に GID があると1施設だけになり0件になる）
     const residents = await fetchResidentsAllTabs(apiKey);
     return {
       residents,
