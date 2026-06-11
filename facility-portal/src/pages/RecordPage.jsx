@@ -52,6 +52,7 @@ import {
   facilityDefBySheetTitle,
   linkKeyForSheetTitle,
   residentBelongsToFacilityTab,
+  residentMatchesFacilityTab,
 } from '../config/carelinkFacilities.js';
 import {
   getExternalLinksForFacility,
@@ -1532,7 +1533,8 @@ export function RecordPage({
   }, [selectedFacilityLinkKey, tick, googleCalendarReloadRev]);
 
   const { filteredResidents, residentFilterBanner } = useMemo(() => {
-    const matched = allResidents.filter((r) => residentBelongsToFacilityTab(r, selectedSheetTitle));
+    const sel = String(selectedSheetTitle ?? '').trim();
+    const matched = allResidents.filter((r) => residentBelongsToFacilityTab(r, sel));
     if (matched.length > 0) {
       return { filteredResidents: matched, residentFilterBanner: null };
     }
@@ -1549,42 +1551,59 @@ export function RecordPage({
       return { filteredResidents: allResidents, residentFilterBanner: null };
     }
 
-    /**
-     * 名簿の読み込み元タブが1種類だけ（単一CSV／単一gid／VITE_CSV_DEFAULT_SHEET_TITLE）のとき、
-     * 施設列の表記が UI の施設タブと一致しないと0件になるため全件表示する。
-     */
     const sources = new Set(
       allResidents.map((r) => String(r.sourceSheetTitle ?? '').trim()).filter(Boolean)
     );
-    if (sources.size <= 1) {
-      return { filteredResidents: allResidents, residentFilterBanner: null };
-    }
 
-    /**
-     * 複数タブ読込: タブ名の「核」で突き合わせ（表記ゆれ）
-     */
-    const core = compactFacilityToken(selectedSheetTitle);
-    if (core) {
-      const loose = allResidents.filter((r) => {
+    const looseForSelectedTab = () => {
+      const core = compactFacilityToken(sel);
+      if (!core) return [];
+      return allResidents.filter((r) => {
         const src = String(r.sourceSheetTitle ?? '').trim();
         const fac = String(r.facility ?? '').trim();
         return (
           (src && compactFacilityToken(src) === core) ||
-          (fac && compactFacilityToken(fac) === core)
+          (fac && compactFacilityToken(fac) === core) ||
+          (src && residentMatchesFacilityTab(src, sel)) ||
+          (fac && residentMatchesFacilityTab(fac, sel))
         );
       });
-      if (loose.length > 0) {
-        return { filteredResidents: loose, residentFilterBanner: null };
-      }
-    }
+    };
 
     /**
-     * それでも0件なら全件表示（施設タブとスプレッドシートのタブ名がずれている場合の救済）
+     * 1タブ分だけ読めているとき（旧 single_gid 等）は、読めた施設だけ表示し
+     * 他施設タブに全件を流さない（千音寺だけ正しく見え他施設がおかしく見える原因）
      */
+    if (sources.size <= 1) {
+      const onlySource = [...sources][0] ?? '';
+      const forThisTab = looseForSelectedTab();
+      if (forThisTab.length > 0) {
+        return { filteredResidents: forThisTab, residentFilterBanner: null };
+      }
+      if (
+        onlySource &&
+        (onlySource === sel ||
+          compactFacilityToken(onlySource) === compactFacilityToken(sel) ||
+          residentMatchesFacilityTab(onlySource, sel))
+      ) {
+        return { filteredResidents: allResidents, residentFilterBanner: null };
+      }
+      return {
+        filteredResidents: [],
+        residentFilterBanner:
+          'この施設の名簿がまだ読み込まれていません。右上の「更新」を押し、取得元が sheets_api(all_tabs) になっているか確認してください。',
+      };
+    }
+
+    const loose = looseForSelectedTab();
+    if (loose.length > 0) {
+      return { filteredResidents: loose, residentFilterBanner: null };
+    }
+
     return {
-      filteredResidents: allResidents,
+      filteredResidents: [],
       residentFilterBanner:
-        '施設タブと名簿の照合ができなかったため、読み込んだ全利用者を表示しています。ポータルで施設を切り替えるか、carelinkFacilities.js の sheetTitle を実際のタブ名に合わせてください。',
+        '選択中の施設タブに一致する入居者が見つかりません。右上の「更新」で名簿を再取得するか、carelinkFacilities.js の sheetTitle をスプレッドシートのタブ名と揃えてください。',
     };
   }, [allResidents, selectedSheetTitle]);
 
@@ -2207,7 +2226,19 @@ export function RecordPage({
         source: String(source ?? ''),
         mode: String(mode ?? ''),
       });
-      if (!rows.length && isManualRefresh) {
+      const uniqueSheetSources = new Set(
+        rows.map((r) => String(r.sourceSheetTitle ?? '').trim()).filter(Boolean)
+      );
+      if (
+        String(mode ?? '') === 'all_tabs' &&
+        uniqueSheetSources.size > 0 &&
+        uniqueSheetSources.size < CARELINK_FACILITIES.length &&
+        isManualRefresh
+      ) {
+        setError(
+          `名簿は ${rows.length} 名ですが、施設タブは ${uniqueSheetSources.size}/${CARELINK_FACILITIES.length} 件しか読めていません。Vercel の sheets プロキシとスプレッドシートのタブ名を確認し、再度「更新」してください。`
+        );
+      } else if (!rows.length && isManualRefresh) {
         setError(
           '名簿が0件です。Googleスプレッドシートの共有（閲覧可）と Vercel の VITE_GOOGLE_SHEETS_API_KEY を確認してください。'
         );

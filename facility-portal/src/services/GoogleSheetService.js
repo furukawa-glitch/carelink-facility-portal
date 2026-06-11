@@ -58,7 +58,7 @@ function buildSheetsApiUrl(pathAfterSpreadsheets, apiKey) {
 /** 名簿の短時間キャッシュ（同一画面の再マウント・連打で Sheets 読み取りを抑える） */
 const RESIDENTS_CACHE_TTL_MS = 90_000;
 /** キャッシュに含めるシート上段サマリーの版（フィールド追加時に上げる） */
-const RESIDENT_SUMMARY_CACHE_VERSION = 3;
+const RESIDENT_SUMMARY_CACHE_VERSION = 4;
 /** @type {{ residents: Record<string, unknown>[]; source: string; mode: string; cacheVersion?: number; medicalTargetSummaryBySheet?: Record<string, number>; averageCareLevelSummaryBySheet?: Record<string, number>; residentCountSummaryBySheet?: Record<string, number> } | null} */
 let residentsFetchCache = null;
 let residentsFetchCacheAt = 0;
