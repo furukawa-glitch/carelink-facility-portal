@@ -1819,13 +1819,20 @@ function resolveSheetTabTitle(tabs, def) {
   if (hitLoose) return hitLoose.title;
   // 記号・接頭語の違いだけで一致しない場合（3文字以上の拠点名で部分一致）
   if (w.length >= 3) {
-    const hitPartial = tabs.find((t) => {
+    let bestTitle = null;
+    let bestLen = 0;
+    for (const t of tabs) {
       const c = compactFacilityToken(t.title);
-      if (!c) return false;
-      if (c === w) return true;
-      return c.includes(w) || w.includes(c);
-    });
-    if (hitPartial) return hitPartial.title;
+      if (!c) continue;
+      const ok = c === w || c.includes(w) || w.includes(c);
+      if (!ok) continue;
+      const score = Math.min(c.length, w.length);
+      if (score > bestLen) {
+        bestLen = score;
+        bestTitle = t.title;
+      }
+    }
+    if (bestTitle) return bestTitle;
   }
   return null;
 }

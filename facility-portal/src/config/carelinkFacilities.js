@@ -205,6 +205,22 @@ export function linkKeyForSheetTitle(sheetTitle) {
   return row?.linkKey ?? '';
 }
 
+/** 看護指示・周知事項など施設ストア用。別名・タブ名・シート名を linkKey に揃える */
+export function canonicalFacilityLinkKey(raw) {
+  const t = String(raw ?? '').trim();
+  if (!t) return '';
+  const fromAlias = linkKeyFromTabLabelOrAlias(t);
+  if (fromAlias) return fromAlias;
+  const bySheet = CARELINK_FACILITIES.find((f) => f.sheetTitle === t);
+  if (bySheet) return bySheet.linkKey;
+  const w = compactFacilityToken(t);
+  if (w) {
+    const byCompact = CARELINK_FACILITIES.find((f) => compactFacilityToken(f.sheetTitle) === w);
+    if (byCompact) return byCompact.linkKey;
+  }
+  return t;
+}
+
 /** @param {string} sheetTitle */
 export function facilityDefBySheetTitle(sheetTitle) {
   const t = String(sheetTitle ?? '').trim();
@@ -224,12 +240,21 @@ export function resolveFacilityDefForSheetTab(apiTabTitle) {
   const exactCompact = CARELINK_FACILITIES.find((f) => compactFacilityToken(f.sheetTitle) === w);
   if (exactCompact) return exactCompact;
   if (w.length >= 2) {
-    return (
-      CARELINK_FACILITIES.find((f) => {
-        const c = compactFacilityToken(f.sheetTitle);
-        return c.includes(w) || w.includes(c);
-      }) ?? null
-    );
+    /** 部分一致は最長一致を優先（「寺」だけ等の誤マッチを避ける） */
+    let best = null;
+    let bestLen = 0;
+    for (const f of CARELINK_FACILITIES) {
+      const c = compactFacilityToken(f.sheetTitle);
+      if (!c) continue;
+      const ok = c.includes(w) || w.includes(c);
+      if (!ok) continue;
+      const score = Math.min(c.length, w.length);
+      if (score > bestLen) {
+        bestLen = score;
+        best = f;
+      }
+    }
+    return best;
   }
   return null;
 }

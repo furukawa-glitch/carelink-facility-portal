@@ -1312,6 +1312,8 @@ export function RecordPage({
   });
   const [tick, setTick] = useState(0);
   const loadSeqRef = useRef(0);
+  /** ポータルでユーザーが明示選択した施設（load 後の自動切替で上書きしない） */
+  const preferredSheetRef = useRef('');
 
   useEffect(() => {
     const bump = () => setTick((n) => n + 1);
@@ -1329,6 +1331,10 @@ export function RecordPage({
   const [nursingRev, setNursingRev] = useState(0);
   const [facilityNoticeDraft, setFacilityNoticeDraft] = useState('');
   const [facilityNoticeSaveFlash, setFacilityNoticeSaveFlash] = useState(false);
+  const facilityNoticeDirtyRef = useRef(false);
+  const facilityNoticeFacilityRef = useRef('');
+  const facilityHandoverDirtyRef = useRef(false);
+  const facilityHandoverFacilityRef = useRef('');
   const [planDraftDate, setPlanDraftDate] = useState(currentYmd);
   const [planDraftTime, setPlanDraftTime] = useState('10:00');
   const [planDraftType, setPlanDraftType] = useState('受診');
@@ -1969,11 +1975,26 @@ export function RecordPage({
     String(facilityHandoverMeta.text ?? '').trim() || String(board.handover ?? '').trim();
 
   useEffect(() => {
+    const k = String(selectedDef?.linkKey ?? '').trim();
+    if (k !== facilityHandoverFacilityRef.current) {
+      facilityHandoverFacilityRef.current = k;
+      facilityHandoverDirtyRef.current = false;
+      setFacilityHandoverDraft(continuousHandoverText);
+      return;
+    }
+    if (facilityHandoverDirtyRef.current) return;
     setFacilityHandoverDraft(continuousHandoverText);
   }, [continuousHandoverText, selectedDef?.linkKey]);
 
   useEffect(() => {
     const k = String(selectedDef?.linkKey ?? '').trim();
+    if (k !== facilityNoticeFacilityRef.current) {
+      facilityNoticeFacilityRef.current = k;
+      facilityNoticeDirtyRef.current = false;
+      setFacilityNoticeDraft(k ? Report.getFacilityNotice(k) : '');
+      return;
+    }
+    if (facilityNoticeDirtyRef.current) return;
     setFacilityNoticeDraft(k ? Report.getFacilityNotice(k) : '');
   }, [selectedDef?.linkKey, tick, nursingRev, roomNotesRev]);
 
@@ -2011,6 +2032,7 @@ export function RecordPage({
     const k = String(selectedDef?.linkKey ?? '').trim();
     if (!k) return;
     Report.setFacilityNotice(k, facilityNoticeDraft);
+    facilityNoticeDirtyRef.current = false;
     setFacilityNoticeSaveFlash(true);
     window.setTimeout(() => setFacilityNoticeSaveFlash(false), 1500);
     setTick((n) => n + 1);
@@ -2020,6 +2042,7 @@ export function RecordPage({
     const k = String(selectedDef?.linkKey ?? '').trim();
     if (!k) return;
     Report.setFacilityHandoverNote(k, facilityHandoverDraft);
+    facilityHandoverDirtyRef.current = false;
     setRoomNotesRev((n) => n + 1);
     setFacilityHandoverSaveFlash(true);
     window.setTimeout(() => setFacilityHandoverSaveFlash(false), 1500);
@@ -2166,6 +2189,10 @@ export function RecordPage({
       setLastUpdated(new Date());
       setGoogleCalendarReloadRev((n) => n + 1);
       setSelectedSheetTitle((prev) => {
+        const preferred = String(preferredSheetRef.current ?? '').trim();
+        if (preferred && CARELINK_FACILITIES.some((def) => def.sheetTitle === preferred)) {
+          return preferred;
+        }
         const prevOk =
           prev &&
           CARELINK_FACILITIES.some((def) => def.sheetTitle === prev) &&
@@ -2198,6 +2225,7 @@ export function RecordPage({
   useEffect(() => {
     const t = String(initialSheetTitle ?? '').trim();
     if (t && CARELINK_FACILITIES.some((f) => f.sheetTitle === t)) {
+      preferredSheetRef.current = t;
       setSelectedSheetTitle(t);
     }
     void load(true);
@@ -4550,7 +4578,13 @@ export function RecordPage({
                 </div>
                 <textarea
                   value={facilityNoticeDraft}
-                  onChange={(e) => setFacilityNoticeDraft(e.target.value)}
+                  onFocus={() => {
+                    facilityNoticeDirtyRef.current = true;
+                  }}
+                  onChange={(e) => {
+                    facilityNoticeDirtyRef.current = true;
+                    setFacilityNoticeDraft(e.target.value);
+                  }}
                   rows={4}
                   placeholder="施設全体への周知（面会制限・感染対策・本日の連絡事項など）"
                   className="min-h-[5.5rem] w-full flex-1 resize-y rounded-xl border-2 border-amber-300 bg-white/95 px-3 py-2 text-sm font-bold leading-relaxed text-amber-950 outline-none focus:ring-2 focus:ring-amber-400 sm:text-base"
@@ -4964,7 +4998,13 @@ export function RecordPage({
                   </p>
                 <textarea
                   value={facilityHandoverDraft}
-                  onChange={(e) => setFacilityHandoverDraft(e.target.value)}
+                  onFocus={() => {
+                    facilityHandoverDirtyRef.current = true;
+                  }}
+                  onChange={(e) => {
+                    facilityHandoverDirtyRef.current = true;
+                    setFacilityHandoverDraft(e.target.value);
+                  }}
                   rows={4}
                   placeholder="例：夜間見守り強化／移乗は2名介助／水分促し など"
                   className="w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"

@@ -44,6 +44,7 @@ import {
 import { VoiceCareInput } from './components/VoiceCareInput.jsx';
 import { ResidentAdministrativeModals } from './components/ResidentAdministrativeModals.jsx';
 import { ResidentStayStatusBadges } from './components/ResidentStayStatusBadges.jsx';
+import { CARE_EVENTS_SYNC_EVENT } from './lib/careEventsRealtimeSync.js';
 import { RecordPage } from './pages/RecordPage.jsx';
 import { NotionNewResidentsPage } from './pages/NotionNewResidentsPage.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
@@ -1245,9 +1246,7 @@ const App = () => {
         .toLowerCase();
     const needle = norm(raw);
     const facilityMatch = (f) => {
-      const blob = norm(
-        [f.tabLabel, f.sheetTitle, f.linkKey, f.emergencyFacilityName].filter(Boolean).join(' ')
-      );
+      const blob = norm([f.tabLabel, f.sheetTitle, f.linkKey].filter(Boolean).join(' '));
       return blob.includes(needle);
     };
     const residentNameMatch = (nameRaw) => {
@@ -1310,9 +1309,11 @@ const App = () => {
       }
     };
     window.addEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
+    window.addEventListener(CARE_EVENTS_SYNC_EVENT, refreshBoard);
     window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, refreshBoard);
+      window.removeEventListener(CARE_EVENTS_SYNC_EVENT, refreshBoard);
       window.removeEventListener('storage', onStorage);
     };
   }, [panoramaFacilityLinkKey]);

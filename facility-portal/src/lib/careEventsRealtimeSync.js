@@ -33,10 +33,14 @@ async function pullAndNotify(onApplied) {
     const result = await pullAllCloudDataAndApply();
     const merged = Number(result?.merged ?? 0);
     const storesMerged = Number(result?.storesMerged ?? 0);
-    if (typeof window !== 'undefined' && (merged > 0 || storesMerged > 0 || Number(result?.pulled ?? 0) > 0)) {
+    const nursingRepaired = Number(result?.nursingRepaired ?? 0);
+    if (
+      typeof window !== 'undefined' &&
+      (merged > 0 || storesMerged > 0 || nursingRepaired > 0 || Number(result?.pulled ?? 0) > 0)
+    ) {
       window.dispatchEvent(new CustomEvent(CARE_EVENTS_SYNC_EVENT, { detail: result }));
     }
-    if (merged > 0 || storesMerged > 0) onApplied?.(result);
+    if (merged > 0 || storesMerged > 0 || nursingRepaired > 0) onApplied?.(result);
   } catch {
     // クラウド未設定・一時失敗時は黙って継続
   } finally {

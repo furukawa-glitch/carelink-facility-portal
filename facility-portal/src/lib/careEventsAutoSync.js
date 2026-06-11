@@ -90,26 +90,6 @@ export async function syncCareEventsNow(onApplied, opts = {}) {
 
 
 
-  await flushCareEventsCloudSync();
-
-  await flushFacilityPortalStoresCloud();
-
-
-
-  if (fullPush) {
-
-    const pe = await pushAllLocalCareEventsCloud();
-
-    const ps = await pushAllFacilityPortalStoresCloud();
-
-    out.pushedEvents = Number(pe?.upserted ?? 0);
-
-    out.pushedStores = Number(ps?.upserted ?? 0);
-
-  }
-
-
-
   const pull = await pullAllCloudDataAndApply({ reload: true });
 
   Object.assign(out, pull);
@@ -120,7 +100,15 @@ export async function syncCareEventsNow(onApplied, opts = {}) {
 
   out.storesMerged = Number(pull?.storesMerged ?? 0);
 
+  await flushCareEventsCloudSync();
+
+  await flushFacilityPortalStoresCloud();
+
   if (fullPush) {
+    const pe = await pushAllLocalCareEventsCloud();
+    const ps = await pushAllFacilityPortalStoresCloud();
+    out.pushedEvents = Number(pe?.upserted ?? 0);
+    out.pushedStores = Number(ps?.upserted ?? 0);
     const report = await import('../services/ReportService.js');
     out.localEventCount = report.getAllCareEvents().length;
     onApplied?.(out);
@@ -130,6 +118,7 @@ export async function syncCareEventsNow(onApplied, opts = {}) {
     fullPush ||
     Number(out.merged ?? 0) > 0 ||
     Number(out.storesMerged ?? 0) > 0 ||
+    Number(out.nursingRepaired ?? 0) > 0 ||
     Number(out.pushedEvents ?? 0) > 0 ||
     Number(out.pushedStores ?? 0) > 0 ||
     Number(out.pulled ?? 0) > 0;

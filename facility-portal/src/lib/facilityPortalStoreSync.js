@@ -3,6 +3,7 @@
  */
 
 import { careSyncPost, isCareCloudSyncConfigured } from './careEventsSupabaseSync.js';
+import { canonicalFacilityLinkKey } from '../config/carelinkFacilities.js';
 
 export const FACILITY_STORE_WEEKLY_PLANS = 'weekly_plans';
 export const FACILITY_STORE_HOME_VISIT = 'home_visit_calendar';
@@ -222,7 +223,7 @@ function applyFacilityStoresToLocal(rows) {
 
   for (const row of rows) {
     const type = String(row?.store_type ?? '').trim();
-    const linkKey = String(row?.facility_link_key ?? '').trim();
+    const linkKey = canonicalFacilityLinkKey(String(row?.facility_link_key ?? '').trim());
     if (!linkKey) continue;
     if (type === FACILITY_STORE_WEEKLY_PLANS) {
       const remote = Array.isArray(row.payload) ? row.payload : [];
@@ -361,6 +362,13 @@ function applyFacilityStoresToLocal(rows) {
   if (nursingChanged) {
     writeJson(LS_NURSING, nursingAll);
     writeJson(LS_NURSING_META, nursingMetaAll);
+    void import('../services/ReportService.js').then((m) => {
+      const keys = rows
+        .filter((row) => String(row?.store_type ?? '').trim() === FACILITY_STORE_NURSING_DIRECTIVES)
+        .map((row) => String(row?.facility_link_key ?? '').trim())
+        .filter(Boolean);
+      if (keys.length) m.reconcileNursingDirectivesFromCareEvents([...new Set(keys)]);
+    });
   }
   if (facilityNoticeChanged) {
     writeJson(LS_FACILITY_NOTICE, facilityNoticeAll);
@@ -447,7 +455,7 @@ export function queueInjuryDiseaseCloudSync() {
  */
 export function queueFacilityPortalStoreSync(storeType, facilityLinkKey) {
   if (!isCareCloudSyncConfigured()) return;
-  const k = String(facilityLinkKey ?? '').trim();
+  const k = canonicalFacilityLinkKey(facilityLinkKey);
   const t = String(storeType ?? '').trim();
   if (!k || !t) return;
   pendingKeys.add(`${t}:${k}`);
@@ -461,7 +469,7 @@ export function queueFacilityPortalStoreSync(storeType, facilityLinkKey) {
 /** キュー登録と送信を連続実行（予定カレンダー等の保存直後用） */
 export async function syncFacilityStoreNow(storeType, facilityLinkKey) {
   if (!isCareCloudSyncConfigured()) return { ok: true, skipped: true, upserted: 0 };
-  const k = String(facilityLinkKey ?? '').trim();
+  const k = canonicalFacilityLinkKey(facilityLinkKey);
   const t = String(storeType ?? '').trim();
   if (!k || !t) return { ok: true, upserted: 0 };
   pendingKeys.add(`${t}:${k}`);

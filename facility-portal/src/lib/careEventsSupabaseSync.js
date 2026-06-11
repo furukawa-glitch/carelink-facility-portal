@@ -225,9 +225,13 @@ export async function pushAllLocalCareEventsCloud() {
  */
 export async function pullAndApplyCareEventsCloud(opts = {}) {
   const result = await pullCareEventsCloudSync();
-  if (opts.reload !== false && (Number(result?.merged ?? 0) > 0 || Number(result?.pulled ?? 0) > 0)) {
+  if (Number(result?.pulled ?? 0) > 0) {
     const report = await import('../services/ReportService.js');
-    report.reloadCareEventsFromStorage();
+    report.syncFacilityBoardsFromCareEvents();
+    if (opts.reload !== false) {
+      report.reloadCareEventsFromStorage();
+      report.syncFacilityBoardsFromCareEvents();
+    }
   }
   return result;
 }
