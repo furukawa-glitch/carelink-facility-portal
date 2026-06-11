@@ -18,8 +18,30 @@ function sheetsPathFromRequest(req) {
   const qIdx = rawUrl.indexOf('?');
   const pathname = qIdx >= 0 ? rawUrl.slice(0, qIdx) : rawUrl;
   const prefix = '/api/sheets-proxy';
-  if (!pathname.startsWith(prefix)) return '';
-  return pathname.slice(prefix.length) || '/';
+  if (pathname.startsWith(prefix)) {
+    const fromPathname = pathname.slice(prefix.length) || '/';
+    if (fromPathname !== '/') return fromPathname;
+  }
+
+  const rewritePath = req.query?.path;
+  if (rewritePath != null) {
+    const segments = Array.isArray(rewritePath)
+      ? rewritePath.map((p) => String(p ?? ''))
+      : [String(rewritePath)];
+    const joined = segments.filter(Boolean).join('/');
+    if (joined) return `/${joined}`;
+  }
+
+  return '';
+}
+
+/** @param {import('http').IncomingMessage} req */
+function upstreamQueryFromRequest(req) {
+  const rawUrl = String(req.url ?? '');
+  const qIdx = rawUrl.indexOf('?');
+  const params = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '');
+  params.delete('path');
+  return params;
 }
 
 export default async function handler(req, res) {
@@ -47,7 +69,7 @@ export default async function handler(req, res) {
 
   const rawUrl = String(req.url ?? '');
   const qIdx = rawUrl.indexOf('?');
-  const params = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '');
+  const params = upstreamQueryFromRequest(req);
   params.set('key', apiKey);
   const target = `https://sheets.googleapis.com${pathOnly}?${params.toString()}`;
 
