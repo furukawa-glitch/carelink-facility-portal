@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/sheets-proxy/:path*",
+      "destination": "/api/sheets-proxy"
+    },
+    {
       "source": "/spreadsheet-export/:path*",
       "destination": "https://docs.google.com/:path*"
     },
