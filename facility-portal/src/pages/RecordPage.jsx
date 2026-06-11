@@ -5498,6 +5498,18 @@ export function RecordPage({
                       {fetchSourceMeta
                         ? ` 取得元: ${fetchSourceMeta.source}${fetchSourceMeta.mode ? `(${fetchSourceMeta.mode})` : ''}`
                         : ' スプレッドシート API キー（VITE_GOOGLE_SHEETS_API_KEY）とシートの閲覧共有を確認してください。'}
+                      {fetchSourceMeta?.mode === 'single_gid' ? (
+                        <>
+                          {' '}
+                          <strong className="font-bold text-rose-700">
+                            古い画面です（single_gid）。Ctrl+F5 で強制再読み込みしてください。
+                          </strong>
+                        </>
+                      ) : null}
+                      <span className="mt-2 block text-sm text-slate-500">
+                        ビルド {String(import.meta.env.VITE_APP_BUILD_ID ?? 'dev')}
+                        {fetchSourceMeta?.mode === 'all_tabs' ? '（全施設タブ読込）' : ''}
+                      </span>
                     </p>
                   )}
                 </div>

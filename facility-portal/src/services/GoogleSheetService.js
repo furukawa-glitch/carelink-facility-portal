@@ -27,6 +27,11 @@ function useSheetsServerProxy() {
   return Boolean(import.meta.env.PROD && typeof window !== 'undefined');
 }
 
+/** ブラウザ直叩きは key 必須。本番プロキシ経由ならサーバー側 key で可 */
+function canCallSheetsApi(apiKey) {
+  return Boolean(String(apiKey ?? '').trim() || useSheetsServerProxy());
+}
+
 function sheetsApiRoot() {
   return useSheetsServerProxy() ? '/api/sheets-proxy/v4/spreadsheets' : SHEETS_API;
 }
@@ -1677,7 +1682,7 @@ export function aggregateFacilityStatsFromSheetRows(rows, defaultFacilityName, o
  * @returns {Promise<{ facilities: ReturnType<typeof aggregateFacilityStatsFromSheetRows>[]; fetchedAt: string }>}
  */
 export async function fetchResidentsStatsByFacility(apiKey) {
-  if (!apiKey?.trim()) throw new Error('API キーがありません');
+  if (!canCallSheetsApi(apiKey)) throw new Error('API キーがありません');
   const tabs = await fetchSheetTabs(apiKey);
   const configPairs = [];
   for (const def of CARELINK_FACILITIES) {
@@ -1874,7 +1879,7 @@ function resolveSheetTabTitle(tabs, def) {
  * @param {string} apiKey
  */
 export async function fetchResidentsAllTabs(apiKey) {
-  if (!apiKey?.trim()) throw new Error('API キーがありません');
+  if (!canCallSheetsApi(apiKey)) throw new Error('API キーがありません');
   const tabs = await fetchSheetTabs(apiKey);
   const all = [];
   const configPairs = [];
@@ -1947,7 +1952,7 @@ export async function fetchResidentsAllTabs(apiKey) {
  * @param {number} sheetIdNum
  */
 export async function fetchResidentsSingleTabBySheetId(apiKey, sheetIdNum) {
-  if (!apiKey?.trim()) throw new Error('API キーがありません');
+  if (!canCallSheetsApi(apiKey)) throw new Error('API キーがありません');
   const tabs = await fetchSheetTabs(apiKey);
   const tab = tabs.find((t) => t.sheetId === sheetIdNum);
   if (!tab) {
