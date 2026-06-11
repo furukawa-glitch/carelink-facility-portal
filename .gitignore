@@ -51,3 +51,4 @@ facility-portal/.env*.local
 
 .env
 .vercel
+.env.vercel.local

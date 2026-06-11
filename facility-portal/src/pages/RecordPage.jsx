@@ -1853,10 +1853,19 @@ export function RecordPage({
   const headerResidentCountSubtitle = useMemo(() => {
     if (!selectedDef) return '施設を選択してください';
     const sheetN = getResidentCountFromSheetSummary(selectedSheetTitle);
+    const filteredN = filteredResidents.length;
+    const totalN = allResidents.length;
     const n =
-      sheetN != null && Number.isFinite(sheetN) ? Math.round(sheetN) : filteredResidents.length;
-    return `${selectedDef.tabLabel}：${n} 名`;
-  }, [selectedDef, selectedSheetTitle, filteredResidents.length, lastUpdated]);
+      sheetN != null && Number.isFinite(sheetN) ? Math.round(sheetN) : filteredN;
+    const base = `${selectedDef.tabLabel}：${n} 名`;
+    if (totalN > 0 && filteredN === 0 && totalN !== filteredN) {
+      return `${base}（名簿全体 ${totalN} 名は読込済み・施設照合0件）`;
+    }
+    if (totalN > 0 && filteredN > 0 && filteredN !== totalN) {
+      return `${base}（名簿全体 ${totalN} 名）`;
+    }
+    return base;
+  }, [selectedDef, selectedSheetTitle, filteredResidents.length, allResidents.length, lastUpdated]);
 
   const visitNursingStats = useMemo(() => {
     const count = Report.countVisitNursingSpecialAmong(filteredResidents);
@@ -2173,11 +2182,24 @@ export function RecordPage({
     if (isManualRefresh) setRefreshing(true);
     else setLoading(true);
     setError('');
-    try {
-      const { residents, source, mode } = await fetchResidentsFromSheet({
+    const fetchOnce = async () =>
+      fetchResidentsFromSheet({
         forceRefresh: Boolean(isManualRefresh),
       });
+    try {
+      let result;
+      try {
+        result = await fetchOnce();
+      } catch (firstErr) {
+        if (!isManualRefresh) {
+          await new Promise((r) => window.setTimeout(r, 900));
+          result = await fetchResidentsFromSheet({ forceRefresh: true });
+        } else {
+          throw firstErr;
+        }
+      }
       if (seq !== loadSeqRef.current) return;
+      const { residents, source, mode } = result;
       const rows = Report.applyInjuryDiseaseImportsToResidentList(residents);
       setAllResidents(rows);
       Report.runBpDiastolicLowBulkApplyIfNeeded(rows.map((r) => String(r?.id ?? '')));
@@ -2185,6 +2207,11 @@ export function RecordPage({
         source: String(source ?? ''),
         mode: String(mode ?? ''),
       });
+      if (!rows.length && isManualRefresh) {
+        setError(
+          '名簿が0件です。Googleスプレッドシートの共有（閲覧可）と Vercel の VITE_GOOGLE_SHEETS_API_KEY を確認してください。'
+        );
+      }
       Report.seedDemoIfEmpty(residents);
       setLastUpdated(new Date());
       setGoogleCalendarReloadRev((n) => n + 1);
@@ -2207,18 +2234,25 @@ export function RecordPage({
       if (seq !== loadSeqRef.current) return;
       const raw = e instanceof Error ? e.message : 'データの取得に失敗しました';
       const quotaLike = /quota exceeded|クォータ|429/i.test(raw);
-      const hint = quotaLike ?
-        ' Google 側の「1分あたりの読み取り」上限です。1〜2分待ってから「更新」を押すか、Cloud Console で Sheets API のクォータを確認してください。'
-      : '';
+      const hint = quotaLike
+        ? ' Google 側の「1分あたりの読み取り」上限です。1〜2分待ってから「更新」を押すか、Cloud Console で Sheets API のクォータを確認してください。'
+        : '';
       setError(raw + hint);
       setFetchSourceMeta(null);
-      setAllResidents((prev) => (quotaLike && prev.length > 0 ? prev : []));
+      setAllResidents((prev) => (prev.length > 0 ? prev : []));
     } finally {
       if (seq === loadSeqRef.current) {
         setLoading(false);
         setRefreshing(false);
       }
     }
+  }, []);
+
+  const selectFacilityTab = useCallback((sheetTitle) => {
+    const t = String(sheetTitle ?? '').trim();
+    if (!t || !CARELINK_FACILITIES.some((f) => f.sheetTitle === t)) return;
+    preferredSheetRef.current = t;
+    setSelectedSheetTitle(t);
   }, []);
 
   /** 開いた直後・ポータルから施設が変わったときはキャッシュを使わず必ず再取得する */
@@ -5307,6 +5341,27 @@ export function RecordPage({
           <section className="order-2 flex min-w-0 flex-col rounded-2xl border-2 border-slate-400 bg-white shadow-inner">
             <div className="shrink-0 border-b border-slate-200 bg-slate-100/90 px-2 py-1.5 sm:px-3 sm:py-2">
               <h2 className="text-base font-bold text-slate-900 sm:text-lg 2xl:text-xl">入居者一覧・異常監視</h2>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {CARELINK_FACILITIES.map((f) => {
+                  const active = selectedSheetTitle === f.sheetTitle;
+                  const count = allResidents.filter((r) => residentBelongsToFacilityTab(r, f.sheetTitle)).length;
+                  return (
+                    <button
+                      key={f.sheetTitle}
+                      type="button"
+                      onClick={() => selectFacilityTab(f.sheetTitle)}
+                      className={`rounded-lg border px-2 py-1 text-[11px] font-black sm:text-xs ${
+                        active
+                          ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                          : 'border-slate-300 bg-white text-slate-700 hover:border-blue-400 hover:bg-blue-50'
+                      }`}
+                    >
+                      {f.tabLabel}
+                      {count > 0 ? ` (${count})` : ''}
+                    </button>
+                  );
+                })}
+              </div>
               {residentFilterBanner ? (
                 <p className="mt-2 rounded-xl border-2 border-amber-500 bg-amber-50 px-3 py-2 text-xs font-bold leading-snug text-amber-950 sm:text-sm">
                   {residentFilterBanner}
@@ -5415,6 +5470,11 @@ export function RecordPage({
               ) : filteredResidents.length === 0 ? (
                 <div className="flex min-h-48 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center text-lg text-slate-600">
                   <p className="font-bold">表示できる入居者がいません。</p>
+                  {error ? (
+                    <p className="mt-3 max-w-lg rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-base font-bold leading-relaxed text-rose-900">
+                      {error}
+                    </p>
+                  ) : null}
                   {allResidents.length > 0 ? (
                     <p className="mt-3 max-w-lg text-base font-normal leading-relaxed text-slate-600">
                       名簿は {allResidents.length} 名読み込めていますが、いま選んでいる施設タブ（
@@ -5433,8 +5493,11 @@ export function RecordPage({
                     </p>
                   ) : (
                     <p className="mt-3 max-w-lg text-base font-normal leading-relaxed text-slate-600">
-                      名簿が0件です。1行目に「氏名」列があるか、APIキー・スプレッドシートIDを確認してください。
-                      画面上部の取得元表示（sheets_api / csv）と、<strong className="font-bold text-slate-800">更新</strong>ボタンも確認してください。
+                      名簿が0件です。右上の<strong className="font-bold text-slate-800">更新</strong>
+                      を押してください。
+                      {fetchSourceMeta
+                        ? ` 取得元: ${fetchSourceMeta.source}${fetchSourceMeta.mode ? `(${fetchSourceMeta.mode})` : ''}`
+                        : ' スプレッドシート API キー（VITE_GOOGLE_SHEETS_API_KEY）とシートの閲覧共有を確認してください。'}
                     </p>
                   )}
                 </div>
