@@ -27,15 +27,20 @@ export default async function handler(req, res) {
     return;
   }
 
-  const raw = String(req.url ?? '');
-  const pathOnly = raw.replace(/^\/api\/sheets-proxy/, '').split('?')[0];
+  const rawParts = req.query?.path;
+  const parts = Array.isArray(rawParts)
+    ? rawParts.map((p) => String(p ?? ''))
+    : rawParts != null
+      ? [String(rawParts)]
+      : [];
+  const pathOnly = parts.length ? `/${parts.join('/')}` : '';
   if (!pathOnly.startsWith('/v4/spreadsheets/')) {
     sendJson(res, 400, { ok: false, error: 'Invalid sheets path' });
     return;
   }
 
-  const qIdx = raw.indexOf('?');
-  const params = new URLSearchParams(qIdx >= 0 ? raw.slice(qIdx + 1) : '');
+  const qIdx = String(req.url ?? '').indexOf('?');
+  const params = new URLSearchParams(qIdx >= 0 ? String(req.url).slice(qIdx + 1) : '');
   params.set('key', apiKey);
   const target = `https://sheets.googleapis.com${pathOnly}?${params.toString()}`;
 
