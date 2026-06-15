@@ -68,6 +68,7 @@ export function mapDbResidentRowToApp(row, opts = {}) {
     isBalloon: false,
     isEnteral: Boolean(row.is_enteral ?? row.isEnteral),
     homeDoctor: String(row.home_doctor ?? row.homeDoctor ?? '').trim(),
+    careManagerLabel: String(row.care_manager_label ?? row.careManagerLabel ?? '').trim(),
     history: { patrols: [], week: [] },
     managerWords: '',
   };
@@ -94,6 +95,7 @@ export function mapAppResidentToSyncPayload(resident) {
     careLevelLabel: String(resident.careLevelLabel ?? '').trim(),
     condition: String(resident.condition ?? '').trim(),
     homeDoctor: String(resident.homeDoctor ?? '').trim(),
+    careManagerLabel: String(resident.careManagerLabel ?? resident.careManager ?? '').trim(),
     insuranceLabel: String(resident.insuranceLabel ?? '').trim(),
     insuranceCategory: String(resident.insuranceCategory ?? '').trim(),
     birthDateLabel: String(resident.birthDateLabel ?? '').trim(),

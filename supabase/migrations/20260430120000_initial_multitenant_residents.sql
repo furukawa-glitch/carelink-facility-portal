@@ -93,6 +93,8 @@ create table if not exists public.residents (
   age_label text,
   gender_label text,
 
+  care_manager_label text,
+
   home_doctor text,
 
   meal_count_this_month integer not null default 0,

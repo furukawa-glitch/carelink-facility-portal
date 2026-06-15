@@ -1188,6 +1188,7 @@ function rowsToResidents(rows, defaultFacilityName, options) {
     age: colIndex(headers, ['年齢', '満年齢', '歳']),
     gender: colIndex(headers, ['性別', '男女', 'gender']),
     homeDoctor: colIndex(headers, ['在宅医', '在宅医師', '主治医', '担当医', 'かかりつけ医', '主治医氏名']),
+    careManager: colIndex(headers, ['ケアマネ', '担当ケアマネ', 'ケアマネジャー', 'CM', '担当CM', 'ケアマネ名']),
   };
 
   const medColForced =
@@ -1271,6 +1272,7 @@ function rowsToResidents(rows, defaultFacilityName, options) {
     const insuranceLabel = ix.insurance >= 0 ? String(row[ix.insurance] ?? '').trim() : '';
     const insuranceCategory = normalizeInsuranceCategory(insuranceLabel);
     const homeDoctor = ix.homeDoctor >= 0 ? String(row[ix.homeDoctor] ?? '').trim() : '';
+    const careManagerLabel = ix.careManager >= 0 ? String(row[ix.careManager] ?? '').trim() : '';
 
     let careLevelNormalized = normalizeCareLevelLabel(careLevelLabel);
     if (!careLevelNormalized) {
@@ -1407,6 +1409,7 @@ function rowsToResidents(rows, defaultFacilityName, options) {
       /** 名簿の経管メニュー列（製剤・量など） */
       enteralMenuDefault: enteralMenuDefault || undefined,
       homeDoctor,
+      careManagerLabel,
       history: { patrols: [], week: [] },
       managerWords: '',
     });

@@ -11,6 +11,14 @@ import {
   upsertResidentToCloud,
 } from '../services/residentRosterService.js';
 
+function rosterDbErrorMessage(err) {
+  const msg = err instanceof Error ? err.message : String(err ?? 'エラー');
+  if (/legacy_row_key does not exist|care_manager_label does not exist/i.test(msg)) {
+    return `${msg}\n\nSupabase → SQL Editor で「supabase/migrations/20260613120000_residents_roster_columns.sql」を実行してください。`;
+  }
+  return msg;
+}
+
 const EMPTY_FORM = Object.freeze({
   dbId: '',
   legacyRowKey: '',
@@ -21,6 +29,7 @@ const EMPTY_FORM = Object.freeze({
   careLevelLabel: '',
   condition: '',
   homeDoctor: '',
+  careManagerLabel: '',
   facility: '',
 });
 
@@ -62,7 +71,7 @@ export function ResidentRosterManager({ open, onClose, selectedSheetTitle = '', 
         setMessage('端末内名簿が空です。スプレッドシートから取り込むか、新規追加してください。');
       }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : '名簿の読込に失敗しました');
+      setMessage(rosterDbErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -98,6 +107,7 @@ export function ResidentRosterManager({ open, onClose, selectedSheetTitle = '', 
       careLevelLabel: String(row.careLevelLabel ?? '').trim(),
       condition: String(row.condition ?? '').trim(),
       homeDoctor: String(row.homeDoctor ?? '').trim(),
+      careManagerLabel: String(row.careManagerLabel ?? '').trim(),
       facility: String(row.facility ?? row.sourceSheetTitle ?? '').trim(),
     });
   }, []);
@@ -134,7 +144,7 @@ export function ResidentRosterManager({ open, onClose, selectedSheetTitle = '', 
       if (cloudEnabled) await loadRows();
       onRosterChanged?.();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : '保存に失敗しました');
+      setMessage(rosterDbErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -149,7 +159,7 @@ export function ResidentRosterManager({ open, onClose, selectedSheetTitle = '', 
       await loadRows();
       onRosterChanged?.();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : '取り込みに失敗しました');
+      setMessage(rosterDbErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -175,7 +185,7 @@ export function ResidentRosterManager({ open, onClose, selectedSheetTitle = '', 
         onRosterChanged?.();
         setMessage(`${name} 様を退去にしました。`);
       } catch (e) {
-        setMessage(e instanceof Error ? e.message : '退去処理に失敗しました');
+        setMessage(rosterDbErrorMessage(e));
       } finally {
         setBusy(false);
       }
@@ -321,6 +331,7 @@ export function ResidentRosterManager({ open, onClose, selectedSheetTitle = '', 
                   ['room', '居室', 'text'],
                   ['sheetStatus', '状態', 'select'],
                   ['careLevelLabel', '要介護度', 'text'],
+                  ['careManagerLabel', 'ケアマネ', 'text'],
                   ['condition', '病名・状態', 'text'],
                   ['homeDoctor', '在宅医', 'text'],
                 ].map(([key, label, kind]) => (

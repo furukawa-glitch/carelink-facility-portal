@@ -186,6 +186,7 @@ function mapResidentUpsertRow(organizationId, facilityId, r) {
     care_level_label: String(r.careLevelLabel ?? r.care_level_label ?? '').trim() || null,
     condition_note: String(r.condition ?? r.condition_note ?? '').trim() || null,
     home_doctor: String(r.homeDoctor ?? r.home_doctor ?? '').trim() || null,
+    care_manager_label: String(r.careManagerLabel ?? r.careManager ?? r.care_manager_label ?? '').trim() || null,
     insurance_label: String(r.insuranceLabel ?? r.insurance_label ?? '').trim() || null,
     insurance_category: String(r.insuranceCategory ?? r.insurance_category ?? '').trim() || null,
     birth_date_label: String(r.birthDateLabel ?? r.birth_date_label ?? '').trim() || null,
@@ -347,7 +348,7 @@ export default async function handler(req, res) {
       const rows = await supabaseSelectJson(
         supabaseUrl,
         serviceKey,
-        `residents?organization_id=eq.${organizationId}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,insurance_label,insurance_category,medical_insurance_target_label,is_medical_insurance_target,birth_date_label,age_label,gender_label,meal_count_this_month,is_enteral,source_sheet_title,facility_id,facilities(sheet_title,tab_label)&order=name.asc&limit=5000`
+        `residents?organization_id=eq.${organizationId}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,care_manager_label,insurance_label,insurance_category,medical_insurance_target_label,is_medical_insurance_target,birth_date_label,age_label,gender_label,meal_count_this_month,is_enteral,source_sheet_title,facility_id,facilities(sheet_title,tab_label)&order=name.asc&limit=5000`
       );
       sendJson(res, 200, { ok: true, residents: rows, count: rows.length });
       return;
@@ -384,14 +385,14 @@ export default async function handler(req, res) {
         const byId = await supabaseSelectJson(
           supabaseUrl,
           serviceKey,
-          `residents?id=eq.${encodeURIComponent(String(row.id))}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,source_sheet_title,facilities(sheet_title,tab_label)&limit=1`
+          `residents?id=eq.${encodeURIComponent(String(row.id))}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,care_manager_label,source_sheet_title,facilities(sheet_title,tab_label)&limit=1`
         );
         saved = byId[0] ?? null;
       } else if (row.legacy_row_key) {
         const byLegacy = await supabaseSelectJson(
           supabaseUrl,
           serviceKey,
-          `residents?organization_id=eq.${organizationId}&legacy_row_key=eq.${encodeURIComponent(String(row.legacy_row_key))}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,source_sheet_title,facilities(sheet_title,tab_label)&limit=1`
+          `residents?organization_id=eq.${organizationId}&legacy_row_key=eq.${encodeURIComponent(String(row.legacy_row_key))}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,care_manager_label,source_sheet_title,facilities(sheet_title,tab_label)&limit=1`
         );
         saved = byLegacy[0] ?? null;
       }

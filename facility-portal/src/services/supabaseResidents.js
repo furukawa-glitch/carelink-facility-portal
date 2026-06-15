@@ -38,6 +38,7 @@ export async function fetchResidentsFromSupabase() {
       age_label,
       gender_label,
       home_doctor,
+      care_manager_label,
       meal_count_this_month,
       is_enteral,
       source_sheet_title,
@@ -105,6 +106,7 @@ export async function fetchResidentsFromSupabase() {
       isBalloon: false,
       isEnteral: Boolean(row.is_enteral),
       homeDoctor: String(row.home_doctor ?? '').trim(),
+      careManagerLabel: String(row.care_manager_label ?? '').trim(),
       history: { patrols: [], week: [] },
       managerWords: '',
     });
