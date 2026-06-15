@@ -1545,7 +1545,18 @@ export function setFacilityNotice(linkKey, text, opts = {}) {
  */
 export function getResidentRoomNotes(residentId) {
   const rid = String(residentId ?? '').trim();
-  if (!rid) return { handover: '', treatment: '', mealStapleForm: '', mealSideForm: '', updatedAt: '' };
+  if (!rid) {
+    return {
+      handover: '',
+      treatment: '',
+      mealStapleForm: '',
+      mealSideForm: '',
+      mealFluidThicken: '',
+      mealSoup: '',
+      mealIndividualNote: '',
+      updatedAt: '',
+    };
+  }
   const all = readJson(LS.residentRoomNotes, {});
   const row = all[rid] && typeof all[rid] === 'object' ? all[rid] : {};
   return {
@@ -1553,6 +1564,9 @@ export function getResidentRoomNotes(residentId) {
     treatment: String(row.treatment ?? '').trim(),
     mealStapleForm: String(row.mealStapleForm ?? '').trim(),
     mealSideForm: String(row.mealSideForm ?? '').trim(),
+    mealFluidThicken: String(row.mealFluidThicken ?? '').trim(),
+    mealSoup: String(row.mealSoup ?? '').trim(),
+    mealIndividualNote: String(row.mealIndividualNote ?? '').trim(),
     updatedAt: String(row.updatedAt ?? '').trim(),
   };
 }
@@ -1575,6 +1589,9 @@ export function setResidentRoomNotes(residentId, patch, opts = {}) {
     treatment: String(patch?.treatment ?? prev.treatment ?? '').trim(),
     mealStapleForm: String(patch?.mealStapleForm ?? prev.mealStapleForm ?? '').trim(),
     mealSideForm: String(patch?.mealSideForm ?? prev.mealSideForm ?? '').trim(),
+    mealFluidThicken: String(patch?.mealFluidThicken ?? prev.mealFluidThicken ?? '').trim(),
+    mealSoup: String(patch?.mealSoup ?? prev.mealSoup ?? '').trim(),
+    mealIndividualNote: String(patch?.mealIndividualNote ?? prev.mealIndividualNote ?? '').trim(),
     updatedAt,
   };
   writeJson(LS.residentRoomNotes, all);

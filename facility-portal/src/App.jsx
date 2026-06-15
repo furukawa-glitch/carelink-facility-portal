@@ -66,6 +66,8 @@ import { residentDiseaseLabel } from './lib/residentDiseaseLabel.js';
 import { WATER_ML_50_OPTIONS } from './lib/careQuickCareFields.js';
 import { WeeklyFlowSheet } from './components/WeeklyFlowSheet.jsx';
 import { startCareEventsAutoSync } from './lib/careEventsAutoSync.js';
+import { startAppBuildUpdateWatcher } from './lib/appBuildUpdate.js';
+import { AppBuildUpdateBanner } from './components/AppBuildUpdateBanner.jsx';
 
 /** 施設向けの画面ロック。未設定のときはロックなし。設定時は全画面の前にパスワード必須。 */
 const VITE_FACILITY_PORTAL_PASSWORD = String(
@@ -1435,6 +1437,7 @@ const App = () => {
     /** @type {Record<string, unknown>[] | null} */ (null)
   );
   const [portalSearchLoading, setPortalSearchLoading] = useState(false);
+  const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
 
   const [residents, setResidents] = useState([]);
 
@@ -1458,6 +1461,10 @@ const App = () => {
         setPanoramaNursingRev((n) => n + 1);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    return startAppBuildUpdateWatcher(setAppUpdateAvailable);
   }, []);
 
   useEffect(() => {
@@ -3068,6 +3075,7 @@ const App = () => {
 
   return (
     <>
+      <AppBuildUpdateBanner visible={appUpdateAvailable} />
       {main}
       {residentAdminOverlay && selectedResident ? (
         <ResidentAdministrativeModals

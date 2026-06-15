@@ -13,6 +13,27 @@ export const MEAL_STAPLE_FORM_OPTIONS = ['', '普通食', '軟飯', 'おかゆ',
 /** 副食の食事形態（発注・記録用） */
 export const MEAL_SIDE_FORM_OPTIONS = ['', '普通食', '刻み', '極刻み', 'ムース', '経管栄養', '点滴'];
 
+/** 水分のとろみ（個別指示・カード） */
+export const MEAL_FLUID_THICKEN_OPTIONS = ['', 'とろみなし', '薄いとろみ', '中間のとろみ', '濃いとろみ'];
+
+/** 汁物・味噌汁（個別指示・カード） */
+export const MEAL_SOUP_OPTIONS = ['', '通常', '味噌汁なし', '汁物なし'];
+
+/**
+ * カードの食事個別指示を表示・記録用1行にまとめる
+ * @param {{ mealFluidThicken?: string; mealSoup?: string; mealIndividualNote?: string }} notes
+ */
+export function composeMealIndividualInstructions(notes) {
+  const parts = [];
+  const thicken = String(notes?.mealFluidThicken ?? '').trim();
+  const soup = String(notes?.mealSoup ?? '').trim();
+  const extra = String(notes?.mealIndividualNote ?? '').trim();
+  if (thicken && thicken !== 'とろみなし') parts.push(`水分${thicken}`);
+  if (soup && soup !== '通常') parts.push(soup);
+  if (extra) parts.push(extra);
+  return parts.join('・');
+}
+
 /** エンシュア・ソリタ等の経口栄養（缶・割合）一覧入力用 */
 export const ENSURE_PORTION_OPTIONS = ['', '1/3', '1/2', '2/3', '1缶'];
 

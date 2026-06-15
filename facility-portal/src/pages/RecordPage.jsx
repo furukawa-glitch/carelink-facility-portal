@@ -62,10 +62,13 @@ import {
 } from '../config/facilityIntegrations.js';
 import {
   composeMealAmountForLog,
+  composeMealIndividualInstructions,
   composeOralSupplementLines,
   getQuickCareMealEventKind,
   joinMultiHourlyStoolCell,
+  MEAL_FLUID_THICKEN_OPTIONS,
   MEAL_SIDE_FORM_OPTIONS,
+  MEAL_SOUP_OPTIONS,
   MEAL_STAPLE_FORM_OPTIONS,
   parseHourlyStoolCellValue,
   splitMultiHourlyStoolCell,
@@ -306,9 +309,11 @@ function applyEnteralBulkPlanToRow(row, res, facilityLinkKey, mealSlot) {
 /** カード個別指示で設定した食事形態を一覧表行へ反映 */
 function mealFormsFromRoomNotes(residentId) {
   const n = Report.getResidentRoomNotes(String(residentId ?? '').trim());
+  const extras = composeMealIndividualInstructions(n);
   return {
     mealStapleForm: String(n.mealStapleForm ?? '').trim(),
     mealSideForm: String(n.mealSideForm ?? '').trim(),
+    mealExtras: extras,
   };
 }
 
@@ -1818,7 +1823,8 @@ export function RecordPage({
         const merged = withMealFormsFromRoomNotes(id, next[id]);
         if (
           merged.mealStapleForm !== next[id].mealStapleForm ||
-          merged.mealSideForm !== next[id].mealSideForm
+          merged.mealSideForm !== next[id].mealSideForm ||
+          merged.mealExtras !== next[id].mealExtras
         ) {
           next[id] = merged;
           changed = true;
@@ -6039,6 +6045,62 @@ export function RecordPage({
                                 </select>
                               </label>
                             </div>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              <label className={`flex min-w-0 flex-1 flex-col gap-0.5 text-[9px] font-bold ${critical ? 'text-orange-50' : 'text-orange-900'}`}>
+                                水分とろみ
+                                <select
+                                  value={String(roomNotes.mealFluidThicken ?? '')}
+                                  onChange={(e) => {
+                                    Report.setResidentRoomNotes(String(res.id), { mealFluidThicken: e.target.value });
+                                    setRoomNotesRev((n) => n + 1);
+                                  }}
+                                  className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
+                                >
+                                  {MEAL_FLUID_THICKEN_OPTIONS.map((opt) => (
+                                    <option key={`card-ft-${opt || 'empty'}`} value={opt}>
+                                      {opt || '—'}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className={`flex min-w-0 flex-1 flex-col gap-0.5 text-[9px] font-bold ${critical ? 'text-orange-50' : 'text-orange-900'}`}>
+                                汁物
+                                <select
+                                  value={String(roomNotes.mealSoup ?? '')}
+                                  onChange={(e) => {
+                                    Report.setResidentRoomNotes(String(res.id), { mealSoup: e.target.value });
+                                    setRoomNotesRev((n) => n + 1);
+                                  }}
+                                  className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
+                                >
+                                  {MEAL_SOUP_OPTIONS.map((opt) => (
+                                    <option key={`card-soup-${opt || 'empty'}`} value={opt}>
+                                      {opt || '—'}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                            <label className={`mt-1.5 flex flex-col gap-0.5 text-[9px] font-bold ${critical ? 'text-orange-50' : 'text-orange-900'}`}>
+                              その他（個別）
+                              <input
+                                type="text"
+                                value={String(roomNotes.mealIndividualNote ?? '')}
+                                onChange={(e) => {
+                                  Report.setResidentRoomNotes(String(res.id), { mealIndividualNote: e.target.value });
+                                  setRoomNotesRev((n) => n + 1);
+                                }}
+                                placeholder="例: パン半分、とろみ剤朝のみ"
+                                className="w-full rounded border border-orange-300 bg-white px-1.5 py-1 text-[10px] font-bold text-slate-900 placeholder:font-normal placeholder:text-slate-400"
+                              />
+                            </label>
+                            {composeMealIndividualInstructions(roomNotes) ? (
+                              <p
+                                className={`mt-1 text-[9px] font-bold leading-snug ${critical ? 'text-orange-100' : 'text-orange-800'}`}
+                              >
+                                {composeMealIndividualInstructions(roomNotes)}
+                              </p>
+                            ) : null}
                           </div>
                           {String(res.insuranceLabel ?? '').trim() ? (
                             <div
