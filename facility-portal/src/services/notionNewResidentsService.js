@@ -95,6 +95,25 @@ export async function fetchNotionNewResidentsDatabase() {
 }
 
 /**
+ * DB のプロパティ名一覧（列の追加確認用）
+ * @param {string} databaseId
+ * @returns {Promise<string[]>}
+ */
+export async function fetchNotionDatabasePropertyNames(databaseId) {
+  const dbId = String(databaseId ?? '').trim();
+  if (!dbId) return [];
+  const idEnc = encodeURIComponent(dbId);
+  const res = await fetch(`/notion-api/databases/${idEnc}`, { method: 'GET' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data?.message || data?.code || res.statusText || 'Notion API エラー';
+    throw new Error(String(msg));
+  }
+  const props = /** @type {Record<string, unknown>} */ (data.properties ?? {});
+  return Object.keys(props);
+}
+
+/**
  * @param {string} databaseId
  * @returns {Promise<{ rows: ReturnType<typeof notionPageToRow>[]; rawCount: number }>}
  */

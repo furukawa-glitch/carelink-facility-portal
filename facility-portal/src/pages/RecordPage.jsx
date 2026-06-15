@@ -1395,6 +1395,7 @@ export function RecordPage({
   const [emergencyBusy, setEmergencyBusy] = useState(false);
   const [notionDoctorBusy, setNotionDoctorBusy] = useState(false);
   const [notionDoctorHint, setNotionDoctorHint] = useState('');
+  const [notionDoctorUrl, setNotionDoctorUrl] = useState('');
   const [accidentReportOpen, setAccidentReportOpen] = useState(false);
   const [accidentMonthlyOpen, setAccidentMonthlyOpen] = useState(false);
   const [nearMissOpen, setNearMissOpen] = useState(false);
@@ -2330,10 +2331,12 @@ export function RecordPage({
     if (!resident || !hasNotionDoctorLookupConfig()) return false;
     setNotionDoctorBusy(true);
     setNotionDoctorHint('');
+    setNotionDoctorUrl('');
     try {
       const info = await lookupResidentDoctorFromNotion(String(resident.name ?? ''));
       if (!info.ok) {
         setNotionDoctorHint(info.message);
+        if (info.notionUrl) setNotionDoctorUrl(info.notionUrl);
         if (alertOnFailure) alert(info.message);
         return false;
       }
@@ -2350,6 +2353,7 @@ export function RecordPage({
         };
       });
       setNotionDoctorHint(`Notion「${info.notionName}」から反映しました。`);
+      if (info.notionUrl) setNotionDoctorUrl(info.notionUrl);
       return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Notion 取得に失敗しました';
@@ -2364,6 +2368,7 @@ export function RecordPage({
   useEffect(() => {
     if (!selectedEmergencyResident) {
       setNotionDoctorHint('');
+      setNotionDoctorUrl('');
       return;
     }
     void applyNotionDoctorToEmergencyDraft(selectedEmergencyResident);
@@ -6570,6 +6575,16 @@ export function RecordPage({
                       ) : null}
                       {notionDoctorHint ? (
                         <p className="w-full text-[11px] font-bold leading-snug text-violet-800">{notionDoctorHint}</p>
+                      ) : null}
+                      {notionDoctorUrl ? (
+                        <a
+                          href={notionDoctorUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-black text-violet-700 underline"
+                        >
+                          Notionでこの方を開く
+                        </a>
                       ) : null}
                     </div>
                   ) : null}

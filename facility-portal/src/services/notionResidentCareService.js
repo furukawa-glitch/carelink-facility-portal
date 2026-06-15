@@ -4,10 +4,46 @@
 
 import {
   fetchNotionDatabaseById,
+  fetchNotionDatabasePropertyNames,
   hasNotionNewResidentsConfig,
   hasNotionResidentInstructionsConfig,
 } from './notionNewResidentsService.js';
 import { personNameMatchKey, normalizePersonNameForMatch } from '../lib/residentNameMatch.js';
+
+const DOCTOR_FIELD_KEYS = Object.freeze([
+  '主治医',
+  '主治医氏名',
+  '主治医名',
+  '担当医',
+  '担当医師',
+  'かかりつけ医',
+  '在宅医',
+  '在宅医師',
+  '医師名',
+  '医師',
+]);
+
+const AGENCY_FIELD_KEYS = Object.freeze([
+  '医療機関',
+  '医療機関名',
+  'クリニック',
+  'クリニック名',
+  'かかりつけ医療機関',
+  '病院名',
+  '病院',
+  '診療所',
+]);
+
+const ADDRESS_FIELD_KEYS = Object.freeze([
+  '医療機関住所',
+  'クリニック住所',
+  '医療機関所在地',
+]);
+
+/** @param {string[]} propNames @param {readonly string[]} keys */
+function dbHasPropertyLike(propNames, keys) {
+  return propNames.some((prop) => keys.some((k) => prop === k || prop.includes(k)));
+}
 
 /** @param {Record<string, string>} fields @param {string[]} keys */
 function pickField(fields, keys) {
@@ -42,6 +78,30 @@ function findNotionRowByResidentName(rows, residentName) {
 }
 
 /**
+ * @param {string} notionName
+ * @param {string[]} filledFieldNames
+ * @param {string[]} dbPropNames
+ */
+function buildEmptyDoctorFieldsMessage(notionName, filledFieldNames, dbPropNames) {
+  const hasDoctorCol = dbHasPropertyLike(dbPropNames, DOCTOR_FIELD_KEYS);
+  const hasAgencyCol = dbHasPropertyLike(dbPropNames, AGENCY_FIELD_KEYS);
+  const lines = [`Notionで「${notionName}」は見つかりましたが、主治医・医療機関を読み取れません。`];
+  if (!hasDoctorCol || !hasAgencyCol) {
+    lines.push('Notion DB に次の列を追加してください（種類は「テキスト」）：');
+    if (!hasDoctorCol) lines.push('・主治医');
+    if (!hasAgencyCol) lines.push('・医療機関名');
+    if (!dbHasPropertyLike(dbPropNames, ADDRESS_FIELD_KEYS)) lines.push('・医療機関住所（任意）');
+    lines.push('追加後、各入居者ページに値を入力してください。');
+  } else {
+    lines.push('「主治医」「医療機関名」列はありますが、未入力です。Notionで該当欄に入力してください。');
+  }
+  if (filledFieldNames.length) {
+    lines.push(`（この方で入力済みの列: ${filledFieldNames.join('、')}）`);
+  }
+  return lines.join(' ');
+}
+
+/**
  * @param {string} residentName
  * @returns {Promise<
  *   | { ok: true; primaryDoctor: string; medicalAgency: string; medicalAddress: string; notionUrl: string; sourceDb: string; notionName: string }
@@ -72,30 +132,15 @@ export async function lookupResidentDoctorFromNotion(residentName) {
   let lastApiError = '';
   for (const dbId of dbIds) {
     try {
-      const { rows } = await fetchNotionDatabaseById(dbId);
+      const [{ rows }, dbPropNames] = await Promise.all([
+        fetchNotionDatabaseById(dbId),
+        fetchNotionDatabasePropertyNames(dbId).catch(() => []),
+      ]);
       const hit = findNotionRowByResidentName(rows, name);
       if (!hit) continue;
-      const primaryDoctor = pickField(hit.fields, [
-        '主治医',
-        '主治医氏名',
-        '担当医',
-        'かかりつけ医',
-        '在宅医',
-        '医師名',
-      ]);
-      const medicalAgency = pickField(hit.fields, [
-        '医療機関',
-        '医療機関名',
-        'クリニック',
-        'かかりつけ医療機関',
-        '病院名',
-        '診療所',
-      ]);
-      const medicalAddress = pickField(hit.fields, [
-        '医療機関住所',
-        'クリニック住所',
-        '医療機関所在地',
-      ]);
+      const primaryDoctor = pickField(hit.fields, [...DOCTOR_FIELD_KEYS]);
+      const medicalAgency = pickField(hit.fields, [...AGENCY_FIELD_KEYS]);
+      const medicalAddress = pickField(hit.fields, [...ADDRESS_FIELD_KEYS]);
       if (!primaryDoctor && !medicalAgency && !medicalAddress) {
         const fieldNames = Object.entries(hit.fields)
           .filter(([, v]) => String(v ?? '').trim())
@@ -104,7 +149,7 @@ export async function lookupResidentDoctorFromNotion(residentName) {
         return {
           ok: false,
           reason: 'empty_fields',
-          message: `Notionで「${hit.name}」は見つかりましたが、主治医・医療機関の欄が未入力です。DBに「主治医」「医療機関名」列を追加して入力してください。`,
+          message: buildEmptyDoctorFieldsMessage(hit.name, fieldNames, dbPropNames),
           notionName: hit.name,
           notionUrl: String(hit.url ?? ''),
           fieldNames,
