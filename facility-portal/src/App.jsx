@@ -38,6 +38,7 @@ import {
   ClipboardList,
   FileSpreadsheet,
   FileText,
+  Printer,
   Stethoscope,
   Lock,
 } from 'lucide-react';
@@ -51,6 +52,14 @@ import { SettingsPage } from './pages/SettingsPage.jsx';
 import { ShiftSchedulePage } from './pages/ShiftSchedulePage.jsx';
 import { FacilityStatsPage } from './pages/FacilityStatsPage.jsx';
 import { CARELINK_FACILITIES } from './config/carelinkFacilities.js';
+import {
+  acknowledgeBereavementLetter,
+  countDueBereavementLetters,
+  defaultFamilySalutation,
+  listBereavementLetterEntries,
+  markBereavementLetterMailed,
+  setBereavementLetterDraft,
+} from './services/bereavementLetterService.js';
 import { fetchResidentsFromSheet } from './services/GoogleSheetService.js';
 import { vitalStateFromSaved, careStateFromTodayEvents } from './lib/residentDetailSeed.js';
 import { residentDiseaseLabel } from './lib/residentDiseaseLabel.js';
@@ -345,8 +354,8 @@ function MonthlyReportManager({ onBack, residents, apiKey }) {
           </p>
         )}
         <p className="text-xs font-bold text-slate-500">
-          参照データはこのブラウザに保存されたクイック記録・巡視・食事・排泄・バイタルログです。記録が少ない月は AI
-          も一般論になりやすいので、必ず内容を確認・編集してください。報告書（HTML）は家族・ケアマネ向けの文言と季節の装飾付きです。施設で撮影した写真を足すと、より喜ばれやすくなります（最大4枚・各1.5MB以下。端末上のみ保持し、HTMLに埋め込みます）。
+          参照データはこのブラウザに保存されたクイック記録・巡視・食事・排泄・バイタルログです。AI
+          生成後は必ず内容を確認・編集してください。A4サイズで「ご家族用」「ケアマネ用」に印刷できます。施設で撮影した写真を足すと、より喜ばれやすくなります（最大4枚・各1.5MB以下。端末上のみ保持し、HTMLに埋め込みます）。
         </p>
         {residents.map((res) => {
           const d = getDraft(res.id);
@@ -465,6 +474,38 @@ function MonthlyReportManager({ onBack, residents, apiKey }) {
                   <button
                     type="button"
                     onClick={() => {
+                      Report.openMonthlyFamilyReportPrint(res, reportMonth, d, {
+                        audience: 'family',
+                        photoDataUrls: monthlyReportPhotos[draftKey(res.id)] ?? [],
+                        facilityLabel: visual.facilityLabel || String(res.facility ?? res.sourceSheetTitle ?? ''),
+                        seasonArtMode: visual.seasonArtMode,
+                        photoCaption: '施設での様子',
+                      });
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl bg-sky-600 px-4 py-2 text-xs text-white"
+                  >
+                    <Printer size={14} aria-hidden />
+                    家族用印刷（A4）
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      Report.openMonthlyFamilyReportPrint(res, reportMonth, d, {
+                        audience: 'caremanager',
+                        photoDataUrls: monthlyReportPhotos[draftKey(res.id)] ?? [],
+                        facilityLabel: visual.facilityLabel || String(res.facility ?? res.sourceSheetTitle ?? ''),
+                        seasonArtMode: visual.seasonArtMode,
+                        photoCaption: '施設での様子',
+                      });
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl bg-indigo-700 px-4 py-2 text-xs text-white"
+                  >
+                    <Printer size={14} aria-hidden />
+                    ケアマネ用印刷（A4）
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
                       const hasPh = (monthlyReportPhotos[draftKey(res.id)] ?? []).length > 0;
                       const txt = [
                         `【${reportMonth} 月次ご報告】`,
@@ -509,6 +550,214 @@ function MonthlyReportManager({ onBack, residents, apiKey }) {
         {!residents.length && (
           <p className="text-center text-sm text-slate-500">名簿がまだありません。一覧から戻って同期してください。</p>
         )}
+      </main>
+    </div>
+  );
+}
+
+/**
+ * ご逝去から約半年：ご家族への手紙
+ * @param {{ onBack: () => void; apiKey: string }} props
+ */
+function BereavementLetterManager({ onBack, apiKey }) {
+  const [facilityFilter, setFacilityFilter] = useState('');
+  const [draftMap, setDraftMap] = useState(/** @type {Record<string, { familySalutation: string; body: string; directorClosing: string }>} */ ({}));
+  const [rowBusyId, setRowBusyId] = useState('');
+
+  const entries = useMemo(
+    () => listBereavementLetterEntries(facilityFilter ? { facilityLinkKey: facilityFilter } : {}),
+    [facilityFilter, draftMap]
+  );
+  const dueCount = entries.filter((e) => e.isDue).length;
+
+  const getDraft = (entry) => {
+    const k = entry.logId;
+    const saved = draftMap[k];
+    if (saved) return saved;
+    const fromStore = entry.draft;
+    return {
+      familySalutation:
+        fromStore.familySalutation || defaultFamilySalutation(entry.residentName, entry.gender),
+      body: fromStore.body,
+      directorClosing: fromStore.directorClosing || '施設長 一同',
+    };
+  };
+
+  const setDraftField = (logId, field, value) => {
+    setDraftMap((prev) => {
+      const entry = entries.find((e) => e.logId === logId);
+      const cur = prev[logId] ?? (entry ? getDraft(entry) : { familySalutation: '', body: '', directorClosing: '施設長 一同' });
+      return { ...prev, [logId]: { ...cur, [field]: value } };
+    });
+    setBereavementLetterDraft(logId, { [field]: value });
+  };
+
+  const runAi = async (entry) => {
+    if (!apiKey?.trim()) {
+      alert('VITE_GEMINI_API_KEY を .env に設定し、開発サーバーを再起動してください。');
+      return;
+    }
+    setRowBusyId(entry.logId);
+    try {
+      const out = await Report.fetchBereavementFamilyLetterAi(apiKey, entry);
+      setBereavementLetterDraft(entry.logId, out);
+      setDraftMap((prev) => ({ ...prev, [entry.logId]: { ...out } }));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'AI生成に失敗しました');
+    } finally {
+      setRowBusyId('');
+    }
+  };
+
+  const formatYmdJa = (ymd) => {
+    const m = String(ymd ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return ymd || '—';
+    return `${m[1]}年${parseInt(m[2], 10)}月${parseInt(m[3], 10)}日`;
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-32 font-sans font-bold">
+      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white p-6 font-bold">
+        <button type="button" onClick={onBack} className="text-slate-400 font-bold">
+          <ChevronLeft size={24} />
+        </button>
+        <h2 className="text-xl font-bold">ご家族への手紙（逝去から約半年）</h2>
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          施設
+          <select
+            value={facilityFilter}
+            onChange={(e) => setFacilityFilter(e.target.value)}
+            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm font-bold"
+          >
+            <option value="">すべて</option>
+            {CARELINK_FACILITIES.map((f) => (
+              <option key={f.linkKey} value={f.linkKey}>
+                {f.tabLabel}
+              </option>
+            ))}
+          </select>
+        </label>
+      </header>
+      <main className="mx-auto max-w-5xl space-y-4 p-6 font-bold">
+        {dueCount > 0 ? (
+          <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-900">
+            <strong>{dueCount} 件</strong>、お送りの目安日（逝去から約半年）を過ぎています。文案を確認のうえ、印刷して郵送してください。
+          </p>
+        ) : (
+          <p className="rounded-2xl bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600">
+            利用者カードの「入退所ログ」で<strong>死亡退去</strong>を登録すると、ここに表示されます。逝去から約半年後にお知らせし、ご家族への手紙を作成・印刷できます。
+          </p>
+        )}
+        {!apiKey?.trim() && (
+          <p className="rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+            AI文案には <code className="rounded bg-white px-1">VITE_GEMINI_API_KEY</code> が必要です。未設定の場合は手入力で作成できます。
+          </p>
+        )}
+        {entries.length === 0 ? (
+          <p className="text-center text-sm text-slate-500">
+            死亡退去の記録がありません。記録画面の利用者カードから「入退所ログ」→ 退院（退去）→ 死亡退去 を登録してください。
+          </p>
+        ) : null}
+        {entries.map((entry) => {
+          const d = getDraft(entry);
+          const busy = rowBusyId === entry.logId;
+          const statusLabel = entry.isMailed
+            ? `郵送済（${formatYmdJa(entry.draft.mailedAt)}）`
+            : entry.isDue
+              ? 'お送りの目安日を過ぎています'
+              : `あと ${entry.daysUntilFollowUp} 日（目安 ${formatYmdJa(entry.followUpDate)}）`;
+          const statusClass = entry.isMailed
+            ? 'bg-slate-100 text-slate-600'
+            : entry.isDue
+              ? 'bg-rose-100 text-rose-800'
+              : 'bg-sky-50 text-sky-800';
+          return (
+            <div
+              key={entry.logId}
+              className="flex flex-col gap-4 rounded-[2rem] border border-slate-100 bg-white p-6 shadow-sm lg:flex-row lg:gap-8"
+            >
+              <div className="lg:w-1/4">
+                <h3 className="text-lg font-bold">{entry.residentName} 様</h3>
+                <p className="text-xs text-slate-400">{entry.tabLabel}</p>
+                <p className="mt-2 text-xs text-slate-500">ご逝去 {formatYmdJa(entry.deathDate)}</p>
+                <p className={`mt-3 inline-block rounded-full px-3 py-1 text-[11px] font-black ${statusClass}`}>
+                  {statusLabel}
+                </p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void runAi(entry)}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-2.5 text-xs text-white disabled:opacity-50"
+                >
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />}
+                  AIで文案作成
+                </button>
+              </div>
+              <div className="min-w-0 flex-1 space-y-3">
+                <label className="block">
+                  <span className="text-xs font-bold text-slate-600">宛名</span>
+                  <input
+                    value={d.familySalutation}
+                    onChange={(e) => setDraftField(entry.logId, 'familySalutation', e.target.value)}
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-bold text-slate-600">手紙本文</span>
+                  <textarea
+                    value={d.body}
+                    onChange={(e) => setDraftField(entry.logId, 'body', e.target.value)}
+                    rows={12}
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold leading-relaxed outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-bold text-slate-600">結び（署名）</span>
+                  <input
+                    value={d.directorClosing}
+                    onChange={(e) => setDraftField(entry.logId, 'directorClosing', e.target.value)}
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </label>
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                  {!entry.isMailed && entry.isDue ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        acknowledgeBereavementLetter(entry.logId);
+                        setDraftMap((prev) => ({ ...prev }));
+                      }}
+                      className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs text-slate-700"
+                    >
+                      確認済みにする
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      Report.openBereavementLetterPrint(entry, d, { facilityLabel: entry.tabLabel });
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl bg-sky-600 px-4 py-2 text-xs text-white"
+                  >
+                    <Printer size={14} aria-hidden />
+                    A4印刷（郵送用）
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!window.confirm('郵送済みとして記録しますか？')) return;
+                      markBereavementLetterMailed(entry.logId);
+                      setDraftMap((prev) => ({ ...prev }));
+                    }}
+                    className="rounded-xl bg-slate-700 px-4 py-2 text-xs text-white"
+                  >
+                    郵送済みにする
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </main>
     </div>
   );
@@ -736,6 +985,29 @@ function FacilityPortalView({
           全事業所の在籍・要介護1〜5・男女・入院/退院/退去（状況列ベース）
         </span>
       </button>
+      {(() => {
+        const bereavementDue = countDueBereavementLetters();
+        return (
+          <button
+            type="button"
+            onClick={() => setView('bereavement_letter_manager')}
+            className="relative mt-6 flex w-full max-w-2xl flex-col items-center justify-center gap-1 rounded-[2rem] border-2 border-rose-200 bg-white px-6 py-5 text-slate-800 shadow-sm transition-all hover:border-rose-400 hover:shadow-md"
+          >
+            <div className="flex items-center justify-center gap-3">
+              <Heart size={22} className="shrink-0 text-rose-500" />
+              <span className="text-lg font-bold">ご家族への手紙（逝去から約半年）</span>
+              {bereavementDue > 0 ? (
+                <span className="rounded-full bg-rose-600 px-2.5 py-0.5 text-xs font-black text-white">
+                  {bereavementDue}
+                </span>
+              ) : null}
+            </div>
+            <span className="text-center text-xs font-bold text-slate-500">
+              死亡退去を登録すると、半年経過時にお知らせ。AI文案・A4印刷で郵送できます
+            </span>
+          </button>
+        );
+      })()}
       <button
         type="button"
         onClick={() => setView('notion_new_residents')}
@@ -2753,6 +3025,10 @@ const App = () => {
             residents={residents}
             apiKey={GEMINI_KEY}
           />
+        );
+      case 'bereavement_letter_manager':
+        return (
+          <BereavementLetterManager onBack={() => setView('portal')} apiKey={GEMINI_KEY} />
         );
       case 'facility_stats':
         return <FacilityStatsPage onBack={() => setView('portal')} />;

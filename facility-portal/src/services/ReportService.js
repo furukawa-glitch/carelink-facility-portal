@@ -3768,20 +3768,20 @@ export function buildMonthlyResidentReportContextForAi(resident, yearMonth) {
     `【施設・出所】facility列: ${String(resident?.facility ?? '—')} / 読込タブ: ${String(resident?.sourceSheetTitle ?? '—')}`
   );
   lines.push(
-    `【当月記録件数（この端末）】巡視 ${c.patrol} / 食事 ${c.meal} / 排泄 ${c.excretion} / バイタル ${c.vital_snapshot} / その他 ${c.other} / 合計 ${events.length}`
+    `【当月実施参考（内部用・件数や端末の話は本文に書かない）】巡視 ${c.patrol} / 食事 ${c.meal} / 排泄 ${c.excretion} / バイタル ${c.vital_snapshot} / その他 ${c.other} / 合計 ${events.length}`
   );
   if (snap && (snap.temp || snap.bpUpper || snap.pulse)) {
     lines.push(`【最新バイタル（入力済み）】${formatVitalMetaLine(/** @type {Record<string, unknown>} */ (snap))}`);
   }
   if (evalR) {
     lines.push(
-      `【自動検知参考】バイタル注意: ${evalR.vitalBad ? evalR.vitalFlags.map((f) => f.label).join('、') : 'なし'} / 排便遅延: ${evalR.stoolBad ? `約${evalR.stoolHours != null ? Math.round(evalR.stoolHours) : '?'}h` : 'なし'} / 排尿間隔: ${evalR.urineBad ? `約${evalR.urineHours != null ? Math.round(evalR.urineHours) : '?'}h` : 'なし'}`
+      `【内部参考・本文に書かない】バイタル注意: ${evalR.vitalBad ? evalR.vitalFlags.map((f) => f.label).join('、') : 'なし'} / 排便間隔: ${evalR.stoolBad ? `約${evalR.stoolHours != null ? Math.round(evalR.stoolHours) : '?'}h` : 'なし'} / 排尿間隔: ${evalR.urineBad ? `約${evalR.urineHours != null ? Math.round(evalR.urineHours) : '?'}h` : 'なし'}`
     );
   }
   lines.push(`【名簿の排便欄】${String(resident?.lastStoolDate ?? '—')}`);
-  if (contact) {
+  if (isEmergencyContactRegistered(contact)) {
     lines.push(
-      `【緊急連絡先（登録値）】${String(contact.name ?? '')}（${String(contact.relation ?? '')}）${String(contact.tel ?? '')}`
+      `【内部参考・本文に書かない】緊急連絡先: ${String(contact.name ?? '')}（${String(contact.relation ?? '')}）${String(contact.tel ?? '')}`
     );
   }
   if (nursingLines.length) {
@@ -3789,7 +3789,7 @@ export function buildMonthlyResidentReportContextForAi(resident, yearMonth) {
     nursingLines.forEach((t) => lines.push(`・${t}`));
   }
   lines.push('【当月のケアログ抜粋（時系列・最大45件）】');
-  lines.push(excerpt || '（ログなし。クイック記録等が未登録の月です。）');
+  lines.push(excerpt || '（当月のケアログ抜粋なし）');
   const imp = id && ym ? getResidentMonthlyReportImportLines(id, ym) : [];
   if (imp.length) {
     lines.push('【カイポケ等から取り込んだ当月のサービス記録（帳票CSV・この端末）】');
@@ -4004,6 +4004,50 @@ function stripJsonFence(text) {
   return m ? m[1].trim() : t;
 }
 
+/** @param {{ name?: string; tel?: string; relation?: string } | null | undefined} contact */
+function isEmergencyContactRegistered(contact) {
+  if (!contact || typeof contact !== 'object') return false;
+  const name = String(contact.name ?? '').trim();
+  const tel = String(contact.tel ?? '').trim();
+  if (!name || /未登録/u.test(name) || name === '—') return false;
+  if (!tel || tel === '—') return false;
+  return true;
+}
+
+/** 家族向け月次報告から、記録不足・端末・未登録など施設側の落ち度に読める表現を除去 */
+function sanitizeMonthlyFamilyReportProse(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return raw;
+  const forbidden =
+    /記録件数|記録上|記録のある範囲|端末への|端末に|記録端末|自動検知|巡視記録から|詳しく分かりません|クイック記録|ログが少|記録が少なく|記録からは|一部の.*記録となります|この端末|未登録|示唆|間隔が長く|可能性が示|緊急時のご連絡先|ご登録いただけ|登録のお願い|登録いただけます/u;
+  const parts = raw.split(/(?<=。)/u).map((s) => s.trim()).filter(Boolean);
+  let body = parts.filter((s) => !forbidden.test(s)).join('');
+  if (!body.trim()) body = raw;
+  return body
+    .replace(/記録のある範囲では[、,]?\s*/gu, '')
+    .replace(/記録上[、,]?\s*/gu, '')
+    .replace(/記録上は[^、。]+?[、,]\s*/gu, '')
+    .replace(/記録上では[^、。]+?[、,]\s*/gu, '')
+    .replace(/記録件数が少ないため[^。]+。/gu, '')
+    .replace(/自動検知システムからは[^。]+。/gu, '')
+    .replace(/巡視記録からは[^。]+。/gu, 'スタッフが日常的に見守り・巡視を行い、安心してお過ごしいただけるよう配慮しております。')
+    .replace(/緊急時のご連絡先[^。]+。/gu, '')
+    .replace(/この点につきましては、今後も特に注意して見守り、必要に応じて対応してまいります。/gu, '')
+    .replace(/[、,]{2,}/gu, '、')
+    .replace(/。{2,}/gu, '。')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function sanitizeMonthlyFamilyReportDraft(draft) {
+  const d = draft && typeof draft === 'object' ? draft : {};
+  return {
+    monthlyCondition: sanitizeMonthlyFamilyReportProse(d.monthlyCondition),
+    futureCarePoints: sanitizeMonthlyFamilyReportProse(d.futureCarePoints),
+    directorMessage: sanitizeMonthlyFamilyReportProse(d.directorMessage),
+  };
+}
+
 /**
  * 1か月の記録を参照し、家族向け月次報告の3文案を Gemini で生成
  * @param {string} apiKey
@@ -4027,22 +4071,27 @@ export async function fetchMonthlyResidentFamilyReportAi(apiKey, resident, yearM
           ? '秋（季節の変化・感染症に注意）'
           : '冬（寒暖差・体調管理）';
 
-  const prompt = `あなたは有料老人ホームの施設長です。次の「根拠データ」は同一ブラウザに保存された提供記録ログと名簿情報です。主な読者は「ご家族」と「担当ケアマネジャー」です。専門用語は使いすぎず、お手紙のように分かりやすく。データに書かれていないことは推測で補わず、不足時は「記録上は詳しく分かりません」などと明記してください。断定のない推測は「～の可能性」と書いてください。
+  const prompt = `あなたは有料老人ホームの施設長です。次の「根拠データ」は施設内のケア情報です。主な読者は「ご家族」と「担当ケアマネジャー」です。専門用語は使いすぎず、お手紙のように温かく前向きに書いてください。
+
+【重要：書いてはいけないこと】
+- 「記録上」「記録のある範囲では」「記録件数が少ない」「端末」「自動検知」「巡視記録からは」など、記録の不足・システム・端末を示す言い回しは一切使わないでください（施設の落ち度に読まれます）。
+- データが乏しい月でも、記録の少なさや分からないことは家族向け本文に書かないでください。おおむね穏やかに過ごされた、日々見守りながらお過ごしになった、など自然で前向きな表現にしてください。
+- 排泄・排尿の間隔など内部参考情報がある場合も、家族向けには「日々の見守りの中で体調変化に留意している」程度の前向きな表現にとどめ、「示唆」「可能性が示され」など不安を煽る表現は使わないでください。
+- 緊急連絡先の登録有無・未登録・登録のお願いは、本文に一切書かないでください（施設内部の事務に読まれます）。
+- 巡視・見守りは「スタッフが日常的に見守り・巡視を行っている」など、自然な文章で述べてください。
 
 【対象月の季節感】${yy}年${mNum}月（${monthSeasonHint}）— 冒頭で季節の一言（生活・体調への目配り）を1文程度入れてもよいです。無理に入れないでください。
 
 【根拠データ】
 ${ctx}
 
-根拠データに「カイポケ等から取り込んだ当月のサービス記録」が含まれる場合は、月次の様子の説明に織り込んでもよいですが、他の記録と矛盾する断定は避け、出典が取り込みCSVであることが分かる程度に留めてください。
+根拠データに「カイポケ等から取り込んだ当月のサービス記録」が含まれる場合は、月次の様子の説明に織り込んでもよいですが、他の情報と矛盾する断定は避けてください。
 
 【出力】
 次のキーを持つJSONオブジェクト1つだけを返してください（説明文・Markdownのフェンス禁止）。各値は日本語の敬体（です・ます調）の文章です。
-- monthlyCondition: 「1か月のようす」（家族向け。220～650字。バイタル・食事・排泄・巡視の記録の傾向が想像できる具体さ。前向きな言い回しを心がける。ケアマネがケアプランの参考にしやすい事実を混ぜてもよい）
+- monthlyCondition: 「1か月のようす」（家族向け。220～650字。バイタル・食事・排泄・見守りについて、事実に基づきつつ前向きで安心感のある文体。ケアマネが参考にしやすい具体さ）
 - futureCarePoints: 「今後一緒に大切にしたいこと」（100～420字。安全・栄養・医療連携。ご家族と施設の協力のイメージが持てる温度感）
-- directorMessage: 「施設からのひとこと」（50～200字。感謝や応援、季節の挨拶をひとふさでも可）
-
-記録件数が0に近い月は、冒頭で「この月は端末への記録が少なく」旨を述べ、一般論にとどまると明記してください。`;
+- directorMessage: 「施設からのひとこと」（50～200字。感謝や応援、季節の挨拶をひとふさでも可）`;
 
   const body = {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -4071,11 +4120,11 @@ ${ctx}
   const raw = stripJsonFence(text);
   try {
     const parsed = JSON.parse(raw);
-    return {
+    return sanitizeMonthlyFamilyReportDraft({
       monthlyCondition: String(parsed.monthlyCondition ?? '').trim(),
       futureCarePoints: String(parsed.futureCarePoints ?? '').trim(),
       directorMessage: String(parsed.directorMessage ?? '').trim(),
-    };
+    });
   } catch {
     throw new Error('AIのJSONを解釈できませんでした。もう一度お試しください。');
   }
@@ -4431,20 +4480,22 @@ function monthlyReportSeasonArt(kind) {
  * @param {Record<string, unknown>} resident
  * @param {string} yearMonth YYYY-MM
  * @param {{ monthlyCondition?: string; futureCarePoints?: string; directorMessage?: string }} draft
- * @param {{ photoDataUrls?: string[]; facilityLabel?: string; photoCaption?: string; seasonArtMode?: 'auto'|'none'|'spring'|'summer'|'autumn'|'winter'; kaipokeSupplementLines?: string[] }} [opts] photoDataUrls は data:image/* の配列。kaipokeSupplementLines 省略時は monthlyReportImportLines を参照
+ * @param {{ photoDataUrls?: string[]; facilityLabel?: string; photoCaption?: string; seasonArtMode?: 'auto'|'none'|'spring'|'summer'|'autumn'|'winter'; kaipokeSupplementLines?: string[]; audience?: 'family'|'caremanager' }} [opts] audience: family=ご家族向け, caremanager=ケアマネ向け（参考情報をやや多め）
  */
 export function buildMonthlyFamilyReportHtml(resident, yearMonth, draft = {}, opts = {}) {
   const name = String(resident?.name ?? '');
   const room = String(resident?.room ?? '');
   const ym = String(yearMonth ?? '');
   const today = new Date().toLocaleDateString('ja-JP');
-  const monthlyCondition = String(draft.monthlyCondition ?? '').trim();
-  const futureCarePoints = String(draft.futureCarePoints ?? '').trim();
-  const directorMessage = String(draft.directorMessage ?? '').trim();
+  const audience = opts.audience === 'caremanager' ? 'caremanager' : 'family';
+  const clean = sanitizeMonthlyFamilyReportDraft(draft);
+  const monthlyCondition = String(clean.monthlyCondition ?? '').trim();
+  const futureCarePoints = String(clean.futureCarePoints ?? '').trim();
+  const directorMessage = String(clean.directorMessage ?? '').trim();
   const facility = String(
     opts.facilityLabel ?? resident?.facility ?? resident?.sourceSheetTitle ?? ''
   ).trim();
-  const photoCaption = String(opts?.photoCaption ?? '施設での様子（選べる写真）').trim();
+  const photoCaption = String(opts?.photoCaption ?? '施設での様子').trim();
   const photos = sanitizeMonthlyReportPhotoDataUrls(opts?.photoDataUrls);
   const theme = getMonthlyReportSeasonalTheme(ym);
   const artModeRaw = String(opts?.seasonArtMode ?? 'auto').trim().toLowerCase();
@@ -4460,17 +4511,31 @@ export function buildMonthlyFamilyReportHtml(resident, yearMonth, draft = {}, op
     if (!p) return ym;
     return `${p[1]}年${String(parseInt(p[2], 10))}月`;
   })();
+  const audienceBadge = audience === 'caremanager' ? '担当ケアマネジャー様へ' : 'ご家族様へ';
+  const audienceLede =
+    audience === 'caremanager'
+      ? '当月の様子と今後のケアの方向性をご報告いたします。'
+      : '日々の見守りの様子をご報告申し上げます。';
+  const careLevel = String(resident?.careLevelLabel ?? resident?.careLevel ?? '').trim();
+  const conditionNote = String(resident?.condition ?? '').trim();
   const supplementLines = Array.isArray(opts.kaipokeSupplementLines)
     ? opts.kaipokeSupplementLines.filter((s) => String(s ?? '').trim())
     : getResidentMonthlyReportImportLines(String(resident?.id ?? ''), ym);
   const supplementBlock =
-    supplementLines.length === 0
-      ? ''
-      : `<h2><span class="n">＋</span> 取り込んだ記録（当月・カイポケ等CSV）</h2>
+    audience === 'caremanager' && supplementLines.length > 0
+      ? `<h2><span class="n">＋</span> 当月の主なサービス提供（参考）</h2>
   <ul class="imp-ul">${supplementLines
     .map((t) => `<li>${escapeHtml(String(t))}</li>`)
     .join('')}
-  </ul>`;
+  </ul>`
+      : '';
+  const careMetaBlock =
+    audience === 'caremanager' && (careLevel || conditionNote)
+      ? `<div class="care-meta">
+  ${careLevel ? `<p><strong>介護度</strong> ${escapeHtml(careLevel)}</p>` : ''}
+  ${conditionNote ? `<p><strong>主な状態</strong> ${escapeHtml(conditionNote)}</p>` : ''}
+</div>`
+      : '';
 
   const photoBlock =
     photos.length === 0
@@ -4501,48 +4566,67 @@ export function buildMonthlyFamilyReportHtml(resident, yearMonth, draft = {}, op
   <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet"/>
   <style>
     :root { --accent: ${theme.accent}; --soft: ${theme.soft}; }
-    body { font-family: "Zen Maru Gothic", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif; padding: 0; color: #1e293b; max-width: 800px; margin: 0 auto; line-height: 1.85; background: ${theme.cardBg}; }
-    .sheet { margin: 16px; border-radius: 20px; background: rgba(255,255,255,0.92); box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(15, 23, 42, 0.04); overflow: hidden; }
-    .band { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px; background: linear-gradient(90deg, var(--soft) 0%, #fff 55%); border-bottom: 3px solid var(--accent); }
+    @page { size: A4 portrait; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { font-family: "Zen Maru Gothic", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif; padding: 0; margin: 0; color: #1e293b; line-height: 1.85; background: #e2e8f0; }
+    .print-bar { position: sticky; top: 0; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; background: #0f172a; color: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
+    .print-bar p { margin: 0; font-size: 0.75rem; font-weight: 700; color: #cbd5e1; }
+    .print-btn { border: 0; border-radius: 10px; background: #0ea5e9; color: #fff; font-size: 0.9rem; font-weight: 800; padding: 10px 20px; cursor: pointer; }
+    .print-btn:hover { background: #0284c7; }
+    .page-wrap { display: flex; justify-content: center; padding: 12px 8px 24px; }
+    .sheet { width: 210mm; min-height: 277mm; margin: 0 auto; border-radius: 4px; background: rgba(255,255,255,0.98); box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(15, 23, 42, 0.06); overflow: hidden; }
+    .band { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; background: linear-gradient(90deg, var(--soft) 0%, #fff 55%); border-bottom: 3px solid var(--accent); }
     .band-ttl { min-width: 0; }
-    h1 { font-size: 1.5rem; margin: 0 0 4px; color: #0f172a; font-weight: 800; letter-spacing: 0.04em; }
-    .deco-line { color: #64748b; font-size: 0.8rem; font-weight: 700; margin: 0; }
+    h1 { font-size: 1.45rem; margin: 0 0 4px; color: #0f172a; font-weight: 800; letter-spacing: 0.04em; }
+    .deco-line { color: #64748b; font-size: 0.82rem; font-weight: 700; margin: 0; }
     .se-art { max-width: 100%; height: auto; }
     .badge { display: inline-block; background: var(--accent); color: #fff; font-size: 0.72rem; font-weight: 800; padding: 4px 10px; border-radius: 9999px; letter-spacing: 0.06em; }
+    .aud-badge { display: inline-block; margin-left: 6px; background: #334155; color: #fff; font-size: 0.68rem; font-weight: 800; padding: 3px 8px; border-radius: 9999px; }
     .meta { color: #64748b; font-size: 0.8rem; margin: 0; font-weight: 600; }
-    .lede { padding: 0 24px; margin: 0; font-size: 0.85rem; color: #475569; font-weight: 700; border-left: 4px solid var(--accent); background: #fff9; }
-    .lede p { margin: 12px 0; }
-    h2 { font-size: 1.05rem; margin: 22px 0 0; color: #0f172a; display: flex; align-items: center; gap: 8px; font-weight: 800; }
-    h2 .n { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: 9999px; background: var(--accent); color: #fff; font-size: 0.7rem; }
-    .box { border: 1.5px solid #e2e8f0; border-radius: 16px; padding: 16px 18px; margin: 10px 0 0; background: #fcfcff; }
-    .to-whom { margin: 18px 20px 0; padding: 12px 16px; border-radius: 14px; background: #fff7ed; border: 1px dashed #fbbf24; font-size: 0.82rem; color: #78350f; font-weight: 700; }
+    .lede { padding: 0 18px; margin: 0; font-size: 0.85rem; color: #475569; font-weight: 700; border-left: 4px solid var(--accent); background: #fff9; }
+    .lede p { margin: 10px 0; }
+    h2 { font-size: 1.02rem; margin: 18px 0 0; color: #0f172a; display: flex; align-items: center; gap: 8px; font-weight: 800; }
+    h2 .n { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: 9999px; background: var(--accent); color: #fff; font-size: 0.7rem; flex-shrink: 0; }
+    .box { border: 1.5px solid #e2e8f0; border-radius: 14px; padding: 14px 16px; margin: 8px 0 0; background: #fcfcff; font-size: 0.92rem; }
+    .to-whom { margin: 14px 18px 0; padding: 10px 14px; border-radius: 12px; background: #fff7ed; border: 1px dashed #fbbf24; font-size: 0.82rem; color: #78350f; font-weight: 700; }
+    .care-meta { margin: 0 18px; padding: 10px 14px; border-radius: 12px; background: #f0f9ff; border: 1px solid #bae6fd; font-size: 0.82rem; color: #0c4a6e; font-weight: 700; }
+    .care-meta p { margin: 4px 0; }
     .director { border-color: #cbd5e1; background: linear-gradient(180deg, #f8fafc, #f1f5f9); }
-    .footer { margin: 20px; padding: 12px; font-size: 0.7rem; color: #94a3b8; line-height: 1.5; }
-    .photo-sec { margin: 0 20px; padding-bottom: 8px; }
-    h2.photo-h2 { color: var(--photo-accent, var(--accent)); margin-top: 24px; }
-    .photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
-    .ph { margin: 0; border-radius: 12px; overflow: hidden; background: #f1f5f9; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-    .ph-img { display: block; width: 100%; height: auto; max-height: 220px; object-fit: cover; }
-    .photo-hint { font-size: 0.7rem; color: #94a3b8; margin: 8px 0 0; }
-    .imp-ul { margin: 8px 20px 0; padding: 12px 14px 12px 1.75rem; list-style: disc; font-size: 0.86rem; font-weight: 700; color: #334155; background: #f8fafc; border-radius: 14px; border: 1px solid #e2e8f0; }
-    .imp-ul li { margin: 4px 0; }
-    .facility-hero { margin: 10px 20px 0; border: 1px solid #dbeafe; border-left: 5px solid var(--accent); border-radius: 14px; background: #f8fbff; padding: 10px 12px; }
-    .facility-hero .fac-name { font-size: 1.02rem; color: #0f172a; font-weight: 800; letter-spacing: 0.01em; }
+    .footer { margin: 16px 18px; padding: 10px; font-size: 0.68rem; color: #94a3b8; line-height: 1.5; }
+    .photo-sec { margin: 0 18px; padding-bottom: 8px; }
+    h2.photo-h2 { color: var(--photo-accent, var(--accent)); margin-top: 20px; }
+    .photo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .ph { margin: 0; border-radius: 10px; overflow: hidden; background: #f1f5f9; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .ph-img { display: block; width: 100%; height: auto; max-height: 180px; object-fit: cover; }
+    .photo-hint { font-size: 0.68rem; color: #94a3b8; margin: 6px 0 0; }
+    .imp-ul { margin: 8px 18px 0; padding: 10px 12px 10px 1.6rem; list-style: disc; font-size: 0.84rem; font-weight: 700; color: #334155; background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; }
+    .imp-ul li { margin: 3px 0; }
+    .facility-hero { margin: 10px 18px 0; border: 1px solid #dbeafe; border-left: 5px solid var(--accent); border-radius: 12px; background: #f8fbff; padding: 10px 12px; }
+    .facility-hero .fac-name { font-size: 1rem; color: #0f172a; font-weight: 800; letter-spacing: 0.01em; }
     .facility-hero .fac-sub { margin-top: 2px; font-size: 0.76rem; color: #64748b; font-weight: 700; }
+    .body-pad { padding: 4px 18px 16px; }
     @media print {
       .no-print { display: none !important; }
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .sheet { box-shadow: none; }
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .page-wrap { padding: 0; display: block; }
+      .sheet { width: auto; min-height: auto; margin: 0; border-radius: 0; box-shadow: none; page-break-inside: avoid; }
+      .photo-grid { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
 </head>
 <body>
+  <div class="no-print print-bar">
+    <p>A4サイズ（${escapeHtml(audienceBadge)}）— 印刷ダイアログで「PDFに保存」も選べます</p>
+    <button type="button" class="print-btn" onclick="window.print()">🖨 印刷する</button>
+  </div>
+  <div class="page-wrap">
   <div class="sheet">
     <div class="band">
       <div class="band-ttl">
         <span class="badge">${escapeHtml(theme.nameJa)}</span>
+        <span class="aud-badge">${escapeHtml(audienceBadge)}</span>
         <h1>月次のごあいさつ</h1>
-        <p class="deco-line">ご家族の皆さま、担当のケアマネジャー様</p>
+        <p class="deco-line">${escapeHtml(audience === 'caremanager' ? '担当ケアマネジャー様' : 'ご家族の皆さま')}</p>
       </div>
       ${resolvedArtKind ? `<div class="se-art-wrap">${monthlyReportSeasonArt(resolvedArtKind)}</div>` : ''}
     </div>
@@ -4550,19 +4634,20 @@ export function buildMonthlyFamilyReportHtml(resident, yearMonth, draft = {}, op
       <div class="fac-name">${escapeHtml(facilityHeadline)}</div>
       <div class="fac-sub">対象者 ${escapeHtml(name || '（氏名未入力）')} 様 / 対象月 ${escapeHtml(yLabel)}</div>
     </div>
-    <div class="lede" style="margin: 0 20px 6px"><p>${escapeHtml(theme.tagline)}</p></div>
-    <div class="to-whom">この文書は、<strong>記録端末</strong>に残された日々のケア記録に基づき作成した下書きです。お渡し前に、施設内で内容のご確認をお願いします。医療的な最終判断の代替ではありません。</div>
-    <p class="meta" style="padding: 14px 20px 0; margin:0">作成日 ${escapeHtml(today)} ／ 対象 ${escapeHtml(yLabel)} ／ 居室 ${escapeHtml(
+    <div class="lede" style="margin: 0 18px 6px"><p>${escapeHtml(theme.tagline)}</p></div>
+    <div class="to-whom">${escapeHtml(audienceLede)} 内容は施設内で確認のうえ、お渡しください。</div>
+    ${careMetaBlock}
+    <p class="meta" style="padding: 12px 18px 0; margin:0">作成日 ${escapeHtml(today)} ／ 対象 ${escapeHtml(yLabel)} ／ 居室 ${escapeHtml(
       room || '—'
     )}${facility ? ` ／ ${escapeHtml(facility)}` : ''}</p>
-    <p class="meta" style="padding:0 20px; margin:6px 0 0"><strong>対象者</strong> ${escapeHtml(name || '（氏名未入力）')} 様</p>
+    <p class="meta" style="padding:0 18px; margin:6px 0 0"><strong>対象者</strong> ${escapeHtml(name || '（氏名未入力）')} 様</p>
 
-    <div style="padding: 4px 20px 0">
+    <div class="body-pad">
     <h2><span class="n">1</span> この1か月のようす</h2>
-    <div class="box">${nl2br(monthlyCondition || '（未入力。AIで作成するか、お手元の記録を元に追記ください。）')}</div>
+    <div class="box">${nl2br(monthlyCondition || '（未入力。追記してください。）')}</div>
     <h2><span class="n">2</span> 今後一緒に大切にしたいこと</h2>
     <div class="box">${nl2br(
-      futureCarePoints || '（未入力。ご家族・多職種で共有したい方針を追記ください。）'
+      futureCarePoints || '（未入力。ご家族・多職種で共有したい方針を追記してください。）'
     )}</div>
     <h2><span class="n">3</span> 施設からのひとこと</h2>
     <div class="box director">${nl2br(
@@ -4570,12 +4655,173 @@ export function buildMonthlyFamilyReportHtml(resident, yearMonth, draft = {}, op
     )}</div>
     ${supplementBlock}
     ${photoBlock}
-    <p class="no-print" style="margin:18px 0 0;font-size:0.8rem;font-weight:700;color:#0ea5e9">🖨 ブラウザの「印刷」で PDF 保存したり、紙でお渡ししたりできます。</p>
     </div>
-    <p class="footer no-print">月次報告テンプレート ／ イラストは文書内の装飾です。掲載写真の個人情報・配慮は施設方針に従ってください。</p>
+    <p class="footer">${escapeHtml(facility || '施設')} ／ ${escapeHtml(yLabel)} 月次ご報告 ／ ${escapeHtml(audienceBadge)}</p>
+  </div>
   </div>
 </body>
 </html>`;
+}
+
+/**
+ * 月次報告を A4 印刷用ウィンドウで開く（印刷ダイアログを表示）
+ * @param {Record<string, unknown>} resident
+ * @param {string} yearMonth
+ * @param {object} draft
+ * @param {Parameters<typeof buildMonthlyFamilyReportHtml>[3]} [opts]
+ */
+export function openMonthlyFamilyReportPrint(resident, yearMonth, draft = {}, opts = {}) {
+  const html = buildMonthlyFamilyReportHtml(resident, yearMonth, draft, opts);
+  return openPrintableSummary(html);
+}
+
+/**
+ * ご逝去から約半年：ご家族への手紙を AI 生成
+ * @param {string} apiKey
+ * @param {import('./bereavementLetterService.js').BereavementLetterEntry} entry
+ * @returns {Promise<{ familySalutation: string; body: string; directorClosing: string }>}
+ */
+export async function fetchBereavementFamilyLetterAi(apiKey, entry) {
+  if (!apiKey?.trim()) throw new Error('VITE_GEMINI_API_KEY が未設定です。');
+  const name = String(entry?.residentName ?? '').trim();
+  const facility = String(entry?.tabLabel ?? '').trim();
+  const deathDate = String(entry?.deathDate ?? '').trim();
+  const followUpDate = String(entry?.followUpDate ?? '').trim();
+  const note = String(entry?.note ?? '').trim();
+  const gender = entry?.gender === 'female' ? '女性' : entry?.gender === 'male' ? '男性' : '';
+
+  const prompt = `あなたは有料老人ホームの施設長です。ご利用者がご逝去されてから約半年が経過した時期に、ご家族へお送りする手紙の文案を作成してください。
+
+【目的】
+- ご家族の悲しみや日々の生活に寄り添い、温かく、心配りのある文章にしてください。
+- 施設での思い出や、ご利用者の人柄への敬意を自然に織り込んでください。
+- これからもご家族が穏やかにお過ごしいただけるよう、そっと見守る気持ちを伝えてください。
+
+【重要：書いてはいけないこと】
+- 記録の不足、端末、未登録、施設側の不備や事務的な問題は一切書かないでください。
+- 死因の詳細、医療行為の具体的記録、施設内のトラブルは書かないでください。
+- 「記録上」「示唆」「可能性が示され」など不安を煽る表現は使わないでください。
+- 過度に宗教的・説教的な表現は避けてください。
+
+【参考情報】
+- ご利用者: ${name || '（氏名）'}${gender ? `（${gender}）` : ''}
+- 施設名: ${facility || '（施設）'}
+- ご逝去日: ${deathDate || '—'}
+- 手紙をお送りする目安日（逝去から約半年）: ${followUpDate || '—'}
+${note ? `- 施設メモ（参考・本文にそのまま書かない）: ${note}` : ''}
+
+【出力】
+次のキーを持つJSONオブジェクト1つだけを返してください（説明文・Markdownのフェンス禁止）。各値は日本語の敬体（です・ます調）です。
+- familySalutation: 宛名（例: 「○○様 ご家族各位」。30字以内）
+- body: 手紙本文（400～900字。冒頭の季節の挨拶、ご利用者への感謝と回想、ご家族への励まし、今後の見守りの気持ち。段落は改行2つで区切る）
+- directorClosing: 結びの署名行（例: 「施設長 一同」。30字以内）`;
+
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.45, maxOutputTokens: 4096 },
+  };
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!res.ok || !text) {
+    const msg = String(data?.error?.message ?? '');
+    throw new Error(msg || 'AI応答なし');
+  }
+  const raw = stripJsonFence(text);
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      familySalutation: String(parsed.familySalutation ?? '').trim(),
+      body: String(parsed.body ?? '').trim(),
+      directorClosing: String(parsed.directorClosing ?? '').trim() || '施設長 一同',
+    };
+  } catch {
+    throw new Error('AIのJSONを解釈できませんでした。もう一度お試しください。');
+  }
+}
+
+/**
+ * ご家族への手紙（A4印刷用HTML）
+ * @param {import('./bereavementLetterService.js').BereavementLetterEntry} entry
+ * @param {{ familySalutation?: string; body?: string; directorClosing?: string }} draft
+ * @param {{ facilityLabel?: string }} [opts]
+ */
+export function buildBereavementLetterHtml(entry, draft = {}, opts = {}) {
+  const name = String(entry?.residentName ?? '').trim();
+  const facility = String(opts.facilityLabel ?? entry?.tabLabel ?? '').trim();
+  const deathDate = String(entry?.deathDate ?? '').trim();
+  const followUpDate = String(entry?.followUpDate ?? '').trim();
+  const salutation = String(draft.familySalutation ?? '').trim() || `${name || 'ご利用'}様 ご家族各位`;
+  const bodyText = String(draft.body ?? '').trim();
+  const closing = String(draft.directorClosing ?? '').trim() || '施設長 一同';
+  const today = new Date().toLocaleDateString('ja-JP');
+  const deathLabel = deathDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$1年$2月$3日');
+
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ご家族への手紙 ${escapeHtml(name)} 様</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet"/>
+  <style>
+    @page { size: A4 portrait; margin: 18mm 16mm; }
+    * { box-sizing: border-box; }
+    body { font-family: "Zen Maru Gothic", "Hiragino Mincho ProN", "Yu Mincho", "MS PMincho", serif; margin: 0; padding: 0; color: #334155; line-height: 2; background: #f1f5f9; }
+    .print-bar { position: sticky; top: 0; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; background: #475569; color: #fff; }
+    .print-bar p { margin: 0; font-size: 0.75rem; font-weight: 700; color: #e2e8f0; }
+    .print-btn { border: 0; border-radius: 10px; background: #64748b; color: #fff; font-size: 0.9rem; font-weight: 800; padding: 10px 20px; cursor: pointer; }
+    .print-btn:hover { background: #334155; }
+    .page-wrap { display: flex; justify-content: center; padding: 12px 8px 24px; }
+    .sheet { width: 210mm; min-height: 277mm; margin: 0 auto; padding: 22mm 18mm 20mm; background: #fff; box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08); }
+    .fac { text-align: right; font-size: 0.82rem; font-weight: 700; color: #64748b; margin-bottom: 28px; letter-spacing: 0.08em; }
+    .date { text-align: right; font-size: 0.82rem; color: #64748b; margin-bottom: 36px; }
+    .to { font-size: 1.05rem; font-weight: 800; margin-bottom: 28px; color: #1e293b; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
+    .body { font-size: 0.95rem; white-space: pre-wrap; margin-bottom: 36px; color: #334155; }
+    .closing { text-align: right; font-size: 0.92rem; font-weight: 700; margin-top: 48px; color: #475569; }
+    .meta { margin-top: 40px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 0.65rem; color: #94a3b8; line-height: 1.6; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .page-wrap { padding: 0; }
+      .sheet { width: auto; min-height: auto; margin: 0; box-shadow: none; padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print print-bar">
+    <p>A4サイズ — ご家族への手紙（逝去から約半年）— 印刷またはPDF保存</p>
+    <button type="button" class="print-btn" onclick="window.print()">🖨 印刷する</button>
+  </div>
+  <div class="page-wrap">
+    <div class="sheet">
+      <div class="fac">${escapeHtml(facility || '施設')}</div>
+      <div class="date">${escapeHtml(today)}</div>
+      <div class="to">${escapeHtml(salutation)}</div>
+      <div class="body">${nl2br(bodyText || '（本文を入力してください。）')}</div>
+      <div class="closing">${nl2br(closing)}</div>
+      <p class="meta no-print">対象: ${escapeHtml(name || '—')} 様 ／ ご逝去 ${escapeHtml(deathLabel || deathDate || '—')} ／ お送り目安 ${escapeHtml(followUpDate || '—')}</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * @param {import('./bereavementLetterService.js').BereavementLetterEntry} entry
+ * @param {object} draft
+ * @param {{ facilityLabel?: string }} [opts]
+ */
+export function openBereavementLetterPrint(entry, draft = {}, opts = {}) {
+  const html = buildBereavementLetterHtml(entry, draft, opts);
+  return openPrintableSummary(html);
 }
 
 /**
