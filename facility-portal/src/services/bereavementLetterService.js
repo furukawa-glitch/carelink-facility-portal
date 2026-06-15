@@ -50,6 +50,7 @@ function readDrafts() {
 /** @param {Record<string, BereavementLetterDraft>} all */
 function writeDrafts(all) {
   localStorage.setItem(LS_DRAFTS, JSON.stringify(all));
+  void import('../lib/facilityPortalStoreSync.js').then((m) => m.queueBereavementLettersCloudSync());
 }
 
 /**

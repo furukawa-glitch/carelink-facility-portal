@@ -27,6 +27,8 @@ export const CARE_BACKUP_LS_KEYS = Object.freeze([
   'carelink_os_monthly_report_import_v1',
   'carelink_os_resident_medication_profile_v1',
   'carelink_os_home_visit_calendar_v1',
+  'carelink_move_in_out_log_v1',
+  'carelink_bereavement_letter_drafts_v1',
 ]);
 
 function readLsJson(key) {

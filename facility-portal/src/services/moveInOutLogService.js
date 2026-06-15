@@ -37,6 +37,7 @@ export function listMoveInOutLogs() {
 /** @param {MoveInOutLogRow[]} list */
 function saveLogs(list) {
   localStorage.setItem(LS_KEY, JSON.stringify(list.slice(0, MAX_ROWS)));
+  void import('../lib/facilityPortalStoreSync.js').then((m) => m.queueMoveInOutLogCloudSync());
 }
 
 /**

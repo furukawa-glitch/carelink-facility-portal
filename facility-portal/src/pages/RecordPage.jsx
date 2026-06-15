@@ -109,6 +109,7 @@ import {
 } from '../lib/injuryDiseaseCsv.js';
 import { CareAutoBackupPanel } from '../components/CareAutoBackupPanel.jsx';
 import { CareCloudSyncPanel } from '../components/CareCloudSyncPanel.jsx';
+import { FacilityBoardTextarea } from '../components/FacilityBoardTextarea.jsx';
 import { ResidentDailyScheduleModal } from '../components/ResidentDailyScheduleModal.jsx';
 import { residentScheduleSheetForFacility } from '../config/residentScheduleSheets.js';
 import {
@@ -1354,12 +1355,6 @@ export function RecordPage({
   const [nursingStartDate, setNursingStartDate] = useState(currentYmd);
   const [nursingEndDate, setNursingEndDate] = useState('');
   const [nursingRev, setNursingRev] = useState(0);
-  const [facilityNoticeDraft, setFacilityNoticeDraft] = useState('');
-  const [facilityNoticeSaveFlash, setFacilityNoticeSaveFlash] = useState(false);
-  const facilityNoticeDirtyRef = useRef(false);
-  const facilityNoticeFacilityRef = useRef('');
-  const facilityHandoverDirtyRef = useRef(false);
-  const facilityHandoverFacilityRef = useRef('');
   const [planDraftDate, setPlanDraftDate] = useState(currentYmd);
   const [planDraftTime, setPlanDraftTime] = useState('10:00');
   const [planDraftType, setPlanDraftType] = useState('受診');
@@ -1474,9 +1469,7 @@ export function RecordPage({
   const [daySvcExternalDraft, setDaySvcExternalDraft] = useState(/** @type {Record<string, boolean>} */ ({}));
   /** 個別申し送り・施設共通申し送りの再読込（App から戻ったとき等） */
   const [roomNotesRev, setRoomNotesRev] = useState(0);
-  const [facilityHandoverDraft, setFacilityHandoverDraft] = useState('');
   const [facilityHandoverItemDraft, setFacilityHandoverItemDraft] = useState('');
-  const [facilityHandoverSaveFlash, setFacilityHandoverSaveFlash] = useState(false);
   const [handoverViewYmd, setHandoverViewYmd] = useState(() => currentYmd());
   const selectedDef = useMemo(
     () => facilityDefBySheetTitle(selectedSheetTitle),
@@ -2044,29 +2037,12 @@ export function RecordPage({
   const continuousHandoverText =
     String(facilityHandoverMeta.text ?? '').trim() || String(board.handover ?? '').trim();
 
-  useEffect(() => {
-    const k = String(selectedDef?.linkKey ?? '').trim();
-    if (k !== facilityHandoverFacilityRef.current) {
-      facilityHandoverFacilityRef.current = k;
-      facilityHandoverDirtyRef.current = false;
-      setFacilityHandoverDraft(continuousHandoverText);
-      return;
-    }
-    if (facilityHandoverDirtyRef.current) return;
-    setFacilityHandoverDraft(continuousHandoverText);
-  }, [continuousHandoverText, selectedDef?.linkKey]);
+  const facilityNoticeInitial = useMemo(
+    () => (selectedFacilityLinkKey ? Report.getFacilityNotice(selectedFacilityLinkKey) : ''),
+    [selectedFacilityLinkKey, tick, nursingRev, roomNotesRev]
+  );
 
-  useEffect(() => {
-    const k = String(selectedDef?.linkKey ?? '').trim();
-    if (k !== facilityNoticeFacilityRef.current) {
-      facilityNoticeFacilityRef.current = k;
-      facilityNoticeDirtyRef.current = false;
-      setFacilityNoticeDraft(k ? Report.getFacilityNotice(k) : '');
-      return;
-    }
-    if (facilityNoticeDirtyRef.current) return;
-    setFacilityNoticeDraft(k ? Report.getFacilityNotice(k) : '');
-  }, [selectedDef?.linkKey, tick, nursingRev, roomNotesRev]);
+  const facilityBoardRevision = tick + nursingRev + roomNotesRev;
 
   useEffect(() => {
     const bumpBoard = () => {
@@ -2098,25 +2074,25 @@ export function RecordPage({
     };
   }, []);
 
-  const saveFacilityNoticeBoard = useCallback(() => {
-    const k = String(selectedDef?.linkKey ?? '').trim();
-    if (!k) return;
-    Report.setFacilityNotice(k, facilityNoticeDraft);
-    facilityNoticeDirtyRef.current = false;
-    setFacilityNoticeSaveFlash(true);
-    window.setTimeout(() => setFacilityNoticeSaveFlash(false), 1500);
-    setTick((n) => n + 1);
-  }, [selectedDef, facilityNoticeDraft]);
+  const saveFacilityNoticeFromBoard = useCallback(
+    (text) => {
+      const k = String(selectedDef?.linkKey ?? '').trim();
+      if (!k) return;
+      Report.setFacilityNotice(k, text);
+      setTick((n) => n + 1);
+    },
+    [selectedDef]
+  );
 
-  const saveFacilityHandoverFromList = useCallback(() => {
-    const k = String(selectedDef?.linkKey ?? '').trim();
-    if (!k) return;
-    Report.setFacilityHandoverNote(k, facilityHandoverDraft);
-    facilityHandoverDirtyRef.current = false;
-    setRoomNotesRev((n) => n + 1);
-    setFacilityHandoverSaveFlash(true);
-    window.setTimeout(() => setFacilityHandoverSaveFlash(false), 1500);
-  }, [selectedDef, facilityHandoverDraft]);
+  const saveFacilityHandoverFromBoard = useCallback(
+    (text) => {
+      const k = String(selectedDef?.linkKey ?? '').trim();
+      if (!k) return;
+      Report.setFacilityHandoverNote(k, text);
+      setRoomNotesRev((n) => n + 1);
+    },
+    [selectedDef]
+  );
 
   const addFacilityHandoverItem = useCallback(() => {
     const k = String(selectedDef?.linkKey ?? '').trim();
@@ -4650,31 +4626,19 @@ export function RecordPage({
                     <Megaphone className="h-6 w-6 shrink-0 sm:h-7 sm:w-7" />
                     <h2 className="text-base font-black sm:text-lg 2xl:text-xl">本日の周知事項</h2>
                   </div>
-                  {facilityNoticeSaveFlash ? (
-                    <span className="text-[11px] font-black text-emerald-700">保存しました</span>
-                  ) : null}
                 </div>
-                <textarea
-                  value={facilityNoticeDraft}
-                  onFocus={() => {
-                    facilityNoticeDirtyRef.current = true;
-                  }}
-                  onChange={(e) => {
-                    facilityNoticeDirtyRef.current = true;
-                    setFacilityNoticeDraft(e.target.value);
-                  }}
+                <FacilityBoardTextarea
+                  syncKey={selectedFacilityLinkKey}
+                  externalRevision={facilityBoardRevision}
+                  initialValue={facilityNoticeInitial}
+                  onSave={saveFacilityNoticeFromBoard}
                   rows={4}
                   placeholder="施設全体への周知（面会制限・感染対策・本日の連絡事項など）"
                   className="min-h-[5.5rem] max-h-[50vh] w-full resize-y overflow-auto rounded-xl border-2 border-amber-300 bg-white/95 px-3 py-2 text-sm font-bold leading-relaxed text-amber-950 outline-none focus:ring-2 focus:ring-amber-400 sm:text-base"
+                  saveButtonClassName="mt-2 w-full rounded-lg bg-amber-600 px-3 py-2 text-sm font-black text-white hover:bg-amber-500"
+                  saveLabel="周知事項を保存（他PC・パノラマ画面と同期）"
                 />
-                <button
-                  type="button"
-                  onClick={saveFacilityNoticeBoard}
-                  className="mt-2 w-full rounded-lg bg-amber-600 px-3 py-2 text-sm font-black text-white hover:bg-amber-500"
-                >
-                  周知事項を保存（他PC・パノラマ画面と同期）
-                </button>
-                {!String(facilityNoticeDraft ?? '').trim() && board.notice !== facilityNoticeDraft ? (
+                {!String(facilityNoticeInitial ?? '').trim() && board.notice !== facilityNoticeInitial ? (
                   <p className="mt-1 text-[10px] font-bold text-amber-800/80">
                     未入力時はサンプル文が表示されることがあります。保存すると全端末で同じ内容になります。
                   </p>
@@ -5074,28 +5038,17 @@ export function RecordPage({
                     介護チームで全体共有する継続事項（施設内連絡）を記載します。利用者個別の内容は「行動メニュー → 個室メモ」へ。
                     個別分は下の一覧に出ます（現在: {individualHandoverList.length}件）。
                   </p>
-                <textarea
-                  value={facilityHandoverDraft}
-                  onFocus={() => {
-                    facilityHandoverDirtyRef.current = true;
-                  }}
-                  onChange={(e) => {
-                    facilityHandoverDirtyRef.current = true;
-                    setFacilityHandoverDraft(e.target.value);
-                  }}
+                <FacilityBoardTextarea
+                  syncKey={selectedFacilityLinkKey}
+                  externalRevision={facilityBoardRevision + roomNotesRev}
+                  initialValue={continuousHandoverText}
+                  onSave={saveFacilityHandoverFromBoard}
                   rows={4}
                   placeholder="例：夜間見守り強化／移乗は2名介助／水分促し など"
                   className="w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
+                  saveButtonClassName="mt-2 w-full rounded-xl bg-indigo-600 py-2 text-sm font-black text-white shadow-md hover:bg-indigo-500"
+                  saveLabel="介護申し送りを保存"
                 />
-                <button
-                  type="button"
-                  onClick={saveFacilityHandoverFromList}
-                  className={`mt-2 w-full rounded-xl py-2 text-sm font-black text-white shadow-md ${
-                    facilityHandoverSaveFlash ? 'bg-emerald-600' : 'bg-indigo-600 hover:bg-indigo-500'
-                  }`}
-                >
-                  {facilityHandoverSaveFlash ? '保存しました' : '介護申し送りを保存'}
-                </button>
                 <div className="mt-3 rounded-xl border-2 border-indigo-200 bg-white p-2.5">
                   <p className="mb-1 text-[11px] font-black text-indigo-900">単発の申し送りを追加（不要時は下で削除）</p>
                   <textarea

@@ -14,6 +14,8 @@ export const FACILITY_STORE_RESIDENT_SCHEDULE = 'resident_daily_schedule';
 export const FACILITY_STORE_BULK_DRAFT = 'bulk_table_draft';
 export const FACILITY_STORE_NURSING_DIRECTIVES = 'nursing_directives';
 export const FACILITY_STORE_FACILITY_NOTICE = 'facility_notice';
+export const FACILITY_STORE_MOVE_IN_OUT_LOG = 'move_in_out_log';
+export const FACILITY_STORE_BEREAVEMENT_LETTERS = 'bereavement_letters';
 /** 組織全体で1つ（利用者IDキー） */
 export const FACILITY_STORE_ORG_KEY = '__org__';
 
@@ -30,6 +32,8 @@ const LS_RESIDENT_RECURRING = 'carelink_os_resident_recurring_plans_v1';
 const LS_RESIDENT_PLANS_META = 'carelink_os_resident_daily_plans_meta_v1';
 const LS_BULK_DRAFT = 'carelink_os_bulk_table_draft_v1';
 const LS_BULK_DRAFT_META = 'carelink_os_bulk_table_draft_meta_v1';
+const LS_MOVE_IN_OUT = 'carelink_move_in_out_log_v1';
+const LS_BEREAVEMENT = 'carelink_bereavement_letter_drafts_v1';
 const FLUSH_DEBOUNCE_MS = 2_000;
 
 /** @type {Set<string>} */
@@ -177,6 +181,57 @@ function mergeFacilityNoticeRow(local, remote) {
   return local;
 }
 
+/**
+ * @param {unknown[]} local
+ * @param {{ logs?: unknown[]; savedAt?: string } | unknown[] | null | undefined} remote
+ */
+function mergeMoveInOutLogStore(local, remote) {
+  const localList = Array.isArray(local) ? local : [];
+  const remoteList = Array.isArray(remote)
+    ? remote
+    : Array.isArray(remote?.logs)
+      ? remote.logs
+      : [];
+  /** @type {Map<string, Record<string, unknown>>} */
+  const byId = new Map();
+  for (const x of [...localList, ...remoteList]) {
+    if (!x || typeof x !== 'object') continue;
+    const row = /** @type {Record<string, unknown>} */ (x);
+    const id = String(row.id ?? '').trim();
+    if (!id) continue;
+    const prev = byId.get(id);
+    const at = String(row.createdAt ?? '');
+    const pat = String(prev?.createdAt ?? '');
+    if (!prev || at >= pat) byId.set(id, row);
+  }
+  return [...byId.values()]
+    .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
+    .slice(0, 3000);
+}
+
+/**
+ * @param {Record<string, unknown>} local
+ * @param {{ drafts?: Record<string, unknown>; savedAt?: string } | Record<string, unknown> | null | undefined} remote
+ */
+function mergeBereavementLetterStore(local, remote) {
+  const out = { ...(local && typeof local === 'object' ? local : {}) };
+  const remoteDrafts =
+    remote && typeof remote === 'object' && !Array.isArray(remote) && remote.drafts && typeof remote.drafts === 'object'
+      ? remote.drafts
+      : remote && typeof remote === 'object' && !Array.isArray(remote)
+        ? remote
+        : {};
+  for (const [id, row] of Object.entries(remoteDrafts)) {
+    const key = String(id ?? '').trim();
+    if (!key || !row || typeof row !== 'object') continue;
+    const prev = out[key];
+    const at = String(row.updatedAt ?? '');
+    const pat = String(prev?.updatedAt ?? '');
+    if (!prev || at >= pat) out[key] = row;
+  }
+  return out;
+}
+
 function mergeResidentScheduleFacilityStore(local, remote) {
   if (!remote || typeof remote !== 'object') return local ?? null;
   const remoteAt = String(remote.savedAt ?? '');
@@ -207,6 +262,8 @@ function applyFacilityStoresToLocal(rows) {
   let bulkDraftChanged = 0;
   let nursingChanged = 0;
   let facilityNoticeChanged = 0;
+  let moveInOutChanged = 0;
+  let bereavementChanged = 0;
   const weeklyAll = readJson(LS_WEEKLY, {});
   const nursingAll = readJson(LS_NURSING, {});
   const nursingMetaAll = readJson(LS_NURSING_META, {});
@@ -220,6 +277,8 @@ function applyFacilityStoresToLocal(rows) {
   let residentMetaAll = readJson(LS_RESIDENT_PLANS_META, {});
   let bulkDraftAll = readJson(LS_BULK_DRAFT, {});
   let bulkDraftMetaAll = readJson(LS_BULK_DRAFT_META, {});
+  let moveInOutAll = readJson(LS_MOVE_IN_OUT, []);
+  let bereavementAll = readJson(LS_BEREAVEMENT, {});
 
   for (const row of rows) {
     const type = String(row?.store_type ?? '').trim();
@@ -335,6 +394,18 @@ function applyFacilityStoresToLocal(rows) {
         facilityNoticeAll[linkKey] = merged;
         facilityNoticeChanged = 1;
       }
+    } else if (type === FACILITY_STORE_MOVE_IN_OUT_LOG) {
+      const merged = mergeMoveInOutLogStore(moveInOutAll, row.payload);
+      if (JSON.stringify(merged) !== JSON.stringify(moveInOutAll)) {
+        moveInOutAll = merged;
+        moveInOutChanged = 1;
+      }
+    } else if (type === FACILITY_STORE_BEREAVEMENT_LETTERS) {
+      const merged = mergeBereavementLetterStore(bereavementAll, row.payload);
+      if (JSON.stringify(merged) !== JSON.stringify(bereavementAll)) {
+        bereavementAll = merged;
+        bereavementChanged = 1;
+      }
     }
   }
 
@@ -373,7 +444,13 @@ function applyFacilityStoresToLocal(rows) {
   if (facilityNoticeChanged) {
     writeJson(LS_FACILITY_NOTICE, facilityNoticeAll);
   }
-  if (nursingChanged || facilityNoticeChanged) {
+  if (moveInOutChanged) {
+    writeJson(LS_MOVE_IN_OUT, moveInOutAll);
+  }
+  if (bereavementChanged) {
+    writeJson(LS_BEREAVEMENT, bereavementAll);
+  }
+  if (nursingChanged || facilityNoticeChanged || moveInOutChanged || bereavementChanged) {
     if (typeof window !== 'undefined') {
       void import('../services/ReportService.js').then((m) => {
         window.dispatchEvent(new Event(m.FACILITY_BOARD_STORAGE_EVENT));
@@ -389,7 +466,9 @@ function applyFacilityStoresToLocal(rows) {
     residentScheduleChanged +
     bulkDraftChanged +
     nursingChanged +
-    facilityNoticeChanged;
+    facilityNoticeChanged +
+    moveInOutChanged +
+    bereavementChanged;
   if (storesMerged > 0 && typeof window !== 'undefined') {
     void import('./careEventsRealtimeSync.js').then((m) => {
       window.dispatchEvent(
@@ -409,6 +488,8 @@ function applyFacilityStoresToLocal(rows) {
     bulkDraftChanged,
     nursingChanged,
     facilityNoticeChanged,
+    moveInOutChanged,
+    bereavementChanged,
     storesMerged,
   };
 }
@@ -421,6 +502,16 @@ export function queueNursingDirectivesCloudSync(facilityLinkKey) {
 /** 本日の周知事項の保存直後にクラウドへ送る */
 export function queueFacilityNoticeCloudSync(facilityLinkKey) {
   queueFacilityPortalStoreSync(FACILITY_STORE_FACILITY_NOTICE, facilityLinkKey);
+}
+
+/** 入退所ログ（死亡退去含む）をクラウドへ送る */
+export function queueMoveInOutLogCloudSync() {
+  queueFacilityPortalStoreSync(FACILITY_STORE_MOVE_IN_OUT_LOG, FACILITY_STORE_ORG_KEY);
+}
+
+/** ご家族への手紙（逝去半年）をクラウドへ送る */
+export function queueBereavementLettersCloudSync() {
+  queueFacilityPortalStoreSync(FACILITY_STORE_BEREAVEMENT_LETTERS, FACILITY_STORE_ORG_KEY);
 }
 
 /** 経管メニュー下書き保存後にクラウドへ送る */
@@ -560,6 +651,21 @@ export async function flushFacilityPortalStoresCloud() {
         payload = all[facilityLinkKey] ?? null;
         if (!payload || typeof payload !== 'object') continue;
         updatedAt = String(payload.updatedAt ?? updatedAt);
+      } else if (storeType === FACILITY_STORE_MOVE_IN_OUT_LOG) {
+        const logs = readJson(LS_MOVE_IN_OUT, []);
+        if (!Array.isArray(logs) || !logs.length) continue;
+        const times = logs.map((x) => String(x?.createdAt ?? '')).filter(Boolean).sort();
+        updatedAt = times[times.length - 1] ?? updatedAt;
+        payload = { savedAt: updatedAt, logs };
+      } else if (storeType === FACILITY_STORE_BEREAVEMENT_LETTERS) {
+        const drafts = readJson(LS_BEREAVEMENT, {});
+        if (!drafts || !Object.keys(drafts).length) continue;
+        const times = Object.values(drafts)
+          .map((x) => String(x?.updatedAt ?? ''))
+          .filter(Boolean)
+          .sort();
+        updatedAt = times[times.length - 1] ?? updatedAt;
+        payload = { savedAt: updatedAt, drafts };
       } else {
         continue;
       }
@@ -599,6 +705,8 @@ export async function pullAndMergeFacilityPortalStores() {
       FACILITY_STORE_BULK_DRAFT,
       FACILITY_STORE_NURSING_DIRECTIVES,
       FACILITY_STORE_FACILITY_NOTICE,
+      FACILITY_STORE_MOVE_IN_OUT_LOG,
+      FACILITY_STORE_BEREAVEMENT_LETTERS,
     ],
   });
   const rows = Array.isArray(result?.stores) ? result.stores : [];
@@ -617,6 +725,8 @@ export async function pullAndMergeFacilityPortalStores() {
     bulkDraftChanged: applied.bulkDraftChanged,
     nursingChanged: applied.nursingChanged,
     facilityNoticeChanged: applied.facilityNoticeChanged,
+    moveInOutChanged: applied.moveInOutChanged,
+    bereavementChanged: applied.bereavementChanged,
   };
 }
 
@@ -730,6 +840,35 @@ export async function pushAllFacilityPortalStoresCloud() {
       facilityLinkKey,
       payload: row,
       updatedAt: String(row.updatedAt ?? new Date().toISOString()),
+    });
+    upserted++;
+  }
+  const moveInOutLogs = readJson(LS_MOVE_IN_OUT, []);
+  if (Array.isArray(moveInOutLogs) && moveInOutLogs.length) {
+    const times = moveInOutLogs.map((x) => String(x?.createdAt ?? '')).filter(Boolean).sort();
+    const updatedAt = times[times.length - 1] ?? new Date().toISOString();
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_MOVE_IN_OUT_LOG,
+      facilityLinkKey: FACILITY_STORE_ORG_KEY,
+      payload: { savedAt: updatedAt, logs: moveInOutLogs },
+      updatedAt,
+    });
+    upserted++;
+  }
+  const bereavementDrafts = readJson(LS_BEREAVEMENT, {});
+  if (bereavementDrafts && typeof bereavementDrafts === 'object' && Object.keys(bereavementDrafts).length) {
+    const times = Object.values(bereavementDrafts)
+      .map((x) => String(x?.updatedAt ?? ''))
+      .filter(Boolean)
+      .sort();
+    const updatedAt = times[times.length - 1] ?? new Date().toISOString();
+    await careSyncPost({
+      action: 'upsert_facility_store',
+      storeType: FACILITY_STORE_BEREAVEMENT_LETTERS,
+      facilityLinkKey: FACILITY_STORE_ORG_KEY,
+      payload: { savedAt: updatedAt, drafts: bereavementDrafts },
+      updatedAt,
     });
     upserted++;
   }

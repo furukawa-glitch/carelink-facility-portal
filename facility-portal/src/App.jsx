@@ -563,10 +563,21 @@ function BereavementLetterManager({ onBack, apiKey }) {
   const [facilityFilter, setFacilityFilter] = useState('');
   const [draftMap, setDraftMap] = useState(/** @type {Record<string, { familySalutation: string; body: string; directorClosing: string }>} */ ({}));
   const [rowBusyId, setRowBusyId] = useState('');
+  const [syncRev, setSyncRev] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setSyncRev((n) => n + 1);
+    window.addEventListener('carelink-care-events-sync', bump);
+    window.addEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, bump);
+    return () => {
+      window.removeEventListener('carelink-care-events-sync', bump);
+      window.removeEventListener(Report.FACILITY_BOARD_STORAGE_EVENT, bump);
+    };
+  }, []);
 
   const entries = useMemo(
     () => listBereavementLetterEntries(facilityFilter ? { facilityLinkKey: facilityFilter } : {}),
-    [facilityFilter, draftMap]
+    [facilityFilter, draftMap, syncRev]
   );
   const dueCount = entries.filter((e) => e.isDue).length;
 
@@ -645,7 +656,7 @@ function BereavementLetterManager({ onBack, apiKey }) {
           </p>
         ) : (
           <p className="rounded-2xl bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600">
-            利用者カードの「入退所ログ」で<strong>死亡退去</strong>を登録すると、ここに表示されます。逝去から約半年後にお知らせし、ご家族への手紙を作成・印刷できます。
+            利用者カードの「入退所ログ」で<strong>死亡退去</strong>を登録すると、ここに表示されます（全PCでクラウド同期）。逝去から約半年後にお知らせし、ご家族への手紙を作成・印刷できます。
           </p>
         )}
         {!apiKey?.trim() && (
