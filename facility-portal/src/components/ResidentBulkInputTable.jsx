@@ -5,16 +5,16 @@ import {
   STOOL_VOLUME_OPTIONS,
   STOOL_CHARACTER_OPTIONS,
   MEAL_WARI_OPTIONS,
-  MEAL_STAPLE_FORM_OPTIONS,
-  MEAL_SIDE_FORM_OPTIONS,
   ENSURE_PORTION_OPTIONS,
   WATER_ML_50_OPTIONS,
   countMealOrdersForSlot,
+  joinMultiHourlyStoolCell,
   parseHourlyStoolCellValue,
+  splitMultiHourlyStoolCell,
   getQuickCareMealEventKind,
   mapVoiceCareExtractToBulkRowPatch,
 } from '../lib/careQuickCareFields.js';
-import { HOURS_24 } from '../lib/hourlyCareGrid.js';
+import { HOURS_24, joinMultiHourlyValues, splitMultiHourlyValues } from '../lib/hourlyCareGrid.js';
 import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
 import { PATROL_SLOT_HOURS, joinPatrolDateTimeLocal, splitPatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { VoiceCareInput } from './VoiceCareInput.jsx';
@@ -97,6 +97,25 @@ function joinHourStoolCell(vol, char) {
   const c = String(char ?? '').trim();
   if (!v && !c) return '';
   return `${v}${HOURLY_STOOL_DELIM}${c}`;
+}
+
+function appendMultiHourlyUrine(codesCell, mlCell, code, ml) {
+  const codes = splitMultiHourlyValues(codesCell);
+  const mls = splitMultiHourlyValues(mlCell);
+  const c = String(code ?? '').trim();
+  if (!c) return { codes: codesCell, mls: mlCell };
+  codes.push(c);
+  mls.push(String(ml ?? '').trim());
+  return { codes: joinMultiHourlyValues(codes), mls: joinMultiHourlyValues(mls) };
+}
+
+function appendMultiHourlyStool(cell, vol, char) {
+  const entries = splitMultiHourlyStoolCell(cell);
+  const v = String(vol ?? '').trim();
+  const c = String(char ?? '').trim();
+  if (!v && !c) return cell;
+  entries.push({ stoolVolume: v, stoolCharacter: c });
+  return joinMultiHourlyStoolCell(entries);
 }
 
 function addDaysYmd(ymd, delta) {
@@ -306,7 +325,7 @@ export function ResidentBulkInputTable({
         </div>
       </div>
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
-        下の表では<strong>食事形態（主食・副食）</strong>と<strong>摂取割</strong>を行ごとに入力します（食事区分は上で統一）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。
+        下の表では<strong>摂取割（主食・副食）</strong>を行ごとに入力します（食事形態はカードの個別指示で設定）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。24時間表は保存後も修正できます。同じ時間に複数回ある場合はセル右の「＋」で追加してください。
         <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>・<strong>ソリタ</strong>は割合を選ぶと食事メモに残ります（例: エンシュア1/2 ソリタ1/3）。
         <strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。<strong className="text-slate-700"> 経管メニュー</strong>は上の<strong className="text-slate-700">朝・昼・夜</strong>に合わせて記録され、保存後は左の食事列の<strong className="text-slate-700">朝／昼／夕</strong>行に表示されます（1日2〜3回は区分を切り替えてそれぞれ保存）。
         <span className="ml-1 text-slate-700">横移動は上の「← 左へ / 右へ →」か、Shift+ホイールでも可能です。</span>
@@ -488,17 +507,10 @@ export function ResidentBulkInputTable({
               <th
                 ref={mealInputHeaderRef}
                 className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950"
-                title="主食の食事形態"
-              >
-                主食形態
-              </th>
-              <th
-                className="border border-slate-200 bg-orange-50 px-0.5 py-1 whitespace-nowrap text-orange-950"
                 title="上の「朝・昼・夜」が保存時に入ります"
               >
                 主食割<span className="block text-[9px] font-bold normal-case">（区分は上）</span>
               </th>
-              <th className="border border-slate-200 px-0.5 py-1 whitespace-nowrap">副食形態</th>
               <th className="border border-slate-200 px-0.5 py-1">副食割</th>
               <th className="border border-slate-200 bg-sky-50/70 px-0.5 py-1 whitespace-nowrap text-sky-900">水分ml</th>
               <th className="border border-slate-200 bg-violet-50/70 px-0.5 py-1 whitespace-nowrap text-violet-900">内服</th>
@@ -629,20 +641,20 @@ export function ResidentBulkInputTable({
                   tdBg: 'bg-sky-50/60',
                 },
                 {
-                  key: 'hourStoolVol',
-                  arr: hs,
-                  savedKey: 'stool',
-                  label: '便量',
-                  thBg: 'bg-amber-50 text-amber-900',
-                  tdBg: 'bg-amber-50/60',
-                },
-                {
                   key: 'hourStoolChar',
                   arr: hs,
                   savedKey: 'stool',
                   label: '性状',
                   thBg: 'bg-amber-100 text-amber-950',
                   tdBg: 'bg-amber-50/80',
+                },
+                {
+                  key: 'hourStoolVol',
+                  arr: hs,
+                  savedKey: 'stool',
+                  label: '便量',
+                  thBg: 'bg-amber-50 text-amber-900',
+                  tdBg: 'bg-amber-50/60',
                 },
               ];
 
@@ -713,83 +725,94 @@ export function ResidentBulkInputTable({
                               const isStoolVol = hr.key === 'hourStoolVol';
                               const isStoolChar = hr.key === 'hourStoolChar';
                               const isUrine = hr.key === 'hourUrine';
-                              const stoolParts = splitHourStoolCell(hr.arr[h]);
+                              const urineCodes = isUrine ? splitMultiHourlyValues(hu[h]) : [];
+                              const urineMls = isUrine ? splitMultiHourlyValues(hum[h]) : [];
+                              const stoolEntries = isStoolVol || isStoolChar ? splitMultiHourlyStoolCell(hs[h]) : [];
+                              const lastStool = stoolEntries.length > 0 ? stoolEntries[stoolEntries.length - 1] : null;
+                              const legacyStool = splitHourStoolCell(hr.arr[h]);
+                              const stoolVol = lastStool?.stoolVolume ?? legacyStool.vol ?? '';
+                              const stoolChar = lastStool?.stoolCharacter ?? legacyStool.char ?? '';
                               const cell = isPatrol
                                 ? ''
                                 : isStoolVol
-                                  ? stoolParts.vol
+                                  ? stoolVol
                                   : isStoolChar
-                                    ? stoolParts.char
-                                    : String(hr.arr[h] ?? '');
-                              const savedUrineCode = isUrine ? String(urineSavedCodes[h] ?? '').trim() : '';
-                              const savedUrineMl = isUrine ? String(urineSavedMls[h] ?? '').trim() : '';
-                              const urineDisplayCell = isUrine && saved ? savedUrineCode || cell : cell;
+                                    ? stoolChar
+                                    : isUrine
+                                      ? urineCodes[urineCodes.length - 1] || String(hu[h] ?? '').trim()
+                                      : String(hr.arr[h] ?? '');
                               const draftPatrolOn = isPatrol && hr.arr[h] === true;
-                              const filled = isPatrol ? saved || draftPatrolOn : saved || Boolean(isUrine ? urineDisplayCell || savedUrineMl : cell);
-                              const urineNeedsMl = isUrine && (urineDisplayCell === 'カテ' || urineDisplayCell === 'Ba' || urineDisplayCell === '尿測');
+                              const filled = isPatrol
+                                ? hp[h] === true
+                                : Boolean(isUrine ? String(hu[h] ?? '').trim() : isStoolVol || isStoolChar ? String(hs[h] ?? '').trim() : cell);
+                              const urineNeedsMl = isUrine && (cell === 'カテ' || cell === 'Ba' || cell === '尿測');
+                              const urineMlValue =
+                                urineMls.length > 0 ? urineMls[urineMls.length - 1] : String(hum[h] ?? '').trim();
+                              const multiCount = isUrine
+                                ? urineCodes.length
+                                : isStoolVol || isStoolChar
+                                  ? stoolEntries.length
+                                  : 0;
                               return (
-                                <td key={`${hr.key}-${h}`} className={`border border-slate-300 p-0 text-center ${hr.tdBg}`}>
+                                <td key={`${hr.key}-${h}`} className={`relative border border-slate-300 p-0 text-center ${hr.tdBg}`}>
                                   {isPatrol ? (
                                     <label
                                       className={`flex h-full min-h-[1.55rem] w-full min-w-[1.35rem] items-center justify-center rounded-sm border-2 px-0 py-0.5 transition ${
-                                        saved
-                                          ? 'cursor-default border-teal-900 bg-teal-900'
-                                          : draftPatrolOn
-                                            ? 'cursor-pointer border-sky-700 bg-sky-500 shadow-sm ring-1 ring-sky-300/90 hover:bg-sky-400'
-                                            : 'cursor-pointer border-dashed border-slate-300 bg-white hover:border-sky-500 hover:bg-sky-50/90'
+                                        draftPatrolOn || saved
+                                          ? 'cursor-pointer border-teal-900 bg-teal-900'
+                                          : 'cursor-pointer border-dashed border-slate-300 bg-white hover:border-sky-500 hover:bg-sky-50/90'
                                       }`}
                                       title={
                                         saved
-                                          ? 'この時間は保存済み（変更不可）'
+                                          ? 'チェックを外して保存すると取消できます'
                                           : draftPatrolOn
                                             ? 'チェックを外すと取消（まだ保存していません）'
-                                            : 'チェックでこの時間の巡視を記録予定にする → 行の保存で確定'
+                                            : 'チェックでこの時間の巡視を記録 → 行の保存で確定'
                                       }
                                     >
                                       <input
                                         type="checkbox"
-                                        checked={filled}
-                                        disabled={saved}
+                                        checked={hp[h] === true}
                                         onChange={() => {
-                                          if (saved) return;
-                                          const base = [...hr.arr];
+                                          const base = [...hp];
                                           base[h] = !(base[h] === true);
-                                          patchBulkRow(id, { [hr.key]: base });
+                                          patchBulkRow(id, { hourPatrol: base });
                                         }}
                                         className={`h-4 w-4 shrink-0 rounded ${
-                                          saved
+                                          draftPatrolOn || saved
                                             ? 'border-white/30 accent-teal-300'
-                                            : draftPatrolOn
-                                              ? 'border-white/40 accent-white'
-                                              : 'border-slate-300 accent-sky-600'
+                                            : 'border-slate-300 accent-sky-600'
                                         }`}
                                         aria-label={`${nm} ${hr.label} ${h}時`}
                                       />
                                     </label>
                                   ) : isUrine ? (
-                                    saved ? (
-                                      <div
-                                        className="flex min-h-[1.4rem] flex-col justify-center px-0 py-0.5 text-[8px] font-black leading-tight text-slate-900"
-                                        title="保存済み"
-                                      >
-                                        <span>{savedUrineCode || '—'}</span>
-                                        {savedUrineMl ? <span className="text-sky-800">{savedUrineMl}ml</span> : null}
-                                      </div>
-                                    ) : (
                                     <div className="flex min-h-[1.4rem] flex-col">
                                       <select
-                                        disabled={saved}
                                         value={cell}
                                         onChange={(e) => {
                                           const base = [...hu];
-                                          base[h] = e.target.value;
                                           const mlBase = [...hum];
-                                          if (e.target.value !== 'カテ' && e.target.value !== 'Ba' && e.target.value !== '尿測') mlBase[h] = '';
+                                          const codes = splitMultiHourlyValues(base[h]);
+                                          const mls = splitMultiHourlyValues(mlBase[h]);
+                                          const nextCode = e.target.value;
+                                          if (codes.length > 1) {
+                                            codes[codes.length - 1] = nextCode;
+                                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') {
+                                              mls[mls.length - 1] = '';
+                                            }
+                                            base[h] = joinMultiHourlyValues(codes);
+                                            mlBase[h] = joinMultiHourlyValues(mls);
+                                          } else {
+                                            base[h] = nextCode;
+                                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') mlBase[h] = '';
+                                          }
                                           patchBulkRow(id, { hourUrine: base, hourUrineMl: mlBase });
                                         }}
                                         className={`h-full w-full min-w-[1.15rem] bg-white px-0 py-0 text-[8px] font-black ${
                                           filled ? 'text-slate-900' : 'text-slate-500'
-                                        }`}
+                                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
+                                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
                                         aria-label={`${nm} ${hr.label} ${h}時`}
                                       >
                                         {HOURLY_URINE_OPTIONS.map((opt) => (
@@ -798,12 +821,18 @@ export function ResidentBulkInputTable({
                                           </option>
                                         ))}
                                       </select>
-                                      {urineNeedsMl && !saved ? (
+                                      {urineNeedsMl ? (
                                         <input
-                                          value={String(hum[h] ?? '')}
+                                          value={urineMlValue}
                                           onChange={(e) => {
                                             const mlBase = [...hum];
-                                            mlBase[h] = e.target.value;
+                                            const mls = splitMultiHourlyValues(mlBase[h]);
+                                            if (mls.length > 1) {
+                                              mls[mls.length - 1] = e.target.value;
+                                              mlBase[h] = joinMultiHourlyValues(mls);
+                                            } else {
+                                              mlBase[h] = e.target.value;
+                                            }
                                             patchBulkRow(id, { hourUrineMl: mlBase });
                                           }}
                                           placeholder="ml"
@@ -812,33 +841,77 @@ export function ResidentBulkInputTable({
                                           aria-label={`${nm} カテ尿量 ${h}時`}
                                         />
                                       ) : null}
+                                      {cell ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const appended = appendMultiHourlyUrine(hu[h], hum[h], cell, urineMlValue);
+                                            patchBulkRow(id, { hourUrine: [...hu].map((v, i) => (i === h ? appended.codes : v)), hourUrineMl: [...hum].map((v, i) => (i === h ? appended.mls : v)) });
+                                          }}
+                                          className="absolute right-0 top-0 z-10 min-w-[0.85rem] bg-sky-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-sky-600"
+                                          title="同じ時間に追加（例: 2回目のトイレ）"
+                                          aria-label={`${nm} 尿 ${h}時 追加`}
+                                        >
+                                          ＋
+                                        </button>
+                                      ) : null}
+                                      {multiCount > 1 ? (
+                                        <span className="text-[7px] font-black text-teal-800">×{multiCount}</span>
+                                      ) : null}
                                     </div>
-                                    )
                                   ) : (
-                                    <select
-                                      disabled={saved}
-                                      value={cell}
-                                      onChange={(e) => {
-                                        const base = [...hs];
-                                        const parts = splitHourStoolCell(base[h]);
-                                        if (isStoolVol) {
-                                          base[h] = joinHourStoolCell(e.target.value, parts.char);
-                                        } else {
-                                          base[h] = joinHourStoolCell(parts.vol, e.target.value);
-                                        }
-                                        patchBulkRow(id, { hourStool: base });
-                                      }}
-                                      className={`h-full min-h-[1.4rem] w-full min-w-[1.15rem] bg-white px-0 py-0 text-[8px] font-black ${
-                                        filled ? 'text-slate-900' : 'text-slate-500'
-                                      }`}
-                                      aria-label={`${nm} ${hr.label} ${h}時`}
-                                    >
-                                      {(isStoolVol ? STOOL_VOLUME_OPTIONS : STOOL_CHARACTER_OPTIONS).map((opt) => (
-                                        <option key={`${hr.key}-${opt || 'empty'}`} value={opt}>
-                                          {opt || '—'}
-                                        </option>
-                                      ))}
-                                    </select>
+                                    <div className="relative flex min-h-[1.4rem] flex-col">
+                                      <select
+                                        value={cell}
+                                        onChange={(e) => {
+                                          const base = [...hs];
+                                          const entries = splitMultiHourlyStoolCell(base[h]);
+                                          const nextVal = e.target.value;
+                                          if (entries.length > 1) {
+                                            const last = entries[entries.length - 1] || { stoolVolume: '', stoolCharacter: '' };
+                                            entries[entries.length - 1] = isStoolVol
+                                              ? { ...last, stoolVolume: nextVal }
+                                              : { ...last, stoolCharacter: nextVal };
+                                            base[h] = joinMultiHourlyStoolCell(entries);
+                                          } else {
+                                            const parts = splitHourStoolCell(base[h]);
+                                            base[h] = isStoolVol
+                                              ? joinHourStoolCell(nextVal, parts.char)
+                                              : joinHourStoolCell(parts.vol, nextVal);
+                                          }
+                                          patchBulkRow(id, { hourStool: base });
+                                        }}
+                                        className={`h-full min-h-[1.4rem] w-full min-w-[1.15rem] bg-white px-0 py-0 text-[8px] font-black ${
+                                          filled ? 'text-slate-900' : 'text-slate-500'
+                                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
+                                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
+                                        aria-label={`${nm} ${hr.label} ${h}時`}
+                                      >
+                                        {(isStoolVol ? STOOL_VOLUME_OPTIONS : STOOL_CHARACTER_OPTIONS).map((opt) => (
+                                          <option key={`${hr.key}-${opt || 'empty'}`} value={opt}>
+                                            {opt || '—'}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      {(stoolVol || stoolChar) ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const base = [...hs];
+                                            base[h] = appendMultiHourlyStool(base[h], stoolVol, stoolChar);
+                                            patchBulkRow(id, { hourStool: base });
+                                          }}
+                                          className="absolute right-0 top-0 z-10 min-w-[0.85rem] bg-amber-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-amber-600"
+                                          title="同じ時間に追加（例: 2回目の下痢）"
+                                          aria-label={`${nm} 便 ${h}時 追加`}
+                                        >
+                                          ＋
+                                        </button>
+                                      ) : null}
+                                      {multiCount > 1 ? (
+                                        <span className="text-[7px] font-black text-amber-900">×{multiCount}</span>
+                                      ) : null}
+                                    </div>
                                   )}
                                 </td>
                               );
@@ -1012,20 +1085,6 @@ export function ResidentBulkInputTable({
                       </td>
                     </>
                   ) : null}
-                  <td className="border border-slate-200 bg-orange-50/40 p-0">
-                    <select
-                      value={row.mealStapleForm}
-                      onChange={(e) => patchBulkRow(id, { mealStapleForm: e.target.value })}
-                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-xs font-bold sm:text-sm"
-                      aria-label={`${nm} 主食形態`}
-                    >
-                      {MEAL_STAPLE_FORM_OPTIONS.map((opt) => (
-                        <option key={opt || 'sf-empty'} value={opt}>
-                          {opt || '—'}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
                   <td className="border border-slate-200 bg-orange-50/30 p-0">
                     <select
                       value={row.mealStaple}
@@ -1035,20 +1094,6 @@ export function ResidentBulkInputTable({
                     >
                       {MEAL_WARI_OPTIONS.map((opt) => (
                         <option key={opt || 'st-empty'} value={opt}>
-                          {opt || '—'}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="border border-slate-200 p-0">
-                    <select
-                      value={row.mealSideForm}
-                      onChange={(e) => patchBulkRow(id, { mealSideForm: e.target.value })}
-                      className="w-full min-w-[4rem] bg-white px-1 py-1.5 text-xs font-bold sm:text-sm"
-                      aria-label={`${nm} 副食形態`}
-                    >
-                      {MEAL_SIDE_FORM_OPTIONS.map((opt) => (
-                        <option key={opt || 'df-empty'} value={opt}>
                           {opt || '—'}
                         </option>
                       ))}

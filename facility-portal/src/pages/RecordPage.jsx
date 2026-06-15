@@ -63,7 +63,11 @@ import {
   composeMealAmountForLog,
   composeOralSupplementLines,
   getQuickCareMealEventKind,
+  joinMultiHourlyStoolCell,
+  MEAL_SIDE_FORM_OPTIONS,
+  MEAL_STAPLE_FORM_OPTIONS,
   parseHourlyStoolCellValue,
+  splitMultiHourlyStoolCell,
 } from '../lib/careQuickCareFields.js';
 import { CARE_EVENTS_SYNC_EVENT } from '../lib/careEventsRealtimeSync.js';
 import { flushCareEventsCloudSync } from '../lib/careEventsSupabaseSync.js';
@@ -77,6 +81,8 @@ import {
   buildHourlyCareFromEvents,
   buildHourlyUrineCellsFromEvents,
   computeDailyUrineTotalMlFromEvents,
+  splitMultiHourlyValues,
+  tokyoDateHourMinuteToIso,
   tokyoDateHourToIso,
   tokyoHourFromTs,
 } from '../lib/hourlyCareGrid.js';
@@ -108,7 +114,6 @@ import { residentScheduleSheetForFacility } from '../config/residentScheduleShee
 import {
   applyImportedResidentSchedules,
   formatResidentPlansShort,
-  getFacilityScheduleDisplayYmd,
   getResidentDailyPlansForFacilityCalendar,
   importResidentScheduleFromSheet,
 } from '../lib/residentDailySchedule.js';
@@ -276,8 +281,9 @@ function bulkMealFieldsEmpty(mealSlot = '') {
 
 function applyEnteralBulkPlanToRow(row, res, facilityLinkKey, mealSlot) {
   const ent = enteralBulkFieldsForResident(res, facilityLinkKey, mealSlot);
+  const hasDraftPlan = String(row.enteralMenuPlan ?? '').trim() !== '';
   const hasSavedEnteral = String(row.enteralStatus ?? '').trim() !== '';
-  if (hasSavedEnteral) {
+  if (hasSavedEnteral || hasDraftPlan) {
     return {
       ...row,
       enteralMenuMed: String(row.enteralMenuMed ?? '').trim() || ent.medication,
@@ -288,6 +294,20 @@ function applyEnteralBulkPlanToRow(row, res, facilityLinkKey, mealSlot) {
     enteralMenuPlan: ent.plan,
     enteralMenuMed: ent.medication,
   };
+}
+
+/** カード個別指示で設定した食事形態を一覧表行へ反映 */
+function mealFormsFromRoomNotes(residentId) {
+  const n = Report.getResidentRoomNotes(String(residentId ?? '').trim());
+  return {
+    mealStapleForm: String(n.mealStapleForm ?? '').trim(),
+    mealSideForm: String(n.mealSideForm ?? '').trim(),
+  };
+}
+
+function withMealFormsFromRoomNotes(residentId, row) {
+  const forms = mealFormsFromRoomNotes(residentId);
+  return { ...row, ...forms };
 }
 
 function formatEnteralMealSlotLabel(note) {
@@ -1153,12 +1173,6 @@ function vitalSeedForBulkTableRow(residentId, bulkSheetDate, residentOrCtx = nul
       ? Report.careEventResidentContext(residentOrCtx)
       : null;
   const fromEvents = vitalFieldsFromSnapshotMeta(Report.getLatestVitalSnapshotMetaForResidentDay(rid, ymd, ctx));
-  const hasAny = Object.values(fromEvents).some((v) => String(v ?? '').trim() !== '');
-  if (hasAny) return fromEvents;
-  if (ymd === currentYmd()) {
-    const snap = Report.getResidentVitalSnapshot(rid);
-    return vitalFieldsFromSnapshotMeta(snap);
-  }
   return fromEvents;
 }
 
@@ -1241,6 +1255,8 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
   const urineCells = buildHourlyUrineCellsFromEvents(events, ymd);
   out.hourUrine = urineCells.codes;
   out.hourUrineMl = urineCells.mls;
+  /** @type {Record<number, { stoolVolume: string; stoolCharacter: string }[]>} */
+  const stoolBuckets = {};
   for (const ev of events) {
     const h = tokyoHourFromTs(ev?.ts);
     if (!Number.isFinite(h) || h < 0 || h > 23) continue;
@@ -1256,7 +1272,15 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
     const sv = String(meta.stoolVolume ?? '').trim();
     const sc = String(meta.stoolCharacter ?? '').trim();
     if (hourlyKind === 'stool' || /排便（\d{2}時）/u.test(note)) {
-      out.hourStool[h] = sv || sc ? `${sv || ''}\t${sc || ''}` : 'plain';
+      if (!sv && !sc) continue;
+      if (!stoolBuckets[h]) stoolBuckets[h] = [];
+      stoolBuckets[h].push({ stoolVolume: sv, stoolCharacter: sc });
+    }
+  }
+  for (const [hKey, entries] of Object.entries(stoolBuckets)) {
+    const h = Number(hKey);
+    if (Number.isFinite(h) && h >= 0 && h <= 23) {
+      out.hourStool[h] = joinMultiHourlyStoolCell(entries);
     }
   }
   return out;
@@ -1647,23 +1671,6 @@ export function RecordPage({
     return list;
   }, [filteredResidents, residentSortMode, residentNameQuery, tick]);
 
-  const refreshBulkEnteralPlans = useCallback(() => {
-    setBulkDraft((prev) => {
-      const next = { ...prev };
-      for (const r of displayResidents) {
-        const id = String(r.id);
-        if (!next[id]) continue;
-        next[id] = applyEnteralBulkPlanToRow(next[id], r, selectedFacilityLinkKey, bulkGlobalMealSlot);
-      }
-      return next;
-    });
-  }, [displayResidents, selectedFacilityLinkKey, bulkGlobalMealSlot]);
-
-  useEffect(() => {
-    if (residentInputView !== 'table' || !selectedFacilityLinkKey) return;
-    refreshBulkEnteralPlans();
-  }, [residentInputView, selectedFacilityLinkKey, bulkGlobalMealSlot, refreshBulkEnteralPlans]);
-
   /** 一覧表・24時間グリッド用（保存済みログからマスを埋める） */
   const bulkHourlySavedByResident = useMemo(() => {
     const m = {};
@@ -1778,10 +1785,32 @@ export function RecordPage({
           };
         }
         next[id] = row;
+        next[id] = withMealFormsFromRoomNotes(id, next[id]);
       }
       return next;
     });
   }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey]);
+
+  useEffect(() => {
+    if (residentInputView !== 'table') return;
+    setBulkDraft((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const r of displayResidents) {
+        const id = String(r.id);
+        if (!next[id]) continue;
+        const merged = withMealFormsFromRoomNotes(id, next[id]);
+        if (
+          merged.mealStapleForm !== next[id].mealStapleForm ||
+          merged.mealSideForm !== next[id].mealSideForm
+        ) {
+          next[id] = merged;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [roomNotesRev, residentInputView, displayResidents]);
 
   /** 一覧入力の下書きを施設×日付ごとに保存（保存押し忘れの復元用） */
   useEffect(() => {
@@ -2815,7 +2844,8 @@ export function RecordPage({
     const dayEv = Report.getCareEventsForResidentDay(id, ymdLog);
     let occ = buildHourlyCareFromEvents(dayEv, ymdLog);
     for (let h = 0; h < 24; h++) {
-      if (hp[h] && !occ.patrol[h]) {
+      const wantPatrol = hp[h] === true;
+      if (wantPatrol && !occ.patrol[h]) {
         Report.logCareEvent({
           type: 'patrol',
           ts: tokyoDateHourToIso(ymdLog, h),
@@ -2825,56 +2855,83 @@ export function RecordPage({
           meta: { note: '巡視（24時間表）' },
         });
         occ = { ...occ, patrol: occ.patrol.map((v, i) => (i === h ? true : v)) };
+      } else if (!wantPatrol && occ.patrol[h]) {
+        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, { types: ['patrol'] });
+        occ = { ...occ, patrol: occ.patrol.map((v, i) => (i === h ? false : v)) };
       }
-      if (hu[h] && !occ.urine[h]) {
-        const uCode = String(hu[h] ?? '').trim();
-        const cMl = String(hum[h] ?? '').trim();
-        const needsMeasuredMl = uCode === 'カテ' || uCode === 'Ba' || uCode === '尿測';
-        Report.logCareEvent({
-          type: 'hourly_excretion',
-          ts: tokyoDateHourToIso(ymdLog, h),
-          residentId: id,
-          residentName: name,
-          facilitySheetTitle: fac,
-          meta: {
-            note: `排尿（${String(h).padStart(2, '0')}時）`,
-            ...(uCode && uCode !== 'plain' ? { urineCode: uCode } : {}),
-            ...(uCode && uCode !== 'plain'
-              ? { urineVolume: needsMeasuredMl && cMl ? cMl : uCode }
-              : {}),
-            ...(needsMeasuredMl && cMl ? { measuredUrineMl: cMl } : {}),
-            hourlyKind: 'urine',
-            hourlySheet: true,
-          },
+
+      const urineCodes = splitMultiHourlyValues(hu[h]);
+      const urineMls = splitMultiHourlyValues(hum[h]);
+      const urineCell = String(hu[h] ?? '').trim();
+      if (occ.urine[h] || urineCell) {
+        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
+          types: ['hourly_excretion'],
+          hourlyKind: 'urine',
         });
-        Report.setLastUrineNow(id);
-        occ = { ...occ, urine: occ.urine.map((v, i) => (i === h ? true : v)) };
-      }
-      if (hs[h] && !occ.stool[h]) {
-        const sCode = String(hs[h] ?? '').trim();
-        const parsedStool = parseHourlyStoolCellValue(sCode);
-        Report.logCareEvent({
-          type: 'hourly_excretion',
-          ts: tokyoDateHourToIso(ymdLog, h),
-          residentId: id,
-          residentName: name,
-          facilitySheetTitle: fac,
-          meta: {
-            note: `排便（${String(h).padStart(2, '0')}時）`,
-            ...(parsedStool?.stoolVolume ? { stoolVolume: parsedStool.stoolVolume } : {}),
-            ...(parsedStool?.stoolCharacter ? { stoolCharacter: parsedStool.stoolCharacter } : {}),
-            hourlyKind: 'stool',
-            hourlySheet: true,
-          },
-        });
-        if (parsedStool?.stoolVolume || parsedStool?.stoolCharacter) {
-          Report.recordStoolForIntervalAlert(id, {
-            stoolVolume: parsedStool?.stoolVolume ?? '',
-            stoolCharacter: parsedStool?.stoolCharacter ?? '',
+        if (urineCodes.length) {
+          urineCodes.forEach((uCode, idx) => {
+            const cMl = String(urineMls[idx] ?? urineMls[0] ?? '').trim();
+            const needsMeasuredMl = uCode === 'カテ' || uCode === 'Ba' || uCode === '尿測';
+            Report.logCareEvent({
+              type: 'hourly_excretion',
+              ts: tokyoDateHourMinuteToIso(ymdLog, h, Math.min(59, idx * 5)),
+              residentId: id,
+              residentName: name,
+              facilitySheetTitle: fac,
+              meta: {
+                note: `排尿（${String(h).padStart(2, '0')}時）`,
+                ...(uCode && uCode !== 'plain' ? { urineCode: uCode } : {}),
+                ...(uCode && uCode !== 'plain'
+                  ? { urineVolume: needsMeasuredMl && cMl ? cMl : uCode }
+                  : {}),
+                ...(needsMeasuredMl && cMl ? { measuredUrineMl: cMl } : {}),
+                hourlyKind: 'urine',
+                hourlySheet: true,
+              },
+            });
           });
+          Report.setLastUrineNow(id);
+          occ = { ...occ, urine: occ.urine.map((v, i) => (i === h ? true : v)) };
+        } else {
+          occ = { ...occ, urine: occ.urine.map((v, i) => (i === h ? false : v)) };
         }
-        Report.setLastStoolNow(id);
-        occ = { ...occ, stool: occ.stool.map((v, i) => (i === h ? true : v)) };
+      }
+
+      const stoolEntries = splitMultiHourlyStoolCell(hs[h]);
+      const stoolCell = String(hs[h] ?? '').trim();
+      if (occ.stool[h] || stoolCell) {
+        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
+          types: ['hourly_excretion'],
+          hourlyKind: 'stool',
+        });
+        if (stoolEntries.length) {
+          stoolEntries.forEach((parsedStool, idx) => {
+            Report.logCareEvent({
+              type: 'hourly_excretion',
+              ts: tokyoDateHourMinuteToIso(ymdLog, h, Math.min(59, idx * 5)),
+              residentId: id,
+              residentName: name,
+              facilitySheetTitle: fac,
+              meta: {
+                note: `排便（${String(h).padStart(2, '0')}時）`,
+                ...(parsedStool?.stoolVolume ? { stoolVolume: parsedStool.stoolVolume } : {}),
+                ...(parsedStool?.stoolCharacter ? { stoolCharacter: parsedStool.stoolCharacter } : {}),
+                hourlyKind: 'stool',
+                hourlySheet: true,
+              },
+            });
+            if (parsedStool?.stoolVolume || parsedStool?.stoolCharacter) {
+              Report.recordStoolForIntervalAlert(id, {
+                stoolVolume: parsedStool?.stoolVolume ?? '',
+                stoolCharacter: parsedStool?.stoolCharacter ?? '',
+              });
+            }
+          });
+          Report.setLastStoolNow(id);
+          occ = { ...occ, stool: occ.stool.map((v, i) => (i === h ? true : v)) };
+        } else {
+          occ = { ...occ, stool: occ.stool.map((v, i) => (i === h ? false : v)) };
+        }
       }
     }
   }, [selectedSheetTitle, bulkSheetDate, bulkGlobalMealSlot]);
@@ -2962,7 +3019,7 @@ export function RecordPage({
               }
             : { ...savedCare, mealSlot: bulkGlobalMealSlot }),
         }))();
-      return { ...prev, [id]: { ...base, ...patch } };
+      return { ...prev, [id]: withMealFormsFromRoomNotes(id, { ...base, ...patch }) };
     });
   }, [bulkGlobalMealSlot, bulkSheetDate]);
 
@@ -3148,64 +3205,6 @@ export function RecordPage({
       return next;
     });
   }, [bulkSheetDate, displayResidents, bulkGlobalMealSlot]);
-
-  useEffect(() => {
-    if (residentInputView !== 'table') return;
-    const ymd = bulkTableYmd(bulkSheetDate);
-    setBulkDraft((prev) => {
-      const next = { ...prev };
-      for (const r of displayResidents) {
-        const id = String(r.id);
-        if (!next[id]) {
-          next[id] = {
-            ...vitalSeedForBulkTableRow(id, ymd, r),
-            ...bulkCareSeedForResidentDay(id, ymd),
-            mealSlot: bulkGlobalMealSlot,
-            ...hourlyDraftSeedForResidentDay(id, ymd),
-          };
-        } else {
-          let cur = next[id];
-          for (const k of Object.keys(BULK_CARE_RESET)) {
-            if (cur[k] === undefined) cur = { ...cur, [k]: BULK_CARE_RESET[k] };
-          }
-          if (!Array.isArray(cur.hourPatrol) || cur.hourPatrol.length !== 24) {
-            cur = { ...cur, hourPatrol: freshHourly24() };
-          }
-          if (!Array.isArray(cur.hourUrine) || cur.hourUrine.length !== 24) {
-            cur = { ...cur, hourUrine: freshHourlyText24() };
-          } else {
-            cur = { ...cur, hourUrine: normalizeHourlyText24(cur.hourUrine) };
-          }
-          if (!Array.isArray(cur.hourUrineMl) || cur.hourUrineMl.length !== 24) {
-            cur = { ...cur, hourUrineMl: freshHourlyText24() };
-          } else {
-            cur = { ...cur, hourUrineMl: normalizeHourlyText24(cur.hourUrineMl) };
-          }
-          if (!Array.isArray(cur.hourStool) || cur.hourStool.length !== 24) {
-            cur = { ...cur, hourStool: freshHourlyText24() };
-          } else {
-            cur = { ...cur, hourStool: normalizeHourlyText24(cur.hourStool) };
-          }
-          if (cur.ensurePortion === undefined) cur = { ...cur, ensurePortion: '' };
-          if (cur.solitaPortion === undefined) cur = { ...cur, solitaPortion: '' };
-          if (cur.enteralMenuPlan === undefined) cur = { ...cur, enteralMenuPlan: '' };
-          if (cur.enteralMenuMed === undefined) cur = { ...cur, enteralMenuMed: '' };
-          if (cur.enteralStatus === undefined) cur = { ...cur, enteralStatus: '' };
-          cur = applyEnteralBulkPlanToRow(cur, r, selectedFacilityLinkKey, bulkGlobalMealSlot);
-          if (cur.mealExtras === undefined) cur = { ...cur, mealExtras: '' };
-          if (cur.mealSlot === undefined || cur.mealSlot === '') {
-            cur = { ...cur, mealSlot: bulkGlobalMealSlot };
-          }
-          next[id] = cur;
-        }
-      }
-      const keep = new Set(displayResidents.map((r) => String(r.id)));
-      for (const k of Object.keys(next)) {
-        if (!keep.has(k)) delete next[k];
-      }
-      return next;
-    });
-  }, [displayResidents, residentInputView, bulkGlobalMealSlot, bulkSheetDate, selectedFacilityLinkKey]);
 
   const registerNursing = useCallback(() => {
     const k = selectedDef?.linkKey;
@@ -4652,7 +4651,7 @@ export function RecordPage({
                   }}
                   rows={4}
                   placeholder="施設全体への周知（面会制限・感染対策・本日の連絡事項など）"
-                  className="min-h-[5.5rem] w-full flex-1 resize-y rounded-xl border-2 border-amber-300 bg-white/95 px-3 py-2 text-sm font-bold leading-relaxed text-amber-950 outline-none focus:ring-2 focus:ring-amber-400 sm:text-base"
+                  className="min-h-[5.5rem] max-h-[50vh] w-full resize-y overflow-auto rounded-xl border-2 border-amber-300 bg-white/95 px-3 py-2 text-sm font-bold leading-relaxed text-amber-950 outline-none focus:ring-2 focus:ring-amber-400 sm:text-base"
                 />
                 <button
                   type="button"
@@ -5832,10 +5831,7 @@ export function RecordPage({
                                 {residentCardDisplayName(res.name)}
                               </div>
                               {(() => {
-                                const scheduleYmd = getFacilityScheduleDisplayYmd(
-                                  selectedFacilityLinkKey,
-                                  todayStrip
-                                );
+                                const scheduleYmd = todayStrip;
                                 const todayPlansShort = residentScheduleSheetCfg
                                   ? formatResidentPlansShort(
                                       selectedFacilityLinkKey,
@@ -5960,6 +5956,59 @@ export function RecordPage({
                               ) : null}
                             </div>
                           ) : null}
+                          <div
+                            className={`mt-2 rounded-lg border-2 px-2 py-1.5 ${
+                              critical ? 'border-orange-200/60 bg-black/20' : 'border-orange-300 bg-orange-50'
+                            }`}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                            role="group"
+                            aria-label="食事形態（個別指示）"
+                          >
+                            <p
+                              className={`mb-1 text-[10px] font-black sm:text-[11px] ${
+                                critical ? 'text-orange-100' : 'text-orange-950'
+                              }`}
+                            >
+                              食事形態（個別指示）
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              <label className={`flex min-w-0 flex-1 flex-col gap-0.5 text-[9px] font-bold ${critical ? 'text-orange-50' : 'text-orange-900'}`}>
+                                主食
+                                <select
+                                  value={String(roomNotes.mealStapleForm ?? '')}
+                                  onChange={(e) => {
+                                    Report.setResidentRoomNotes(String(res.id), { mealStapleForm: e.target.value });
+                                    setRoomNotesRev((n) => n + 1);
+                                  }}
+                                  className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
+                                >
+                                  {MEAL_STAPLE_FORM_OPTIONS.map((opt) => (
+                                    <option key={`card-sf-${opt || 'empty'}`} value={opt}>
+                                      {opt || '—'}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className={`flex min-w-0 flex-1 flex-col gap-0.5 text-[9px] font-bold ${critical ? 'text-orange-50' : 'text-orange-900'}`}>
+                                副食
+                                <select
+                                  value={String(roomNotes.mealSideForm ?? '')}
+                                  onChange={(e) => {
+                                    Report.setResidentRoomNotes(String(res.id), { mealSideForm: e.target.value });
+                                    setRoomNotesRev((n) => n + 1);
+                                  }}
+                                  className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
+                                >
+                                  {MEAL_SIDE_FORM_OPTIONS.map((opt) => (
+                                    <option key={`card-sf2-${opt || 'empty'}`} value={opt}>
+                                      {opt || '—'}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                          </div>
                           {String(res.insuranceLabel ?? '').trim() ? (
                             <div
                               className={`mt-1 line-clamp-2 text-[11px] font-bold sm:text-xs ${

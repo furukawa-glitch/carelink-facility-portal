@@ -18,7 +18,7 @@ import {
   normalizeMedicineList,
 } from '../lib/pharmacyMedicineFormat.js';
 import { normalizeBulkMealSlot, resolveBulkMealSlotForEvent } from '../lib/bulkCareEventTs.js';
-import { tokyoYmdFromTs } from '../lib/hourlyCareGrid.js';
+import { tokyoHourFromTs, tokyoYmdFromTs } from '../lib/hourlyCareGrid.js';
 import {
   buildResidentStayStatusBadges,
   normalizeResidentStayStatus,
@@ -1520,12 +1520,14 @@ export function setFacilityNotice(linkKey, text, opts = {}) {
  */
 export function getResidentRoomNotes(residentId) {
   const rid = String(residentId ?? '').trim();
-  if (!rid) return { handover: '', treatment: '', updatedAt: '' };
+  if (!rid) return { handover: '', treatment: '', mealStapleForm: '', mealSideForm: '', updatedAt: '' };
   const all = readJson(LS.residentRoomNotes, {});
   const row = all[rid] && typeof all[rid] === 'object' ? all[rid] : {};
   return {
     handover: String(row.handover ?? '').trim(),
     treatment: String(row.treatment ?? '').trim(),
+    mealStapleForm: String(row.mealStapleForm ?? '').trim(),
+    mealSideForm: String(row.mealSideForm ?? '').trim(),
     updatedAt: String(row.updatedAt ?? '').trim(),
   };
 }
@@ -1546,6 +1548,8 @@ export function setResidentRoomNotes(residentId, patch, opts = {}) {
     ...(patch && typeof patch === 'object' ? patch : {}),
     handover: String(patch?.handover ?? prev.handover ?? '').trim(),
     treatment: String(patch?.treatment ?? prev.treatment ?? '').trim(),
+    mealStapleForm: String(patch?.mealStapleForm ?? prev.mealStapleForm ?? '').trim(),
+    mealSideForm: String(patch?.mealSideForm ?? prev.mealSideForm ?? '').trim(),
     updatedAt,
   };
   writeJson(LS.residentRoomNotes, all);
@@ -2193,6 +2197,40 @@ export function removeCareEventsByResidentAtMinute(residentId, isoTs, types = []
     if (String(e.residentId ?? '').trim() !== rid) return true;
     if (minuteKey(e.ts) !== mk) return true;
     if (allow && !allow.has(String(e.type ?? '').trim())) return true;
+    return false;
+  });
+  const removed = list.length - next.length;
+  if (removed > 0) persistCareEventsList(next);
+  return removed;
+}
+
+/**
+ * 一覧表: 利用者×暦日×時のケアログを削除（24時間表の上書き・取消用）
+ * @param {string} residentId
+ * @param {string} ymd YYYY-MM-DD
+ * @param {number} hour 0–23
+ * @param {{ types?: string[]; hourlyKind?: 'urine' | 'stool' }} [opts]
+ * @returns {number}
+ */
+export function removeCareEventsForResidentDayHour(residentId, ymd, hour, opts = {}) {
+  const rid = String(residentId ?? '').trim();
+  const day = String(ymd ?? '').trim();
+  const h = Number(hour);
+  if (!rid || !day || !Number.isFinite(h) || h < 0 || h > 23) return 0;
+  const types = Array.isArray(opts?.types) && opts.types.length ? new Set(opts.types.map((x) => String(x ?? '').trim())) : null;
+  const hourlyKind = String(opts?.hourlyKind ?? '').trim();
+  const list = getAllCareEvents();
+  const next = list.filter((e) => {
+    if (String(e.residentId ?? '').trim() !== rid) return true;
+    const tsForDay = careEventTsForResidentDay(e);
+    if (tokyoYmdFromTs(tsForDay) !== day) return true;
+    if (tokyoHourFromTs(e?.ts) !== h) return true;
+    const typ = String(e.type ?? '').trim();
+    if (types && !types.has(typ)) return true;
+    if (hourlyKind && typ === 'hourly_excretion') {
+      const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+      if (String(meta.hourlyKind ?? '').trim() !== hourlyKind) return true;
+    }
     return false;
   });
   const removed = list.length - next.length;

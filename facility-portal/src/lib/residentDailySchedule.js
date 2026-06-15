@@ -977,7 +977,7 @@ export function applyImportedResidentSchedules(linkKey, residents, parsed) {
 
 /** @param {string} linkKey @param {string} residentId @param {string} ymd */
 export function formatResidentPlansShort(linkKey, residentId, ymd, residentName = '') {
-  const displayYmd = getFacilityScheduleDisplayYmd(linkKey, ymd);
+  const displayYmd = String(ymd ?? '').trim();
   const plans = getResidentDailyPlans(linkKey, residentId, displayYmd, residentName);
   if (!plans.length) return '';
   return plans

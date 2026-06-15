@@ -75,16 +75,46 @@ export function localDateHourToIso(ymd, hour) {
  * @param {number} hour 0–23
  */
 export function tokyoDateHourToIso(ymd, hour) {
+  return tokyoDateHourMinuteToIso(ymd, hour, 0);
+}
+
+/**
+ * 一覧表の「日付」と時・分を、日本の壁時計として careEvents の ts に保存（+09:00）
+ * @param {string} ymd YYYY-MM-DD
+ * @param {number} hour 0–23
+ * @param {number} [minute] 0–59
+ */
+export function tokyoDateHourMinuteToIso(ymd, hour, minute = 0) {
   const [y, mo, d] = String(ymd)
     .trim()
     .split('-')
     .map((x) => parseInt(x, 10));
   if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return new Date().toISOString();
   const h = Number.isFinite(hour) ? Math.min(23, Math.max(0, hour)) : 0;
+  const mi = Number.isFinite(minute) ? Math.min(59, Math.max(0, minute)) : 0;
   const moP = String(mo).padStart(2, '0');
   const dP = String(d).padStart(2, '0');
   const hP = String(h).padStart(2, '0');
-  return `${String(y).padStart(4, '0')}-${moP}-${dP}T${hP}:00:00+09:00`;
+  const miP = String(mi).padStart(2, '0');
+  return `${String(y).padStart(4, '0')}-${moP}-${dP}T${hP}:${miP}:00+09:00`;
+}
+
+/** 同一時間に複数回入力した値（カンマ等区切り）を配列に */
+export function splitMultiHourlyValues(cell) {
+  const s = String(cell ?? '').trim();
+  if (!s || s === 'plain') return [];
+  return s
+    .split(/[,，/／+＋]/u)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/** 複数値を1セル表示用に連結 */
+export function joinMultiHourlyValues(parts) {
+  return (Array.isArray(parts) ? parts : [])
+    .map((x) => String(x ?? '').trim())
+    .filter(Boolean)
+    .join(',');
 }
 
 /**
@@ -171,10 +201,12 @@ export function measuredUrineMlFromEvent(ev) {
  * @param {string} ymd
  */
 export function buildHourlyUrineCellsFromEvents(events, ymd) {
-  const codes = Array(24).fill('');
-  const mls = Array(24).fill('');
+  /** @type {{ codes: string[]; mls: string[] }[]} */
+  const buckets = Array.from({ length: 24 }, () => ({ codes: [], mls: [] }));
   const day = String(ymd ?? '').trim();
-  if (!day) return { codes, mls };
+  if (!day) {
+    return { codes: Array(24).fill(''), mls: Array(24).fill('') };
+  }
 
   for (const ev of events || []) {
     if (tokyoYmdFromTs(ev?.ts) !== day) continue;
@@ -187,10 +219,12 @@ export function buildHourlyUrineCellsFromEvents(events, ymd) {
     const hourlyKind = String(meta.hourlyKind ?? '').trim();
     if (hourlyKind !== 'urine' && !/排尿（\d{2}時）/u.test(note)) continue;
     const { code, ml } = resolveHourlyUrineCodeAndMl(meta);
-    if (code) codes[h] = code;
-    else if (ml) codes[h] = 'カテ';
-    if (ml) mls[h] = ml;
+    if (code) buckets[h].codes.push(code);
+    else if (ml) buckets[h].codes.push('カテ');
+    if (ml) buckets[h].mls.push(ml);
   }
+  const codes = buckets.map((b) => joinMultiHourlyValues(b.codes));
+  const mls = buckets.map((b) => joinMultiHourlyValues(b.mls));
   return { codes, mls };
 }
 

@@ -323,6 +323,31 @@ export function parseHourlyStoolCellValue(value) {
   return { stoolVolume: vv, stoolCharacter: cc };
 }
 
+const HOURLY_STOOL_MULTI_DELIM = ';';
+
+/** 同一時間の複数排便を配列で取得 */
+export function splitMultiHourlyStoolCell(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return [];
+  return s
+    .split(HOURLY_STOOL_MULTI_DELIM)
+    .map((part) => parseHourlyStoolCellValue(part))
+    .filter(Boolean);
+}
+
+/** 複数排便を1セルに連結 */
+export function joinMultiHourlyStoolCell(entries) {
+  const parts = (Array.isArray(entries) ? entries : [])
+    .map((e) => {
+      const v = String(e?.stoolVolume ?? '').trim();
+      const c = String(e?.stoolCharacter ?? '').trim();
+      if (!v && !c) return '';
+      return `${v}${HOURLY_STOOL_DELIM}${c}`;
+    })
+    .filter(Boolean);
+  return parts.join(HOURLY_STOOL_MULTI_DELIM);
+}
+
 /**
  * @param {{ vitals?: Record<string, unknown>; meal?: Record<string, unknown> }} extracted
  * @returns {Record<string, unknown>}
