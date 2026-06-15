@@ -3620,10 +3620,9 @@ function buildEmergencyMealWeekSummary(resident, weekAgoMs) {
  * 救急搬送サマリー下段4欄を、localStorage のケアイベント・バイタル・名簿から組み立てる
  * @param {Record<string, unknown>} resident
  * @param {string} [facilitySheetTitle] 突合参考（現状は利用者ID中心で抽出）
- * @param {string} [linkKey] 施設の看護指示取得用（carelinkFacilities.linkKey）
  * @returns {{ dailyLife: string; nurseProblems: string; nurseContent: string; careNotes: string }}
  */
-export function buildEmergencySummaryNarrativeFromRecords(resident, facilitySheetTitle = '', linkKey = '') {
+export function buildEmergencySummaryNarrativeFromRecords(resident, facilitySheetTitle = '') {
   const id = String(resident?.id ?? '');
   const cond = String(resident?.condition ?? '').trim() || '—';
   const lastStoolCell = String(resident?.lastStoolDate ?? '').trim() || '—';
@@ -3699,20 +3698,8 @@ export function buildEmergencySummaryNarrativeFromRecords(resident, facilityShee
       careLines.push(adv);
     }
   }
-  const nDir = String(linkKey ?? '').trim() ? getNursingDirectivesForResident(String(linkKey), resident) : [];
-  const recentN = Array.isArray(nDir) ? nDir.slice(0, 8) : [];
-  if (recentN.length) {
-    if (careLines.length) careLines.push('');
-    careLines.push('【施設の看護指示メモ（この方・参考）】');
-    for (const row of recentN) {
-      const tx = String(row?.text ?? '').trim();
-      if (tx) careLines.push(`・${tx}`);
-    }
-  }
   if (!careLines.length)
-    careLines.push(
-      '（看護指示メモの登録がなく、自動検知に基づく特記もありません。個別の注意事項があれば追記してください。）'
-    );
+    careLines.push('（個別の注意事項があれば追記してください。）');
 
   return {
     dailyLife: dailyLines.join('\n').trim(),

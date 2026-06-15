@@ -2194,8 +2194,7 @@ export function RecordPage({
       if (!resident) return emptyEmergencyDraft();
       const narrative = Report.buildEmergencySummaryNarrativeFromRecords(
         resident,
-        selectedSheetTitle,
-        selectedDef?.linkKey ?? ''
+        selectedSheetTitle
       );
       const prev = prevDraft && typeof prevDraft === 'object' ? prevDraft : {};
       const homeDoctorRaw = String(resident?.homeDoctor ?? '').trim();
