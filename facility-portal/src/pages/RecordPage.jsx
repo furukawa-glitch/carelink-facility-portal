@@ -1484,6 +1484,18 @@ export function RecordPage({
   const [daySvcExternalDraft, setDaySvcExternalDraft] = useState(/** @type {Record<string, boolean>} */ ({}));
   /** 個別申し送り・施設共通申し送りの再読込（App から戻ったとき等） */
   const [roomNotesRev, setRoomNotesRev] = useState(0);
+  const [mealFormSavedId, setMealFormSavedId] = useState('');
+  const mealFormSaveTimerRef = useRef(null);
+  const persistMealFormNote = useCallback((residentId, patch) => {
+    Report.setResidentRoomNotes(String(residentId), patch);
+    setRoomNotesRev((n) => n + 1);
+    const rid = String(residentId);
+    setMealFormSavedId(rid);
+    if (mealFormSaveTimerRef.current) clearTimeout(mealFormSaveTimerRef.current);
+    mealFormSaveTimerRef.current = window.setTimeout(() => {
+      setMealFormSavedId((prev) => (prev === rid ? '' : prev));
+    }, 2000);
+  }, []);
   const [facilityHandoverItemDraft, setFacilityHandoverItemDraft] = useState('');
   const [handoverViewYmd, setHandoverViewYmd] = useState(() => currentYmd());
   const selectedDef = useMemo(
@@ -6008,6 +6020,11 @@ export function RecordPage({
                               }`}
                             >
                               食事形態（個別指示）
+                              {mealFormSavedId === String(res.id) ? (
+                                <span className="ml-1.5 text-[9px] font-bold text-emerald-600">保存しました</span>
+                              ) : (
+                                <span className="ml-1.5 text-[9px] font-normal opacity-80">変更で自動保存</span>
+                              )}
                             </p>
                             <div className="flex flex-wrap gap-1.5">
                               <label className={`flex min-w-0 flex-1 flex-col gap-0.5 text-[9px] font-bold ${critical ? 'text-orange-50' : 'text-orange-900'}`}>
@@ -6015,8 +6032,7 @@ export function RecordPage({
                                 <select
                                   value={String(roomNotes.mealStapleForm ?? '')}
                                   onChange={(e) => {
-                                    Report.setResidentRoomNotes(String(res.id), { mealStapleForm: e.target.value });
-                                    setRoomNotesRev((n) => n + 1);
+                                    persistMealFormNote(res.id, { mealStapleForm: e.target.value });
                                   }}
                                   className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
                                 >
@@ -6032,8 +6048,7 @@ export function RecordPage({
                                 <select
                                   value={String(roomNotes.mealSideForm ?? '')}
                                   onChange={(e) => {
-                                    Report.setResidentRoomNotes(String(res.id), { mealSideForm: e.target.value });
-                                    setRoomNotesRev((n) => n + 1);
+                                    persistMealFormNote(res.id, { mealSideForm: e.target.value });
                                   }}
                                   className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
                                 >
@@ -6051,8 +6066,7 @@ export function RecordPage({
                                 <select
                                   value={String(roomNotes.mealFluidThicken ?? '')}
                                   onChange={(e) => {
-                                    Report.setResidentRoomNotes(String(res.id), { mealFluidThicken: e.target.value });
-                                    setRoomNotesRev((n) => n + 1);
+                                    persistMealFormNote(res.id, { mealFluidThicken: e.target.value });
                                   }}
                                   className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
                                 >
@@ -6068,8 +6082,7 @@ export function RecordPage({
                                 <select
                                   value={String(roomNotes.mealSoup ?? '')}
                                   onChange={(e) => {
-                                    Report.setResidentRoomNotes(String(res.id), { mealSoup: e.target.value });
-                                    setRoomNotesRev((n) => n + 1);
+                                    persistMealFormNote(res.id, { mealSoup: e.target.value });
                                   }}
                                   className="w-full rounded border border-orange-300 bg-white px-1 py-1 text-[10px] font-bold text-slate-900"
                                 >
@@ -6085,10 +6098,10 @@ export function RecordPage({
                               その他（個別）
                               <input
                                 type="text"
-                                value={String(roomNotes.mealIndividualNote ?? '')}
-                                onChange={(e) => {
-                                  Report.setResidentRoomNotes(String(res.id), { mealIndividualNote: e.target.value });
-                                  setRoomNotesRev((n) => n + 1);
+                                key={`meal-individual-${res.id}-${roomNotes.mealIndividualNote}`}
+                                defaultValue={String(roomNotes.mealIndividualNote ?? '')}
+                                onBlur={(e) => {
+                                  persistMealFormNote(res.id, { mealIndividualNote: e.target.value });
                                 }}
                                 placeholder="例: パン半分、とろみ剤朝のみ"
                                 className="w-full rounded border border-orange-300 bg-white px-1.5 py-1 text-[10px] font-bold text-slate-900 placeholder:font-normal placeholder:text-slate-400"

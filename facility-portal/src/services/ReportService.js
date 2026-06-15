@@ -1607,6 +1607,11 @@ export function setResidentRoomNotes(residentId, patch, opts = {}) {
         residentId: rid,
         handover: String(all[rid].handover ?? '').trim(),
         treatment: String(all[rid].treatment ?? '').trim(),
+        mealStapleForm: String(all[rid].mealStapleForm ?? '').trim(),
+        mealSideForm: String(all[rid].mealSideForm ?? '').trim(),
+        mealFluidThicken: String(all[rid].mealFluidThicken ?? '').trim(),
+        mealSoup: String(all[rid].mealSoup ?? '').trim(),
+        mealIndividualNote: String(all[rid].mealIndividualNote ?? '').trim(),
         updatedAt,
       },
     });
@@ -1695,6 +1700,11 @@ function applyHandoverStoresFromEvents(events) {
         ...prev,
         handover: String(meta.handover ?? prev.handover ?? '').trim(),
         treatment: String(meta.treatment ?? prev.treatment ?? '').trim(),
+        mealStapleForm: String(meta.mealStapleForm ?? prev.mealStapleForm ?? '').trim(),
+        mealSideForm: String(meta.mealSideForm ?? prev.mealSideForm ?? '').trim(),
+        mealFluidThicken: String(meta.mealFluidThicken ?? prev.mealFluidThicken ?? '').trim(),
+        mealSoup: String(meta.mealSoup ?? prev.mealSoup ?? '').trim(),
+        mealIndividualNote: String(meta.mealIndividualNote ?? prev.mealIndividualNote ?? '').trim(),
         updatedAt: ts || new Date().toISOString(),
       };
       changed++;
