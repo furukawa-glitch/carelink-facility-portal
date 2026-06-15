@@ -905,6 +905,31 @@ export function getNursingDirectives(linkKey) {
   });
 }
 
+/**
+ * 看護指示を対象利用者に絞る（他利用者向けの指示を救急サマリー等に混ぜない）
+ * @param {string} linkKey
+ * @param {Record<string, unknown>} resident
+ */
+export function getNursingDirectivesForResident(linkKey, resident) {
+  const rid = String(resident?.id ?? '').trim();
+  const rNameKey = personNameMatchKey(resident?.name);
+  return getNursingDirectives(linkKey).filter((d) => {
+    const targetId = String(d?.targetResidentId ?? '').trim();
+    const targetNameKey = personNameMatchKey(d?.targetResidentName);
+    if (targetId && rid && targetId !== rid) return false;
+    if (targetNameKey && rNameKey && targetNameKey !== rNameKey) return false;
+    if (!targetId && !targetNameKey && rNameKey) {
+      const text = String(d?.text ?? '').trim();
+      const m = text.match(/^([^\s（(]+)様/u);
+      if (m) {
+        const inTextKey = personNameMatchKey(m[1]);
+        if (inTextKey && inTextKey !== rNameKey) return false;
+      }
+    }
+    return true;
+  });
+}
+
 /** @param {string} text @param {{ targetResidentName?: string; targetResidentRoom?: string }} opts */
 function formatNursingDirectiveText(text, opts = {}) {
   const t = String(text ?? '').trim();
@@ -3554,6 +3579,44 @@ function formatCareEventOneLine(e) {
 }
 
 /**
+ * 救急搬送サマリー用：直近7日の食事状況（巡視は含めない）
+ * @param {Record<string, unknown>} resident
+ * @param {number} weekAgoMs
+ */
+function buildEmergencyMealWeekSummary(resident, weekAgoMs) {
+  const id = String(resident?.id ?? '');
+  const ctx = careEventResidentContext(resident);
+  const anchor = new Date();
+  /** @type {string[]} */
+  const dayKeys = [];
+  for (let d = 6; d >= 0; d--) {
+    const dt = new Date(anchor);
+    dt.setHours(0, 0, 0, 0);
+    dt.setDate(dt.getDate() - d);
+    dayKeys.push(localYmd(dt));
+  }
+  /** @type {Map<string, string[]>} */
+  const byDay = new Map(dayKeys.map((k) => [k, []]));
+  const nutritionEvents = getAllCareEvents()
+    .filter((e) => isCareEventForResident(e, id, ctx))
+    .filter((e) => ['meal', 'enteral'].includes(String(e.type)))
+    .filter((e) => new Date(e.ts).getTime() >= weekAgoMs);
+  for (const e of nutritionEvents) {
+    const key = tokyoYmdFromTs(e.ts) || localYmd(new Date(e.ts));
+    if (!byDay.has(key)) continue;
+    byDay.get(key).push(formatCareEventOneLine(e));
+  }
+  const lines = ['【直近7日・食事状況（搬送前1週間）】'];
+  for (const key of dayKeys) {
+    const items = byDay.get(key) ?? [];
+    if (!items.length) lines.push(`${key}: 食事記録なし`);
+    else lines.push(`${key}: ${items.join(' / ')}`);
+  }
+  lines.push(`（食事・経管ログ合計 ${nutritionEvents.length} 件。巡視は記載していません）`);
+  return lines.join('\n');
+}
+
+/**
  * 救急搬送サマリー下段4欄を、localStorage のケアイベント・バイタル・名簿から組み立てる
  * @param {Record<string, unknown>} resident
  * @param {string} [facilitySheetTitle] 突合参考（現状は利用者ID中心で抽出）
@@ -3571,43 +3634,13 @@ export function buildEmergencySummaryNarrativeFromRecords(resident, facilityShee
   const weekAgo = now - 7 * 24 * 3600000;
 
   const evalResult = id ? evaluateResidentMonitor(resident) : null;
-  const buckets = id ? getWeekCalendarBuckets(id) : [];
-
-  const lifeEvents = id
-    ? getAllCareEvents().filter(
-        (e) =>
-          String(e.residentId) === id &&
-          ['patrol', 'meal', 'excretion', 'enteral', 'fluid_intake'].includes(String(e.type)) &&
-          new Date(e.ts).getTime() >= weekAgo
-      )
-    : [];
-  lifeEvents.sort((a, b) => new Date(b.ts) - new Date(a.ts));
 
   const dailyLines = [];
   dailyLines.push(`【主疾患・状態（名簿）】${cond}`);
   dailyLines.push(`【名簿の排便欄】${lastStoolCell}`);
   if (facHint) dailyLines.push(`【参照タブ】${facHint}`);
-
-  const bucketLines = [];
-  for (const b of buckets) {
-    const sum = b.patrol + b.meal + b.excretion;
-    const noteStr = Array.isArray(b.notes) && b.notes.length ? ` メモ: ${[...new Set(b.notes)].join(' / ')}` : '';
-    if (sum > 0 || noteStr)
-      bucketLines.push(`${b.date} 巡視${b.patrol}・食事${b.meal}・排泄${b.excretion}${noteStr}`);
-  }
-  if (bucketLines.length) {
-    dailyLines.push('【直近7日・提供記録件数（この端末に保存されたログ）】');
-    dailyLines.push(...bucketLines);
-  } else {
-    dailyLines.push(
-      '【直近7日・提供記録】この端末に保存された巡視・食事・排泄の件数ログはまだありません。'
-    );
-  }
-
-  if (lifeEvents.length) {
-    dailyLines.push('【直近の巡視・食事・排泄ログ（最大12件・新しい順）】');
-    for (const e of lifeEvents.slice(0, 12)) dailyLines.push(`・${formatCareEventOneLine(e)}`);
-  }
+  dailyLines.push('');
+  dailyLines.push(buildEmergencyMealWeekSummary(resident, weekAgo));
 
   const problemLines = [];
   if (evalResult) {
@@ -3666,11 +3699,11 @@ export function buildEmergencySummaryNarrativeFromRecords(resident, facilityShee
       careLines.push(adv);
     }
   }
-  const nDir = String(linkKey ?? '').trim() ? getNursingDirectives(String(linkKey)) : [];
-  const recentN = Array.isArray(nDir) ? nDir.slice(0, 5) : [];
+  const nDir = String(linkKey ?? '').trim() ? getNursingDirectivesForResident(String(linkKey), resident) : [];
+  const recentN = Array.isArray(nDir) ? nDir.slice(0, 8) : [];
   if (recentN.length) {
     if (careLines.length) careLines.push('');
-    careLines.push('【施設の看護指示メモ（直近・参考）】');
+    careLines.push('【施設の看護指示メモ（この方・参考）】');
     for (const row of recentN) {
       const tx = String(row?.text ?? '').trim();
       if (tx) careLines.push(`・${tx}`);

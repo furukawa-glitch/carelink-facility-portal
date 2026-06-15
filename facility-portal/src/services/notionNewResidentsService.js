@@ -91,7 +91,19 @@ export async function fetchNotionNewResidentsDatabase() {
   if (!dbId) {
     throw new Error('VITE_NOTION_NEW_RESIDENTS_DATABASE_ID が未設定です');
   }
-  const idEnc = encodeURIComponent(dbId.trim());
+  return fetchNotionDatabaseById(dbId);
+}
+
+/**
+ * @param {string} databaseId
+ * @returns {Promise<{ rows: ReturnType<typeof notionPageToRow>[]; rawCount: number }>}
+ */
+export async function fetchNotionDatabaseById(databaseId) {
+  const dbId = String(databaseId ?? '').trim();
+  if (!dbId) {
+    throw new Error('Notion データベース ID が未設定です');
+  }
+  const idEnc = encodeURIComponent(dbId);
   const res = await fetch(`/notion-api/databases/${idEnc}/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -112,4 +124,8 @@ export async function fetchNotionNewResidentsDatabase() {
 
 export function hasNotionNewResidentsConfig() {
   return Boolean(String(import.meta.env.VITE_NOTION_NEW_RESIDENTS_DATABASE_ID ?? '').trim());
+}
+
+export function hasNotionResidentInstructionsConfig() {
+  return Boolean(String(import.meta.env.VITE_NOTION_RESIDENT_INSTRUCTIONS_DATABASE_ID ?? '').trim());
 }

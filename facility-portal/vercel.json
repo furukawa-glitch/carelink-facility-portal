@@ -5,6 +5,10 @@
       "destination": "/api/sheets-proxy"
     },
     {
+      "source": "/notion-api/:path*",
+      "destination": "/api/notion-proxy?path=:path*"
+    },
+    {
       "source": "/spreadsheet-export/:path*",
       "destination": "https://docs.google.com/:path*"
     },

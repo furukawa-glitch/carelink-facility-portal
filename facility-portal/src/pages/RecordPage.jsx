@@ -132,6 +132,10 @@ import {
 } from '../lib/residentNameMatch.js';
 import { STAY_STATUS_CHANGED_EVENT } from '../lib/residentStayStatus.js';
 import {
+  hasNotionDoctorLookupConfig,
+  lookupResidentDoctorFromNotion,
+} from '../services/notionResidentCareService.js';
+import {
   buildStayStatusPlansForDate,
   filterImportantPlans,
   PLAN_CALENDAR_EXPANDED_LS,
@@ -1389,6 +1393,7 @@ export function RecordPage({
   );
   const [emergencyPickId, setEmergencyPickId] = useState('');
   const [emergencyBusy, setEmergencyBusy] = useState(false);
+  const [notionDoctorBusy, setNotionDoctorBusy] = useState(false);
   const [accidentReportOpen, setAccidentReportOpen] = useState(false);
   const [accidentMonthlyOpen, setAccidentMonthlyOpen] = useState(false);
   const [nearMissOpen, setNearMissOpen] = useState(false);
@@ -2192,15 +2197,13 @@ export function RecordPage({
         selectedDef?.linkKey ?? ''
       );
       const prev = prevDraft && typeof prevDraft === 'object' ? prevDraft : {};
-      const lk = String(selectedDef?.linkKey ?? '').trim();
-      const pullHomeDoctor = lk === '北名古屋' || lk === '起' || lk === '一宮';
       const homeDoctor = String(resident?.homeDoctor ?? '').trim();
       return {
         senderOffice: String(selectedDef?.emergencyFacilityName ?? selectedDef?.tabLabel ?? '').trim(),
         senderAddress: String(selectedDef?.emergencySenderAddress ?? '').trim(),
         senderTel: String(prev.senderTel ?? '').trim(),
         senderNurse: String(prev.senderNurse ?? '').trim(),
-        primaryDoctor: String(prev.primaryDoctor ?? '').trim() || (pullHomeDoctor ? homeDoctor : ''),
+        primaryDoctor: String(prev.primaryDoctor ?? '').trim() || homeDoctor,
         medicalAgency: String(prev.medicalAgency ?? '').trim(),
         medicalAddress: String(prev.medicalAddress ?? '').trim(),
         dailyLife: narrative.dailyLife,
@@ -2321,6 +2324,31 @@ export function RecordPage({
     }
     setEmergencyDraft((prev) => buildEmergencyDraftFromResident(selectedEmergencyResident, prev));
   }, [selectedEmergencyResident, buildEmergencyDraftFromResident]);
+
+  const applyNotionDoctorToEmergencyDraft = useCallback(async (resident) => {
+    if (!resident || !hasNotionDoctorLookupConfig()) return false;
+    setNotionDoctorBusy(true);
+    try {
+      const info = await lookupResidentDoctorFromNotion(String(resident.name ?? ''));
+      if (!info) return false;
+      setEmergencyDraft((prev) => ({
+        ...prev,
+        primaryDoctor: String(prev.primaryDoctor ?? '').trim() || info.primaryDoctor,
+        medicalAgency: String(prev.medicalAgency ?? '').trim() || info.medicalAgency,
+        medicalAddress: String(prev.medicalAddress ?? '').trim() || info.medicalAddress,
+      }));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setNotionDoctorBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedEmergencyResident) return;
+    void applyNotionDoctorToEmergencyDraft(selectedEmergencyResident);
+  }, [selectedEmergencyResident, applyNotionDoctorToEmergencyDraft]);
 
   useEffect(
     () => () => {
@@ -6489,22 +6517,34 @@ export function RecordPage({
                     onChange={(e) => setEmergencyDraft((prev) => ({ ...prev, [k]: e.target.value }))}
                     className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold"
                   />
-                  {k === 'primaryDoctor' && selectedDef?.linkKey === '北名古屋' ? (
-                    <div className="mt-1 flex flex-wrap gap-1.5">
-                      {[
-                        { value: '田中在宅', label: '田中在宅', cls: 'border-blue-400 bg-blue-100 text-blue-900' },
-                        { value: '北名古屋', label: '北名古屋', cls: 'border-amber-400 bg-amber-100 text-amber-900' },
-                        { value: 'ひのとり', label: 'ひのとり', cls: 'border-rose-400 bg-rose-100 text-rose-900' },
-                      ].map((opt) => (
+                  {k === 'primaryDoctor' ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {selectedDef?.linkKey === '北名古屋'
+                        ? [
+                            { value: '田中在宅', label: '田中在宅', cls: 'border-blue-400 bg-blue-100 text-blue-900' },
+                            { value: '北名古屋', label: '北名古屋', cls: 'border-amber-400 bg-amber-100 text-amber-900' },
+                            { value: 'ひのとり', label: 'ひのとり', cls: 'border-rose-400 bg-rose-100 text-rose-900' },
+                          ].map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => setEmergencyDraft((prev) => ({ ...prev, primaryDoctor: opt.value }))}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] font-black ${opt.cls}`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))
+                        : null}
+                      {hasNotionDoctorLookupConfig() ? (
                         <button
-                          key={opt.value}
                           type="button"
-                          onClick={() => setEmergencyDraft((prev) => ({ ...prev, primaryDoctor: opt.value }))}
-                          className={`rounded-full border px-2.5 py-1 text-[11px] font-black ${opt.cls}`}
+                          disabled={!selectedEmergencyResident || notionDoctorBusy}
+                          onClick={() => void applyNotionDoctorToEmergencyDraft(selectedEmergencyResident)}
+                          className="rounded-full border border-violet-300 bg-violet-50 px-2.5 py-1 text-[11px] font-black text-violet-900 disabled:opacity-50"
                         >
-                          {opt.label}
+                          {notionDoctorBusy ? 'Notion取得中…' : 'Notionから主治医'}
                         </button>
-                      ))}
+                      ) : null}
                     </div>
                   ) : null}
                 </label>
