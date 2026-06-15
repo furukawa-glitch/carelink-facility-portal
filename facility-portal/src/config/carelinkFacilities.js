@@ -22,8 +22,10 @@
  * @property {'none'|'on_site_csv'|'external_manual'} [dayServiceMode] デイ予定: 併設デイはカイポケCSV取込／外部通所は手入力
  */
 
-/** @type {readonly CarelinkFacilityDef[]} 左から右のタブ順（スクリーンショット準拠） */
-export const CARELINK_FACILITIES = Object.freeze([
+export const LEDGER_COMPANY_TAG_DEFAULT = 'ケアサポート';
+
+/** @type {readonly CarelinkFacilityDef[]} リポジトリ内の全施設定義 */
+const CARELINK_FACILITIES_ALL = Object.freeze([
   {
     sheetTitle: '中川本館：入居者',
     linkKey: '中川本館',
@@ -134,6 +136,33 @@ export const CARELINK_FACILITIES = Object.freeze([
   },
 ]);
 
+function resolveTenantLedgerCompanyTag() {
+  return String(import.meta.env.VITE_CARELINK_LEDGER_COMPANY_TAG ?? '').trim();
+}
+
+/**
+ * この Vercel デプロイで表示・名簿同期する施設一覧。
+ * VITE_CARELINK_LEDGER_COMPANY_TAG 未設定時は全施設（開発用）。
+ * 例: ケアサポート → 千音寺・北名古屋・愛西・中川 / ブレインエナジー → 青空一宮・青空起
+ * @type {readonly CarelinkFacilityDef[]}
+ */
+export const CARELINK_FACILITIES = Object.freeze(
+  (() => {
+    const tag = resolveTenantLedgerCompanyTag();
+    if (!tag) return CARELINK_FACILITIES_ALL;
+    const filtered = CARELINK_FACILITIES_ALL.filter(
+      (f) => String(f.ledgerCompanyTag ?? LEDGER_COMPANY_TAG_DEFAULT).trim() === tag
+    );
+    if (filtered.length === 0) {
+      console.warn(
+        `[carelinkFacilities] VITE_CARELINK_LEDGER_COMPANY_TAG="${tag}" に一致する施設がありません。全施設を表示します。`
+      );
+      return CARELINK_FACILITIES_ALL;
+    }
+    return Object.freeze(filtered);
+  })()
+);
+
 /**
  * デイ予定の取り込み・手入力 UI を出すか（carelinkFacilities の dayServiceMode）
  * @param {string} linkKey
@@ -146,9 +175,6 @@ export function dayServiceModeForFacilityLinkKey(linkKey) {
   if (m === 'on_site_csv' || m === 'external_manual') return m;
   return 'none';
 }
-
-/** 台帳に書き出す運営会社タグ（未設定施設の既定） */
-export const LEDGER_COMPANY_TAG_DEFAULT = 'ケアサポート';
 
 /**
  * 事故・ヒヤリ台帳の運営会社タグ（施設 linkKey）

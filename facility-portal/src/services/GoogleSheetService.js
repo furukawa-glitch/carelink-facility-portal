@@ -2178,7 +2178,7 @@ async function loadResidentsFromSource() {
     }
   }
 
-  return loadResidentsFromSheetSeedOnly();
+  return fetchResidentsFromSheetSeedOnly();
 }
 
 /**
