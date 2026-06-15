@@ -3524,7 +3524,7 @@ function formatVitalMetaLine(m) {
       `血圧 ${String(m.bpUpper).trim()}/${String(m.bpLower ?? '').trim() || '—'}`
     );
   if (m.pulse != null && String(m.pulse).trim() !== '') parts.push(`脈拍 ${String(m.pulse).trim()}`);
-  if (m.spo2 != null && String(m.spo2).trim() !== '') parts.push(`SpO2 ${String(m.spo2).trim()}%`);
+  if (m.spo2 != null && String(m.spo2).trim() !== '') parts.push(`SPO2 ${String(m.spo2).trim()}%`);
   if (m.weight != null && String(m.weight).trim() !== '') parts.push(`体重 ${String(m.weight).trim()}kg`);
   if (String(m.handwrittenMemo ?? '').trim()) parts.push('手書きメモあり');
   return parts.length ? parts.join('、') : '（数値なし）';
@@ -4276,6 +4276,65 @@ function safeEmergencyDataImageSrc(url) {
   return u;
 }
 
+/** @param {Record<string, unknown>} m */
+function vitalMetaDisplayTs(meta, eventTs) {
+  return resolveVitalMeasuredAt(meta, eventTs) || String(eventTs ?? '');
+}
+
+/** @param {Record<string, unknown>} m */
+function formatVitalCellTemp(m) {
+  const v = String(m.temp ?? '').trim();
+  return v ? `${v}℃` : '—';
+}
+
+/** @param {Record<string, unknown>} m */
+function formatVitalCellBp(m) {
+  const u = String(m.bpUpper ?? '').trim();
+  const l = String(m.bpLower ?? '').trim();
+  if (!u && !l) return '—';
+  return `${u || '—'}/${l || '—'}`;
+}
+
+/** @param {Record<string, unknown>} m */
+function formatVitalCellPulse(m) {
+  const v = String(m.pulse ?? '').trim();
+  return v || '—';
+}
+
+/** @param {Record<string, unknown>} m */
+function formatVitalCellSpo2(m) {
+  const v = String(m.spo2 ?? '').trim();
+  return v ? `${v}%` : '—';
+}
+
+/** @param {{ vitalFlags?: { label?: string }[]; stoolHours?: number | null; stoolBad?: boolean; urineHours?: number | null; urineBad?: boolean }} evalResult */
+function formatEmergencyEvalSummaryText(evalResult) {
+  const lines = [];
+  const flags = Array.isArray(evalResult?.vitalFlags) ? evalResult.vitalFlags : [];
+  if (flags.length) {
+    lines.push('【バイタル】');
+    for (const f of flags) {
+      const label = String(f?.label ?? '').trim();
+      if (label) lines.push(`・${label}`);
+    }
+  } else {
+    lines.push('【バイタル】異常の自動検知なし');
+  }
+  if (evalResult?.stoolBad) {
+    const h = evalResult.stoolHours;
+    lines.push(`【排便】最終から約 ${h != null ? Math.round(h) : '—'} 時間（要注意）`);
+  } else {
+    lines.push('【排便】異常の自動検知なし');
+  }
+  if (evalResult?.urineBad) {
+    const h = evalResult.urineHours;
+    lines.push(`【排尿】最終から約 ${h != null ? Math.round(h) : '—'} 時間（要注意）`);
+  } else {
+    lines.push('【排尿】異常の自動検知なし');
+  }
+  return lines.join('\n');
+}
+
 export function buildEmergencySummaryHtml(resident, evalResult, aiAdvice, contact, draft = {}) {
   const name = String(resident.name ?? '');
   const room = String(resident.room ?? '');
@@ -4287,10 +4346,17 @@ export function buildEmergencySummaryHtml(resident, evalResult, aiAdvice, contac
   const med = getResidentMedicationProfile(String(resident?.id ?? ''));
   const week = getWeeklyVitalTimeline(String(resident.id));
   const rows = week
-    .map(
-      (e) =>
-        `<tr><td>${escapeHtml(e.ts)}</td><td>${escapeHtml(JSON.stringify(e.meta ?? {}))}</td></tr>`
-    )
+    .map((e) => {
+      const m = /** @type {Record<string, unknown>} */ (e.meta ?? {});
+      const displayTs = vitalMetaDisplayTs(m, String(e.ts ?? ''));
+      return `<tr>
+        <td>${escapeHtml(careEventShortTs(displayTs))}</td>
+        <td>${escapeHtml(formatVitalCellTemp(m))}</td>
+        <td>${escapeHtml(formatVitalCellBp(m))}</td>
+        <td>${escapeHtml(formatVitalCellPulse(m))}</td>
+        <td>${escapeHtml(formatVitalCellSpo2(m))}</td>
+      </tr>`;
+    })
     .join('');
   const senderOffice = String(draft.senderOffice ?? '').trim();
   const senderAddress = String(draft.senderAddress ?? '').trim();
@@ -4374,19 +4440,9 @@ export function buildEmergencySummaryHtml(resident, evalResult, aiAdvice, contac
   </table>
   <table><thead><tr><th style="width:50px">No.</th><th>薬剤名</th><th>服用（朝・昼・夕等）</th></tr></thead><tbody>${medRows}</tbody></table>
   <h2>直近1週間 バイタル記録ログ</h2>
-  <table><thead><tr><th>日時</th><th>内容</th></tr></thead><tbody>${rows || '<tr><td colspan="2">記録なし（記録蓄積後に表示）</td></tr>'}</tbody></table>
+  <table><thead><tr><th>日時</th><th>体温</th><th>血圧</th><th>脈拍</th><th>SPO2</th></tr></thead><tbody>${rows || '<tr><td colspan="5">記録なし（記録蓄積後に表示）</td></tr>'}</tbody></table>
   <h2>現在の自動検知</h2>
-  <div class="box"><pre style="white-space:pre-wrap;margin:0">${JSON.stringify(
-    {
-      vitalFlags: evalResult.vitalFlags,
-      stoolHours: evalResult.stoolHours,
-      stoolBad: evalResult.stoolBad,
-      urineHours: evalResult.urineHours,
-      urineBad: evalResult.urineBad,
-    },
-    null,
-    2
-  )}</pre></div>
+  <div class="box"><pre style="white-space:pre-wrap;margin:0">${escapeHtml(formatEmergencyEvalSummaryText(evalResult))}</pre></div>
   <h2>AIアドバイス（参考）</h2>
   <div class="box"><pre style="white-space:pre-wrap;margin:0">${escapeHtml(String(aiAdvice ?? ''))}</pre></div>
   <p class="no-print" style="margin-top:24px;font-size:12px;color:#666">ブラウザの印刷から PDF 保存可能です。</p>
