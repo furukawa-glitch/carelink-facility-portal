@@ -1394,6 +1394,7 @@ export function RecordPage({
   const [emergencyPickId, setEmergencyPickId] = useState('');
   const [emergencyBusy, setEmergencyBusy] = useState(false);
   const [notionDoctorBusy, setNotionDoctorBusy] = useState(false);
+  const [notionDoctorHint, setNotionDoctorHint] = useState('');
   const [accidentReportOpen, setAccidentReportOpen] = useState(false);
   const [accidentMonthlyOpen, setAccidentMonthlyOpen] = useState(false);
   const [nearMissOpen, setNearMissOpen] = useState(false);
@@ -2197,7 +2198,8 @@ export function RecordPage({
         selectedDef?.linkKey ?? ''
       );
       const prev = prevDraft && typeof prevDraft === 'object' ? prevDraft : {};
-      const homeDoctor = String(resident?.homeDoctor ?? '').trim();
+      const homeDoctorRaw = String(resident?.homeDoctor ?? '').trim();
+      const homeDoctor = homeDoctorLooksLikeResidentName(homeDoctorRaw, resident.name) ? '' : homeDoctorRaw;
       return {
         senderOffice: String(selectedDef?.emergencyFacilityName ?? selectedDef?.tabLabel ?? '').trim(),
         senderAddress: String(selectedDef?.emergencySenderAddress ?? '').trim(),
@@ -2322,23 +2324,38 @@ export function RecordPage({
       setEmergencyDraft(emptyEmergencyDraft());
       return;
     }
-    setEmergencyDraft((prev) => buildEmergencyDraftFromResident(selectedEmergencyResident, prev));
+    setEmergencyDraft(buildEmergencyDraftFromResident(selectedEmergencyResident, null));
   }, [selectedEmergencyResident, buildEmergencyDraftFromResident]);
 
-  const applyNotionDoctorToEmergencyDraft = useCallback(async (resident) => {
+  const applyNotionDoctorToEmergencyDraft = useCallback(async (resident, { alertOnFailure = false } = {}) => {
     if (!resident || !hasNotionDoctorLookupConfig()) return false;
     setNotionDoctorBusy(true);
+    setNotionDoctorHint('');
     try {
       const info = await lookupResidentDoctorFromNotion(String(resident.name ?? ''));
-      if (!info) return false;
-      setEmergencyDraft((prev) => ({
-        ...prev,
-        primaryDoctor: String(prev.primaryDoctor ?? '').trim() || info.primaryDoctor,
-        medicalAgency: String(prev.medicalAgency ?? '').trim() || info.medicalAgency,
-        medicalAddress: String(prev.medicalAddress ?? '').trim() || info.medicalAddress,
-      }));
+      if (!info.ok) {
+        setNotionDoctorHint(info.message);
+        if (alertOnFailure) alert(info.message);
+        return false;
+      }
+      setEmergencyDraft((prev) => {
+        const prevPrimary = String(prev.primaryDoctor ?? '').trim();
+        const prevAgency = String(prev.medicalAgency ?? '').trim();
+        const prevAddress = String(prev.medicalAddress ?? '').trim();
+        const primaryWrong = homeDoctorLooksLikeResidentName(prevPrimary, resident.name);
+        return {
+          ...prev,
+          primaryDoctor: (prevPrimary && !primaryWrong ? prevPrimary : '') || info.primaryDoctor,
+          medicalAgency: prevAgency || info.medicalAgency,
+          medicalAddress: prevAddress || info.medicalAddress,
+        };
+      });
+      setNotionDoctorHint(`Notion「${info.notionName}」から反映しました。`);
       return true;
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Notion 取得に失敗しました';
+      setNotionDoctorHint(msg);
+      if (alertOnFailure) alert(msg);
       return false;
     } finally {
       setNotionDoctorBusy(false);
@@ -2346,7 +2363,10 @@ export function RecordPage({
   }, []);
 
   useEffect(() => {
-    if (!selectedEmergencyResident) return;
+    if (!selectedEmergencyResident) {
+      setNotionDoctorHint('');
+      return;
+    }
     void applyNotionDoctorToEmergencyDraft(selectedEmergencyResident);
   }, [selectedEmergencyResident, applyNotionDoctorToEmergencyDraft]);
 
@@ -6539,11 +6559,18 @@ export function RecordPage({
                         <button
                           type="button"
                           disabled={!selectedEmergencyResident || notionDoctorBusy}
-                          onClick={() => void applyNotionDoctorToEmergencyDraft(selectedEmergencyResident)}
+                          onClick={() =>
+                            void applyNotionDoctorToEmergencyDraft(selectedEmergencyResident, {
+                              alertOnFailure: true,
+                            })
+                          }
                           className="rounded-full border border-violet-300 bg-violet-50 px-2.5 py-1 text-[11px] font-black text-violet-900 disabled:opacity-50"
                         >
                           {notionDoctorBusy ? 'Notion取得中…' : 'Notionから主治医'}
                         </button>
+                      ) : null}
+                      {notionDoctorHint ? (
+                        <p className="w-full text-[11px] font-bold leading-snug text-violet-800">{notionDoctorHint}</p>
                       ) : null}
                     </div>
                   ) : null}

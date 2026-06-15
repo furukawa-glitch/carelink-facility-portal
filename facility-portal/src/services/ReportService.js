@@ -3734,6 +3734,7 @@ export function buildEmergencyAcuteChangeHint(resident) {
   const dayAgo = now - 24 * 3600000;
   const recent = getAllCareEvents()
     .filter((e) => String(e?.residentId ?? '').trim() === id)
+    .filter((e) => String(e?.type ?? '') !== 'patrol')
     .filter((e) => {
       const t = new Date(e.ts).getTime();
       return Number.isFinite(t) && t >= dayAgo;

@@ -104,20 +104,32 @@ export async function fetchNotionDatabaseById(databaseId) {
     throw new Error('Notion データベース ID が未設定です');
   }
   const idEnc = encodeURIComponent(dbId);
-  const res = await fetch(`/notion-api/databases/${idEnc}/query`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  /** @type {Record<string, unknown>[]} */
+  const results = [];
+  /** @type {string | undefined} */
+  let startCursor;
+  do {
+    /** @type {Record<string, unknown>} */
+    const payload = {
       page_size: 100,
       sorts: [{ timestamp: 'created_time', direction: 'descending' }],
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = data?.message || data?.code || res.statusText || 'Notion API エラー';
-    throw new Error(String(msg));
-  }
-  const results = Array.isArray(data.results) ? data.results : [];
+    };
+    if (startCursor) payload.start_cursor = startCursor;
+    const res = await fetch(`/notion-api/databases/${idEnc}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.message || data?.code || res.statusText || 'Notion API エラー';
+      throw new Error(String(msg));
+    }
+    const page = Array.isArray(data.results) ? data.results : [];
+    results.push(...page);
+    startCursor = data.has_more ? String(data.next_cursor ?? '') : undefined;
+    if (startCursor === '') startCursor = undefined;
+  } while (startCursor);
   const rows = results.map((p) => notionPageToRow(/** @type {Record<string, unknown>} */ (p)));
   return { rows, rawCount: results.length };
 }

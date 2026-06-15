@@ -38,23 +38,21 @@ function findNotionRowByResidentName(rows, residentName) {
     if (rowKey === targetKey) return row;
     if (rowKey.includes(targetKey) || targetKey.includes(rowKey)) return row;
   }
-  const norm = normalizePersonNameForMatch(residentName);
-  for (const row of rows) {
-    for (const val of Object.values(row.fields ?? {})) {
-      const v = normalizePersonNameForMatch(val);
-      if (v && v.includes(norm) && norm.length >= 2) return row;
-    }
-  }
   return null;
 }
 
 /**
  * @param {string} residentName
- * @returns {Promise<{ primaryDoctor: string; medicalAgency: string; medicalAddress: string; notionUrl: string; sourceDb: string } | null>}
+ * @returns {Promise<
+ *   | { ok: true; primaryDoctor: string; medicalAgency: string; medicalAddress: string; notionUrl: string; sourceDb: string; notionName: string }
+ *   | { ok: false; reason: 'not_configured' | 'not_found' | 'empty_fields' | 'api_error'; message: string; notionName?: string; notionUrl?: string; fieldNames?: string[] }
+ * >}
  */
 export async function lookupResidentDoctorFromNotion(residentName) {
   const name = String(residentName ?? '').trim();
-  if (!name) return null;
+  if (!name) {
+    return { ok: false, reason: 'not_found', message: '利用者名が空です。' };
+  }
 
   /** @type {string[]} */
   const dbIds = [];
@@ -62,8 +60,16 @@ export async function lookupResidentDoctorFromNotion(residentName) {
   const newResidentsId = String(import.meta.env.VITE_NOTION_NEW_RESIDENTS_DATABASE_ID ?? '').trim();
   if (instructionsId) dbIds.push(instructionsId);
   if (newResidentsId && newResidentsId !== instructionsId) dbIds.push(newResidentsId);
-  if (!dbIds.length) return null;
+  if (!dbIds.length) {
+    return {
+      ok: false,
+      reason: 'not_configured',
+      message: 'VITE_NOTION_NEW_RESIDENTS_DATABASE_ID が未設定です。Vercel で設定後、再デプロイしてください。',
+    };
+  }
 
+  /** @type {string} */
+  let lastApiError = '';
   for (const dbId of dbIds) {
     try {
       const { rows } = await fetchNotionDatabaseById(dbId);
@@ -88,22 +94,44 @@ export async function lookupResidentDoctorFromNotion(residentName) {
       const medicalAddress = pickField(hit.fields, [
         '医療機関住所',
         'クリニック住所',
-        '住所',
         '医療機関所在地',
       ]);
-      if (!primaryDoctor && !medicalAgency && !medicalAddress) continue;
+      if (!primaryDoctor && !medicalAgency && !medicalAddress) {
+        const fieldNames = Object.entries(hit.fields)
+          .filter(([, v]) => String(v ?? '').trim())
+          .map(([k]) => k)
+          .slice(0, 16);
+        return {
+          ok: false,
+          reason: 'empty_fields',
+          message: `Notionで「${hit.name}」は見つかりましたが、主治医・医療機関の欄が未入力です。DBに「主治医」「医療機関名」列を追加して入力してください。`,
+          notionName: hit.name,
+          notionUrl: String(hit.url ?? ''),
+          fieldNames,
+        };
+      }
       return {
+        ok: true,
         primaryDoctor,
         medicalAgency,
         medicalAddress,
         notionUrl: String(hit.url ?? ''),
         sourceDb: dbId,
+        notionName: hit.name,
       };
-    } catch {
-      continue;
+    } catch (e) {
+      lastApiError = e instanceof Error ? e.message : 'Notion API エラー';
     }
   }
-  return null;
+
+  const norm = normalizePersonNameForMatch(name);
+  return {
+    ok: false,
+    reason: lastApiError ? 'api_error' : 'not_found',
+    message: lastApiError
+      ? `Notion API エラー: ${lastApiError}（トークン・DB接続・再デプロイを確認）`
+      : `Notion DB に「${norm || name}」が見つかりません。タイトル列の氏名が名簿と一致しているか確認してください。`,
+  };
 }
 
 export function hasNotionDoctorLookupConfig() {
