@@ -1671,6 +1671,19 @@ export function RecordPage({
     return list;
   }, [filteredResidents, residentSortMode, residentNameQuery, tick]);
 
+  /** 経管メニュー取込後など: 下書きが空の行だけメニューを再反映（入力中は上書きしない） */
+  const refreshBulkEnteralPlans = useCallback(() => {
+    setBulkDraft((prev) => {
+      const next = { ...prev };
+      for (const r of displayResidents) {
+        const id = String(r.id);
+        if (!next[id]) continue;
+        next[id] = applyEnteralBulkPlanToRow(next[id], r, selectedFacilityLinkKey, bulkGlobalMealSlot);
+      }
+      return next;
+    });
+  }, [displayResidents, selectedFacilityLinkKey, bulkGlobalMealSlot]);
+
   /** 一覧表・24時間グリッド用（保存済みログからマスを埋める） */
   const bulkHourlySavedByResident = useMemo(() => {
     const m = {};
@@ -3007,10 +3020,11 @@ export function RecordPage({
       const ymd = bulkTableYmd(bulkSheetDate);
       const isToday = ymd === currentYmd();
       const savedCare = bulkCareSeedForResidentDay(id, ymd);
+      const resident = displayResidents.find((r) => String(r.id) === String(id));
       const base =
         prev[id] ??
         (() => ({
-          ...vitalSeedForBulkTableRow(id, ymd, r),
+          ...vitalSeedForBulkTableRow(id, ymd, resident),
           ...hourlyDraftSeedForResidentDay(id, ymd),
           ...(isToday
             ? {
@@ -3021,7 +3035,7 @@ export function RecordPage({
         }))();
       return { ...prev, [id]: withMealFormsFromRoomNotes(id, { ...base, ...patch }) };
     });
-  }, [bulkGlobalMealSlot, bulkSheetDate]);
+  }, [bulkGlobalMealSlot, bulkSheetDate, displayResidents]);
 
   const bulkRowHasInput = useCallback((row) => {
     if (!row) return false;
