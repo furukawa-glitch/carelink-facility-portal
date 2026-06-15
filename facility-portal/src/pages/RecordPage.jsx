@@ -30,6 +30,7 @@ import {
   Stethoscope,
   Table2,
   Upload,
+  Users,
   Utensils,
   Wind,
   X,
@@ -144,6 +145,7 @@ import {
 } from '../lib/planCalendarDisplay.js';
 import { ResidentStayStatusBadges } from '../components/ResidentStayStatusBadges.jsx';
 import { ResidentMonitorBoard } from '../components/ResidentMonitorBoard.jsx';
+import { ResidentRosterManager } from '../components/ResidentRosterManager.jsx';
 import { formatCardMonitorAlertLine } from '../lib/residentMonitorAlertShort.js';
 
 /** 入居者一覧の表示モード（localStorage） */
@@ -1399,6 +1401,7 @@ export function RecordPage({
   const [accidentReportOpen, setAccidentReportOpen] = useState(false);
   const [accidentMonthlyOpen, setAccidentMonthlyOpen] = useState(false);
   const [nearMissOpen, setNearMissOpen] = useState(false);
+  const [residentRosterOpen, setResidentRosterOpen] = useState(false);
   const [nearMissMonthlyOpen, setNearMissMonthlyOpen] = useState(false);
   const [nearMissAwarenessAdminOpen, setNearMissAwarenessAdminOpen] = useState(false);
   const [homeVisitNoteOpen, setHomeVisitNoteOpen] = useState(false);
@@ -4388,6 +4391,15 @@ export function RecordPage({
             {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 shrink-0" />}
             更新
           </button>
+          <button
+            type="button"
+            onClick={() => setResidentRosterOpen(true)}
+            className={`${hdrBtn} border-emerald-700 bg-emerald-800 text-white hover:bg-emerald-700`}
+            title="利用者名簿をアプリ内で追加・編集。スプレッドシートは最初の取り込み用（種）です。"
+          >
+            <Users className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
+            名簿管理
+          </button>
           <input
             ref={kaipokeCsvInputRef}
             type="file"
@@ -6742,6 +6754,12 @@ export function RecordPage({
           setPlanRev((n) => n + 1);
           void syncFacilityStoreNow(FACILITY_STORE_RESIDENT_SCHEDULE, selectedFacilityLinkKey);
         }}
+      />
+      <ResidentRosterManager
+        open={residentRosterOpen}
+        onClose={() => setResidentRosterOpen(false)}
+        selectedSheetTitle={selectedSheetTitle}
+        onRosterChanged={() => void load(true)}
       />
     </div>
   );

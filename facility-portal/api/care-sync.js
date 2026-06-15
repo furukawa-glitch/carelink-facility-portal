@@ -144,6 +144,63 @@ function mapCareEventRow(organizationId, e) {
   };
 }
 
+/**
+ * @param {string} url
+ * @param {string} serviceKey
+ * @param {string} organizationId
+ * @param {Record<string, unknown>} input
+ */
+async function ensureFacility(url, serviceKey, organizationId, input) {
+  const sheetTitle = String(input.facility ?? input.sourceSheetTitle ?? input.source_sheet_title ?? '').trim();
+  if (!sheetTitle) return null;
+  const row = {
+    organization_id: organizationId,
+    sheet_title: sheetTitle,
+    tab_label: String(input.tabLabel ?? input.tab_label ?? sheetTitle).trim() || sheetTitle,
+    link_key: String(input.linkKey ?? input.link_key ?? '').trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  await supabaseRest(url, serviceKey, 'facilities?on_conflict=organization_id,sheet_title', 'POST', [row]);
+  const rows = await supabaseSelectJson(
+    url,
+    serviceKey,
+    `facilities?organization_id=eq.${organizationId}&sheet_title=eq.${encodeURIComponent(sheetTitle)}&select=id,sheet_title,tab_label&limit=1`
+  );
+  return rows[0] ?? null;
+}
+
+/** @param {string} organizationId @param {string|null} facilityId @param {Record<string, unknown>} r */
+function mapResidentUpsertRow(organizationId, facilityId, r) {
+  const name = String(r.name ?? '').trim();
+  if (!name) return null;
+  const legacy = String(r.legacyRowKey ?? r.legacy_row_key ?? r.id ?? '').trim();
+  const dbId = String(r.dbId ?? r.db_id ?? '').trim();
+  const row = {
+    organization_id: organizationId,
+    facility_id: facilityId,
+    legacy_row_key: legacy || null,
+    name,
+    name_kana: String(r.nameKana ?? r.name_kana ?? '').trim() || null,
+    room: String(r.room ?? '').trim() || null,
+    sheet_status: String(r.sheetStatus ?? r.sheet_status ?? '在籍').trim() || '在籍',
+    care_level_label: String(r.careLevelLabel ?? r.care_level_label ?? '').trim() || null,
+    condition_note: String(r.condition ?? r.condition_note ?? '').trim() || null,
+    home_doctor: String(r.homeDoctor ?? r.home_doctor ?? '').trim() || null,
+    insurance_label: String(r.insuranceLabel ?? r.insurance_label ?? '').trim() || null,
+    insurance_category: String(r.insuranceCategory ?? r.insurance_category ?? '').trim() || null,
+    birth_date_label: String(r.birthDateLabel ?? r.birth_date_label ?? '').trim() || null,
+    gender_label: String(r.genderLabel ?? r.gender_label ?? '').trim() || null,
+    source_sheet_title: String(r.sourceSheetTitle ?? r.facility ?? r.source_sheet_title ?? '').trim() || null,
+    is_enteral: Boolean(r.isEnteral ?? r.is_enteral),
+    is_medical_insurance_target: Boolean(r.isMedicalInsuranceTarget ?? r.is_medical_insurance_target),
+    medical_insurance_target_label:
+      String(r.medicalInsuranceTargetLabel ?? r.medical_insurance_target_label ?? '').trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (dbId) row.id = dbId;
+  return row;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { ok: false, error: 'POST only' });
@@ -283,6 +340,108 @@ export default async function handler(req, res) {
       }
       const rows = await supabaseSelectJson(supabaseUrl, serviceKey, path);
       sendJson(res, 200, { ok: true, stores: rows, count: rows.length });
+      return;
+    }
+
+    if (action === 'pull_residents') {
+      const rows = await supabaseSelectJson(
+        supabaseUrl,
+        serviceKey,
+        `residents?organization_id=eq.${organizationId}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,insurance_label,insurance_category,medical_insurance_target_label,is_medical_insurance_target,birth_date_label,age_label,gender_label,meal_count_this_month,is_enteral,source_sheet_title,facility_id,facilities(sheet_title,tab_label)&order=name.asc&limit=5000`
+      );
+      sendJson(res, 200, { ok: true, residents: rows, count: rows.length });
+      return;
+    }
+
+    if (action === 'upsert_resident') {
+      const raw = payload.resident;
+      if (!raw || typeof raw !== 'object') {
+        sendJson(res, 400, { ok: false, error: 'resident required' });
+        return;
+      }
+      const fac = await ensureFacility(supabaseUrl, serviceKey, organizationId, raw);
+      const row = mapResidentUpsertRow(organizationId, fac?.id ?? null, raw);
+      if (!row) {
+        sendJson(res, 400, { ok: false, error: 'name required' });
+        return;
+      }
+      if (row.id) {
+        await supabaseRest(supabaseUrl, serviceKey, 'residents?on_conflict=organization_id,id', 'POST', [row]);
+      } else if (row.legacy_row_key) {
+        await supabaseRest(
+          supabaseUrl,
+          serviceKey,
+          'residents?on_conflict=organization_id,legacy_row_key',
+          'POST',
+          [row]
+        );
+      } else {
+        row.legacy_row_key = `app::${Date.now()}::${row.name}`;
+        await supabaseRest(supabaseUrl, serviceKey, 'residents', 'POST', [row]);
+      }
+      let saved = null;
+      if (row.id) {
+        const byId = await supabaseSelectJson(
+          supabaseUrl,
+          serviceKey,
+          `residents?id=eq.${encodeURIComponent(String(row.id))}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,source_sheet_title,facilities(sheet_title,tab_label)&limit=1`
+        );
+        saved = byId[0] ?? null;
+      } else if (row.legacy_row_key) {
+        const byLegacy = await supabaseSelectJson(
+          supabaseUrl,
+          serviceKey,
+          `residents?organization_id=eq.${organizationId}&legacy_row_key=eq.${encodeURIComponent(String(row.legacy_row_key))}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,source_sheet_title,facilities(sheet_title,tab_label)&limit=1`
+        );
+        saved = byLegacy[0] ?? null;
+      }
+      sendJson(res, 200, { ok: true, resident: saved, id: saved?.id ?? row.id ?? null });
+      return;
+    }
+
+    if (action === 'import_residents_batch') {
+      const list = Array.isArray(payload.residents) ? payload.residents : [];
+      if (!list.length) {
+        sendJson(res, 200, { ok: true, imported: 0 });
+        return;
+      }
+      /** @type {Record<string, unknown>[]} */
+      const rows = [];
+      for (const raw of list) {
+        if (!raw || typeof raw !== 'object') continue;
+        const fac = await ensureFacility(supabaseUrl, serviceKey, organizationId, raw);
+        const row = mapResidentUpsertRow(organizationId, fac?.id ?? null, raw);
+        if (row) rows.push(row);
+      }
+      if (!rows.length) {
+        sendJson(res, 400, { ok: false, error: 'no valid residents' });
+        return;
+      }
+      await supabaseRest(
+        supabaseUrl,
+        serviceKey,
+        'residents?on_conflict=organization_id,legacy_row_key',
+        'POST',
+        rows
+      );
+      sendJson(res, 200, { ok: true, imported: rows.length });
+      return;
+    }
+
+    if (action === 'deactivate_resident') {
+      const rid = String(payload.residentId ?? payload.resident_id ?? '').trim();
+      if (!rid) {
+        sendJson(res, 400, { ok: false, error: 'residentId required' });
+        return;
+      }
+      await supabaseRest(
+        supabaseUrl,
+        serviceKey,
+        `residents?id=eq.${encodeURIComponent(rid)}&organization_id=eq.${organizationId}`,
+        'PATCH',
+        { sheet_status: '退去', updated_at: new Date().toISOString() }
+      );
+      sendJson(res, 200, { ok: true, deactivated: rid });
       return;
     }
 

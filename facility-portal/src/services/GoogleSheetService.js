@@ -2157,10 +2157,35 @@ async function loadResidentsFromSource() {
     };
   }
 
+  if (residentsSource !== 'sheet_only') {
+    try {
+      const { loadResidentsFromRosterMaster } = await import('./residentRosterService.js');
+      const master = await loadResidentsFromRosterMaster();
+      if (master?.residents?.length) {
+        return {
+          ...master,
+          cacheVersion: RESIDENT_SUMMARY_CACHE_VERSION,
+          medicalTargetSummaryBySheet: {},
+          averageCareLevelSummaryBySheet: {},
+          residentCountSummaryBySheet: {},
+        };
+      }
+    } catch (e) {
+      console.warn('[名簿] アプリ名簿の読込に失敗、スプレッドシートへフォールバック', e);
+    }
+  }
+
+  return loadResidentsFromSheetSeedOnly();
+}
+
+/**
+ * スプレッドシートから名簿のみ取得（ハイブリッドの「種」取り込み用）
+ */
+export async function fetchResidentsFromSheetSeedOnly() {
+  clearMedicalTargetCountFromSheetSummary();
   const apiKey = (import.meta.env.VITE_GOOGLE_SHEETS_API_KEY ?? '').trim();
   const canUseSheetsApi = apiKey || useSheetsServerProxy();
   if (canUseSheetsApi) {
-    // 複数施設ポータルは常に全タブ読込。VITE_GOOGLE_SHEET_GID は CSV 単一タブ用のみ（Vercel に GID があると1施設だけになり0件になる）
     const residents = await fetchResidentsAllTabs(apiKey);
     return {
       residents,
