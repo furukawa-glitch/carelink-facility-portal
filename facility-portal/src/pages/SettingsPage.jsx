@@ -17,6 +17,8 @@ import {
   recruitmentRowKey,
 } from '../config/recruitmentLinks.js';
 import * as Mgmt from '../services/ManagementSheetService.js';
+import { StaffAccountAdminPanel } from '../components/StaffAccountAdminPanel.jsx';
+import { isStaffLoginEnabled } from '../lib/staffSessionAuth.js';
 
 const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY ?? '';
 
@@ -306,6 +308,12 @@ export function SettingsPage({ onBack }) {
             )}
           </div>
         </section>
+
+        {isStaffLoginEnabled() ? (
+          <section className="mt-8">
+            <StaffAccountAdminPanel />
+          </section>
+        ) : null}
       </main>
     </div>
   );

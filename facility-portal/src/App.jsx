@@ -68,11 +68,21 @@ import { WeeklyFlowSheet } from './components/WeeklyFlowSheet.jsx';
 import { startCareEventsAutoSync } from './lib/careEventsAutoSync.js';
 import { startAppBuildUpdateWatcher } from './lib/appBuildUpdate.js';
 import { AppBuildUpdateBanner } from './components/AppBuildUpdateBanner.jsx';
+import { StaffLoginScreen } from './components/StaffLoginScreen.jsx';
+import {
+  clearStaffSession,
+  getStaffSession,
+  isStaffLoginEnabled,
+  validateStaffSession,
+} from './lib/staffSessionAuth.js';
+import { useStaffIdleLock } from './lib/staffIdleLock.js';
 
-/** 施設向けの画面ロック。未設定のときはロックなし。設定時は全画面の前にパスワード必須。 */
+/** 施設向けの画面ロック。職員ログイン有効時は共有パスワードは使わない。 */
 const VITE_FACILITY_PORTAL_PASSWORD = String(
   import.meta.env.VITE_FACILITY_PORTAL_PASSWORD ?? '',
 ).trim();
+const requireStaffLogin = isStaffLoginEnabled();
+const requirePortalAuth = Boolean(VITE_FACILITY_PORTAL_PASSWORD) && !requireStaffLogin;
 const PORTAL_RELOCK_AFTER_HIDDEN_MS = 90_000;
 
 const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY ?? '';
@@ -853,6 +863,7 @@ function PortalAuthScreen({ onSuccess }) {
  *   setSelectedPortalSheetTitle: (t: string) => void;
  *   setView: (v: string) => void;
  *   onLockPortal?: (() => void) | undefined;
+ *   showStaffSession?: boolean;
  * }} props
  */
 function FacilityPortalView({
@@ -863,8 +874,10 @@ function FacilityPortalView({
   setSelectedPortalSheetTitle,
   setView,
   onLockPortal,
+  showStaffSession = false,
 }) {
   const staff = getStaffProfile();
+  const staffSession = showStaffSession ? getStaffSession() : null;
   const pending = staff?.staffId ? countPendingAllFacilities(staff.staffId) : 0;
   const searchTrim = portalFacilitySearch.trim();
 
@@ -876,6 +889,14 @@ function FacilityPortalView({
         </div>
         <h1 className="text-3xl text-slate-800 tracking-tighter font-bold">介護・看護統合システム</h1>
         <p className="text-slate-400 mt-2 font-bold uppercase tracking-widest text-xs">Facility Portal</p>
+        {staffSession ? (
+          <p className="mt-3 text-sm font-black text-slate-700">
+            ログイン: {staffSession.displayName || '—'}
+            <span className="ml-2 text-xs font-bold text-slate-500">（職員コード {staffSession.staffCode}）</span>
+          </p>
+        ) : staff?.displayName ? (
+          <p className="mt-3 text-sm font-bold text-slate-600">担当: {staff.displayName}</p>
+        ) : null}
       </div>
       <div className="mb-6 w-full max-w-4xl rounded-2xl border-2 border-amber-400 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-3 shadow-sm">
         <div className="flex flex-wrap items-center gap-2 text-amber-950">
@@ -1351,13 +1372,21 @@ function ResidentRoomNotesView({
 
 const App = () => {
   const [view, setView] = useState('portal');
-  const requirePortalAuth = Boolean(VITE_FACILITY_PORTAL_PASSWORD);
-  const [portalAuthUnlocked, setPortalAuthUnlocked] = useState(() => !VITE_FACILITY_PORTAL_PASSWORD);
+  const [portalAuthUnlocked, setPortalAuthUnlocked] = useState(() => !requirePortalAuth);
+  const [staffAuthUnlocked, setStaffAuthUnlocked] = useState(
+    () => !requireStaffLogin || Boolean(getStaffSession()),
+  );
   const portalAuthUnlockedRef = useRef(portalAuthUnlocked);
+  const staffAuthUnlockedRef = useRef(staffAuthUnlocked);
   const portalTabHiddenAtRef = useRef(0);
   portalAuthUnlockedRef.current = portalAuthUnlocked;
+  staffAuthUnlockedRef.current = staffAuthUnlocked;
 
   const lockPortal = useCallback(() => {
+    if (requireStaffLogin) {
+      clearStaffSession();
+      setStaffAuthUnlocked(false);
+    }
     setPortalAuthUnlocked(false);
     setView('portal');
   }, []);
@@ -1468,22 +1497,43 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (!requirePortalAuth) return;
+    if (!requireStaffLogin) return;
+    const s = getStaffSession();
+    if (!s) {
+      setStaffAuthUnlocked(false);
+      return;
+    }
+    void validateStaffSession(s.token).then((ok) => {
+      if (!ok) {
+        clearStaffSession();
+        setStaffAuthUnlocked(false);
+      } else {
+        setStaffAuthUnlocked(true);
+      }
+    });
+  }, []);
+
+  useStaffIdleLock(requireStaffLogin && staffAuthUnlocked, lockPortal);
+
+  useEffect(() => {
+    if (!requirePortalAuth && !requireStaffLogin) return;
     const onVis = () => {
       if (document.visibilityState === 'hidden') {
         portalTabHiddenAtRef.current = Date.now();
         return;
       }
       const t0 = portalTabHiddenAtRef.current;
-      if (t0 && Date.now() - t0 > PORTAL_RELOCK_AFTER_HIDDEN_MS && portalAuthUnlockedRef.current) {
-        setPortalAuthUnlocked(false);
-        setView('portal');
+      const unlocked =
+        (requirePortalAuth && portalAuthUnlockedRef.current) ||
+        (requireStaffLogin && staffAuthUnlockedRef.current);
+      if (t0 && Date.now() - t0 > PORTAL_RELOCK_AFTER_HIDDEN_MS && unlocked) {
+        lockPortal();
       }
       portalTabHiddenAtRef.current = 0;
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
-  }, [requirePortalAuth]);
+  }, [lockPortal]);
 
   useEffect(() => {
     if (vitalsDayRef.current === todayYmd) return;
@@ -2948,11 +2998,17 @@ const App = () => {
     </div>
   );
 
+  if (requireStaffLogin && !staffAuthUnlocked) {
+    return <StaffLoginScreen onSuccess={() => setStaffAuthUnlocked(true)} />;
+  }
+
   if (requirePortalAuth && !portalAuthUnlocked) {
     return <PortalAuthScreen onSuccess={() => setPortalAuthUnlocked(true)} />;
   }
 
-  const lockProp = requirePortalAuth ? lockPortal : undefined;
+  const lockProp =
+    requirePortalAuth || requireStaffLogin ? lockPortal : undefined;
+  const showStaffSession = requireStaffLogin && staffAuthUnlocked;
 
   const main = (() => {
     switch (view) {
@@ -2966,6 +3022,7 @@ const App = () => {
             setSelectedPortalSheetTitle={setSelectedPortalSheetTitle}
             setView={setView}
             onLockPortal={lockProp}
+            showStaffSession={showStaffSession}
           />
         );
       case 'residents_list':
@@ -3087,13 +3144,13 @@ const App = () => {
           geminiKey={GEMINI_KEY}
         />
       ) : null}
-      {requirePortalAuth && portalAuthUnlocked ? (
+      {(requireStaffLogin && staffAuthUnlocked) || (requirePortalAuth && portalAuthUnlocked) ? (
         <button
           type="button"
           onClick={lockPortal}
           className="fixed bottom-4 right-4 z-[300] max-w-[min(12rem,calc(100vw-2rem))] rounded-2xl border-2 border-slate-400 bg-white/95 px-3 py-2.5 text-center text-[11px] font-black leading-tight text-slate-800 shadow-lg backdrop-blur-sm transition hover:border-slate-600 hover:bg-slate-50"
         >
-          画面をロック
+          {requireStaffLogin ? 'ログアウト' : '画面をロック'}
         </button>
       ) : null}
     </>

@@ -549,9 +549,9 @@ export function HomeVisitNoteModal({
                         onChange={(e) =>
                           patchRow(row.residentId, { visitEntry: e.target.value, note: e.target.value })
                         }
-                        rows={4}
+                        rows={6}
                         placeholder="往診時の所見・処置・申し送りなど"
-                        className="w-full min-h-[5.5rem] resize-y rounded border border-slate-200 px-1.5 py-1 text-xs font-bold leading-snug"
+                        className="w-full min-h-[9rem] resize-y rounded border border-slate-200 px-1.5 py-1 text-xs font-bold leading-snug"
                       />
                     </td>
                   </tr>
@@ -589,9 +589,9 @@ export function HomeVisitNoteModal({
                       <textarea
                         value={row.note}
                         onChange={(e) => patchRow(row.residentId, { note: e.target.value })}
-                        rows={4}
+                        rows={6}
                         placeholder="往診時の所見・処置・申し送りなど"
-                        className="w-full min-h-[5.5rem] resize-y rounded border border-slate-200 px-1.5 py-1 text-xs font-bold leading-snug"
+                        className="w-full min-h-[9rem] resize-y rounded border border-slate-200 px-1.5 py-1 text-xs font-bold leading-snug"
                       />
                     </td>
                   </tr>

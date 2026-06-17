@@ -50,17 +50,17 @@
 
 3. **名簿スプレッドシート** — タブ1枚追加（例: `ふれあいの里：入居者`）
 
-### Phase 2 — 6月下旬（設定）
+### Phase 2 — 6月下旬（設定）✅ コード追加済（2026-06）
 
-4. `carelinkFacilities.js` に施設定義を追加（定員・住所・シフト部署は **介護・事務のみ**）
+4. `carelinkFacilities.js` に施設定義を追加（定員・住所はオープン時に追記）
 
-5. Vercel 環境変数（既存 or 新規プロジェクト）
+5. Vercel 環境変数 → **`docs/VERCEL_CARELINK_CONSULTING_SETUP.md`** を参照
 
-6. 名簿取り込み・クラウド同期の動作確認
+6. 名簿取り込み・クラウド同期の動作確認（現場作業）
 
-### Phase 3 — 7月オープン前（任意の UI 調整）
+### Phase 3 — 7月オープン前（任意の UI 調整）✅ 一部実装済
 
-7. 施設フラグ `onSiteNursing: false` を追加し、往診カレンダーボタン等を **施設単位で非表示**（コード追加・小規模）
+7. 施設フラグ `onSiteNursing: false` により、往診カレンダーボタン・訪看特別 UI を **施設単位で非表示**
 
 8. 救急サマリー HTML の「担当看護師」→「施設担当者」ラベル切替（有料ホーム向け）
 
@@ -79,9 +79,13 @@
   ledgerCompanyTag: 'ケアリンク', // または専用タグ
   dayServiceMode: 'none',
   shiftDepartments: Object.freeze(['有料', '介護', '事務']),
-  // onSiteNursing: false,  // Phase 3 で実装予定
+  ledgerCompanyTag: 'ケアリンク',
+  dayServiceMode: 'none',
+  onSiteNursing: false,
 },
 ```
+
+**実装状況:** 上記は `src/config/carelinkFacilities.js` に反映済み。`licensedBeds` / `emergencySenderAddress` は確定後に追記。
 
 ---
 

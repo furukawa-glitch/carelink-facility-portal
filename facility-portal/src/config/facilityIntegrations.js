@@ -39,6 +39,10 @@ export const FACILITY_EXTERNAL_LINKS = {
   一宮: {
     // googleCalendarId: '青空一宮・面会予約用@group.calendar.google.com',
   },
+  ふれあいの里: {
+    // line: 'https://line.me/R/ti/p/@xxxxxxxx',
+    // googleCalendarId: 'ふれあいの里・面会予約用@group.calendar.google.com',
+  },
 };
 
 function firstEnv(...keys) {

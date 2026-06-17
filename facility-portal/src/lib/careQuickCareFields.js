@@ -178,6 +178,47 @@ export function countMealOrdersForSlot(residents, bulkDraft, slot, savedByReside
   return { regular, mousse };
 }
 
+const MEAL_ORDER_SLOTS = Object.freeze(['朝', '昼', '夜']);
+
+/**
+ * 発注集計: 朝・昼・夜の保存済み＋入力中を合算（1日分）
+ * @param {Record<string, unknown>[]} residents
+ * @param {Record<string, object>} bulkDraft
+ * @param {string} activeSlot 入力中の食事区分（draft 判定用）
+ * @param {Record<string, Record<string, string>>} savedByResident
+ * @param {(name: unknown) => string} nameFmt
+ */
+export function countMealOrdersForDay(residents, bulkDraft, activeSlot, savedByResident, nameFmt) {
+  const regular = [];
+  const mousse = [];
+  const seenRegular = new Set();
+  const seenMousse = new Set();
+  for (const slot of MEAL_ORDER_SLOTS) {
+    for (const res of residents) {
+      const id = String(res.id);
+      const row = bulkDraft[id] ?? {};
+      const saved = String(savedByResident?.[id]?.[slot] ?? '').trim();
+      const forms = resolveMealFormsForSlot(row, slot, saved);
+      const nm = nameFmt(res.name);
+      if (forms.mealStapleForm === '普通食' && mealWariCountsForOrder(forms.mealStaple)) {
+        const key = `${id}:${slot}:r`;
+        if (!seenRegular.has(key)) {
+          seenRegular.add(key);
+          regular.push({ id, name: nm, room: String(res.room ?? ''), slot });
+        }
+      }
+      if (forms.mealSideForm === 'ムース' && mealWariCountsForOrder(forms.mealSide)) {
+        const key = `${id}:${slot}:m`;
+        if (!seenMousse.has(key)) {
+          seenMousse.add(key);
+          mousse.push({ id, name: nm, room: String(res.room ?? ''), slot });
+        }
+      }
+    }
+  }
+  return { regular, mousse };
+}
+
 /**
  * クイック記録・一覧表1行の入力から、保存時の「食事・水分系」ログの種別（applyCareQuickRecord と同じ条件）
  * @param {object} row
@@ -189,14 +230,14 @@ export function getQuickCareMealEventKind(row, _globalMealSlot = '') {
   const composed = composeMealAmountForLog(row?.mealStaple, row?.mealSide, row?.mealStapleForm, row?.mealSideForm);
   const supplementLine = composeOralSupplementLines(row?.ensurePortion, row?.solitaPortion);
   const extras = String(row?.mealExtras ?? '').trim();
-  const hasForm = String(row?.mealStapleForm ?? '').trim() || String(row?.mealSideForm ?? '').trim();
-  const ma = composed || String(row?.mealAmount ?? '').trim() || supplementLine || extras;
+  const ma = composed || String(row?.mealAmount ?? '').trim() || supplementLine;
   const wm = String(row?.waterMl ?? '').trim();
   const med = row?.medicationTaken === 'yes' ? row.medicationTaken : '';
-  const hasMealBody = Boolean(ma || hasForm || med || meal);
+  // 食事形態（カード個別指示）だけでは保存しない — 割・水分・内服・間食等の入力が必要
+  const hasMealBody = Boolean(ma || wm || med || meal);
   const waterOnly = Boolean(wm && !hasMealBody);
   if (waterOnly) return 'fluid_intake';
-  if (hasMealBody || wm) return 'meal';
+  if (hasMealBody) return 'meal';
   return 'none';
 }
 
@@ -367,6 +408,33 @@ export function joinMultiHourlyStoolCell(entries) {
     })
     .filter(Boolean);
   return parts.join(HOURLY_STOOL_MULTI_DELIM);
+}
+
+/** 便セル内の記録回数（×2 等を合計に反映） */
+export function countHourlyStoolEntries(hs) {
+  let count = 0;
+  for (let h = 0; h < 24; h++) {
+    const entries = splitMultiHourlyStoolCell(hs?.[h]);
+    if (entries.length > 0) count += entries.length;
+    else if (String(hs?.[h] ?? '').trim()) {
+      const p = parseHourlyStoolCellValue(hs[h]);
+      if (p && (p.stoolVolume || p.stoolCharacter)) count += 1;
+    }
+  }
+  return count;
+}
+
+export function popMultiHourlyStool(cell) {
+  const entries = splitMultiHourlyStoolCell(cell);
+  if (entries.length <= 1) return '';
+  entries.pop();
+  return joinMultiHourlyStoolCell(entries);
+}
+
+export function appendEmptyMultiHourlyStool(cell) {
+  const entries = splitMultiHourlyStoolCell(cell);
+  entries.push({ stoolVolume: '', stoolCharacter: '' });
+  return joinMultiHourlyStoolCell(entries);
 }
 
 /**

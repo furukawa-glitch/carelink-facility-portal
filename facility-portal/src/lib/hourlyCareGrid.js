@@ -117,6 +117,44 @@ export function joinMultiHourlyValues(parts) {
     .join(',');
 }
 
+/** 尿セル内の記録回数（×2 等を合計に反映） */
+export function countHourlyUrineEntries(hu, savedCodes, savedFlags) {
+  let count = 0;
+  for (let h = 0; h < 24; h++) {
+    const savedArr = splitMultiHourlyValues(String(savedCodes?.[h] ?? ''));
+    const savedN = savedArr.filter((c) => String(c).trim()).length;
+    if (savedN > 0) {
+      count += savedN;
+      continue;
+    }
+    if (savedFlags?.[h]) continue;
+    const draftArr = splitMultiHourlyValues(String(hu?.[h] ?? ''));
+    const draftN = draftArr.filter((c) => String(c).trim()).length;
+    if (draftN > 0) count += draftN;
+    else if (String(hu?.[h] ?? '').trim()) count += 1;
+  }
+  return count;
+}
+
+export function popMultiHourlyUrine(codesCell, mlCell) {
+  const codes = splitMultiHourlyValues(codesCell);
+  const mls = splitMultiHourlyValues(mlCell);
+  if (codes.length <= 1 && mls.length <= 1) {
+    return { codes: '', mls: '' };
+  }
+  codes.pop();
+  if (mls.length) mls.pop();
+  return { codes: joinMultiHourlyValues(codes), mls: joinMultiHourlyValues(mls) };
+}
+
+export function appendEmptyMultiHourlyUrine(codesCell, mlCell) {
+  const codes = splitMultiHourlyValues(codesCell);
+  const mls = splitMultiHourlyValues(mlCell);
+  codes.push('');
+  mls.push('');
+  return { codes: joinMultiHourlyValues(codes), mls: joinMultiHourlyValues(mls) };
+}
+
 /**
  * その日のケアイベントから 24 マス表示用フラグを生成
  * @param {Array<{ ts?: string; type?: string; meta?: Record<string, unknown> }>} events

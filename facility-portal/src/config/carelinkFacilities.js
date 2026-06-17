@@ -20,6 +20,7 @@
  * @property {number} [licensedBeds] 満床時の定員（床）。在籍率の分母に利用
  * @property {string} [ledgerCompanyTag] 事故・ヒヤリ台帳スプレッドシートのカテゴリ列に付与する運営会社名
  * @property {'none'|'on_site_csv'|'external_manual'} [dayServiceMode] デイ予定: 併設デイはカイポケCSV取込／外部通所は手入力
+ * @property {boolean} [onSiteNursing] false のとき往診カレンダー・訪看特別 UI を施設単位で非表示（有料ホーム等）
  */
 
 export const LEDGER_COMPANY_TAG_DEFAULT = 'ケアサポート';
@@ -134,6 +135,18 @@ const CARELINK_FACILITIES_ALL = Object.freeze([
     ledgerCompanyTag: 'ブレインエナジー',
     dayServiceMode: 'external_manual',
   },
+  {
+    sheetTitle: 'ふれあいの里：入居者',
+    linkKey: 'ふれあいの里',
+    tabLabel: 'ふれあいの里',
+    valueRange: 'A:ZZ',
+    nameColumn0Based: 1,
+    emergencyFacilityName: 'ふれあいの里',
+    shiftDepartments: Object.freeze(['有料', '介護', '事務']),
+    ledgerCompanyTag: 'ケアリンク',
+    dayServiceMode: 'none',
+    onSiteNursing: false,
+  },
 ]);
 
 function resolveTenantLedgerCompanyTag() {
@@ -143,7 +156,7 @@ function resolveTenantLedgerCompanyTag() {
 /**
  * この Vercel デプロイで表示・名簿同期する施設一覧。
  * VITE_CARELINK_LEDGER_COMPANY_TAG 未設定時は全施設（開発用）。
- * 例: ケアサポート → 千音寺・北名古屋・愛西・中川 / ブレインエナジー → 青空一宮・青空起
+ * 例: ケアサポート → 千音寺・北名古屋・愛西・中川 / ブレインエナジー → 青空一宮・青空起 / ケアリンク → ふれあいの里 等
  * @type {readonly CarelinkFacilityDef[]}
  */
 export const CARELINK_FACILITIES = Object.freeze(
@@ -187,6 +200,17 @@ export function ledgerCompanyTagForFacilityLinkKey(linkKey) {
   return tag || LEDGER_COMPANY_TAG_DEFAULT;
 }
 
+/**
+ * 施設に常駐看護・往診運用があるか（未設定は true＝従来どおり看護 UI 可）
+ * @param {string} linkKey
+ */
+export function onSiteNursingForFacilityLinkKey(linkKey) {
+  const k = String(linkKey ?? '').trim();
+  const def = CARELINK_FACILITIES.find((f) => f.linkKey === k);
+  if (def && def.onSiteNursing === false) return false;
+  return true;
+}
+
 /** 名簿照合に使う正式タブ名一覧 */
 export const CARELINK_SHEET_TITLES = Object.freeze(CARELINK_FACILITIES.map((f) => f.sheetTitle));
 
@@ -217,6 +241,8 @@ export function linkKeyFromTabLabelOrAlias(raw) {
     シルバーマンション愛西: '愛西',
     'CSナーシング千音寺': '千音寺',
     'CSナーシング北名古屋': '北名古屋',
+    ふれあいの里: 'ふれあいの里',
+    'ふれあいの里：入居者': 'ふれあいの里',
   });
   const resolved = /** @type {Record<string, string>} */ (aliases)[t] ?? t;
   const def = CARELINK_FACILITIES.find(

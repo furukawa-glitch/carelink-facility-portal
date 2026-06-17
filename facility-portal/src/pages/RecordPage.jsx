@@ -52,6 +52,7 @@ import {
   dayServiceModeForFacilityLinkKey,
   facilityDefBySheetTitle,
   linkKeyForSheetTitle,
+  onSiteNursingForFacilityLinkKey,
   residentBelongsToFacilityTab,
   residentMatchesFacilityTab,
 } from '../config/carelinkFacilities.js';
@@ -1959,7 +1960,11 @@ export function RecordPage({
     };
   }, [filteredResidents, tick]);
 
-  const nursingOfficeUi = useMemo(() => isNursingOfficeUiEnabled(), [tick]);
+  const nursingOfficeUiEnabled = useMemo(() => isNursingOfficeUiEnabled(), [tick]);
+  const nursingOfficeUi = useMemo(
+    () => nursingOfficeUiEnabled && onSiteNursingForFacilityLinkKey(selectedFacilityLinkKey),
+    [nursingOfficeUiEnabled, selectedFacilityLinkKey]
+  );
 
   const insuranceBreakdownChips = useMemo(() => {
     const order = [
@@ -3088,6 +3093,18 @@ export function RecordPage({
 
   const bulkRowHasInput = useCallback((row) => {
     if (!row) return false;
+    const hasMealInput =
+      String(row.mealStaple ?? '').trim() !== '' ||
+      String(row.mealSide ?? '').trim() !== '' ||
+      String(row.mealAmount ?? '').trim() !== '' ||
+      String(row.waterMl ?? '').trim() !== '' ||
+      row.medicationTaken === 'yes' ||
+      row.medicationTaken === 'no' ||
+      String(row.ensurePortion ?? '').trim() !== '' ||
+      String(row.solitaPortion ?? '').trim() !== '' ||
+      String(row.enteralStatus ?? '').trim() !== '' ||
+      String(row.enteralMenu ?? '').trim() !== '' ||
+      row.meal === true;
     return (
       String(row.temp ?? '').trim() !== '' ||
       String(row.bpU ?? '').trim() !== '' ||
@@ -3099,24 +3116,12 @@ export function RecordPage({
       String(row.urineVolume ?? '').trim() !== '' ||
       String(row.stoolVolume ?? '').trim() !== '' ||
       String(row.stoolCharacter ?? '').trim() !== '' ||
-      String(row.mealStapleForm ?? '').trim() !== '' ||
-      String(row.mealSideForm ?? '').trim() !== '' ||
-      String(row.mealStaple ?? '').trim() !== '' ||
-      String(row.mealSide ?? '').trim() !== '' ||
-      String(row.mealAmount ?? '').trim() !== '' ||
-      String(row.waterMl ?? '').trim() !== '' ||
-      row.medicationTaken === 'yes' ||
-      row.medicationTaken === 'no' ||
+      hasMealInput ||
       row.toiletGuidance ||
-      String(row.ensurePortion ?? '').trim() !== '' ||
-      String(row.solitaPortion ?? '').trim() !== '' ||
       (Array.isArray(row.hourPatrol) && row.hourPatrol.some(Boolean)) ||
       (Array.isArray(row.hourUrine) && row.hourUrine.some((v) => String(v ?? '').trim() !== '')) ||
       (Array.isArray(row.hourStool) && row.hourStool.some((v) => String(v ?? '').trim() !== '')) ||
-      String(row.vitalHandwritingDataUrl ?? '').trim() !== '' ||
-      String(row.enteralStatus ?? '').trim() !== '' ||
-      String(row.enteralMenu ?? '').trim() !== '' ||
-      String(row.mealExtras ?? '').trim() !== ''
+      String(row.vitalHandwritingDataUrl ?? '').trim() !== ''
     );
   }, []);
 
@@ -3562,10 +3567,11 @@ export function RecordPage({
           if (idx.weight >= 0) patch.weight = getCell(row, idx.weight);
           if (idx.urine >= 0) patch.urineNote = getCell(row, idx.urine);
           if (Object.keys(patch).length === 0) continue;
-          const { iso: ts, explicitTime } = resolveVitalsCsvTimestampFromRow(row, idx, getCell, defaultYm);
+          let { iso: ts, explicitTime } = resolveVitalsCsvTimestampFromRow(row, idx, getCell, defaultYm);
           if (!ts) {
-            skippedNoDate += 1;
-            continue;
+            const today = currentYmd();
+            ts = new Date(`${today}T12:00:00`).toISOString();
+            explicitTime = false;
           }
           const rid = String(hit.id);
           Report.removeCareEventsByResidentAtMinute(rid, ts, ['vital_snapshot']);
@@ -4532,15 +4538,17 @@ export function RecordPage({
             <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
             薬局PDF
           </button>
-          <button
-            type="button"
-            onClick={() => visitCalendarPdfInputRef.current?.click()}
-            className={`${hdrBtn} border-violet-800 bg-violet-800 text-white hover:bg-violet-700`}
-            title="在宅クリニックの「訪問カレンダー」PDF（紙をスキャンしたPDF可）。AIが日付・担当医・往診対象者を読み取り、予定カレンダーに表示します。"
-          >
-            <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
-            往診カレンダーPDF
-          </button>
+          {onSiteNursingForFacilityLinkKey(selectedFacilityLinkKey) ? (
+            <button
+              type="button"
+              onClick={() => visitCalendarPdfInputRef.current?.click()}
+              className={`${hdrBtn} border-violet-800 bg-violet-800 text-white hover:bg-violet-700`}
+              title="在宅クリニックの「訪問カレンダー」PDF（紙をスキャンしたPDF可）。AIが日付・担当医・往診対象者を読み取り、予定カレンダーに表示します。"
+            >
+              <Upload className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" />
+              往診カレンダーPDF
+            </button>
+          ) : null}
           {selectedFacilityLinkKey === '千音寺' ? (
             <button
               type="button"

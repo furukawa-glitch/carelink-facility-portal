@@ -7,14 +7,24 @@ import {
   MEAL_WARI_OPTIONS,
   ENSURE_PORTION_OPTIONS,
   WATER_ML_50_OPTIONS,
-  countMealOrdersForSlot,
+  countMealOrdersForDay,
+  countHourlyStoolEntries,
+  popMultiHourlyStool,
+  appendEmptyMultiHourlyStool,
   joinMultiHourlyStoolCell,
   parseHourlyStoolCellValue,
   splitMultiHourlyStoolCell,
   getQuickCareMealEventKind,
   mapVoiceCareExtractToBulkRowPatch,
 } from '../lib/careQuickCareFields.js';
-import { HOURS_24, joinMultiHourlyValues, splitMultiHourlyValues } from '../lib/hourlyCareGrid.js';
+import {
+  HOURS_24,
+  joinMultiHourlyValues,
+  splitMultiHourlyValues,
+  countHourlyUrineEntries,
+  popMultiHourlyUrine,
+  appendEmptyMultiHourlyUrine,
+} from '../lib/hourlyCareGrid.js';
 import { residentDiseaseLabel } from '../lib/residentDiseaseLabel.js';
 import { PATROL_SLOT_HOURS, joinPatrolDateTimeLocal, splitPatrolDateTimeLocal } from '../lib/patrolSlots.js';
 import { VoiceCareInput } from './VoiceCareInput.jsx';
@@ -99,23 +109,15 @@ function joinHourStoolCell(vol, char) {
   return `${v}${HOURLY_STOOL_DELIM}${c}`;
 }
 
-function appendMultiHourlyUrine(codesCell, mlCell, code, ml) {
-  const codes = splitMultiHourlyValues(codesCell);
-  const mls = splitMultiHourlyValues(mlCell);
-  const c = String(code ?? '').trim();
-  if (!c) return { codes: codesCell, mls: mlCell };
-  codes.push(c);
-  mls.push(String(ml ?? '').trim());
-  return { codes: joinMultiHourlyValues(codes), mls: joinMultiHourlyValues(mls) };
-}
-
-function appendMultiHourlyStool(cell, vol, char) {
-  const entries = splitMultiHourlyStoolCell(cell);
-  const v = String(vol ?? '').trim();
-  const c = String(char ?? '').trim();
-  if (!v && !c) return cell;
-  entries.push({ stoolVolume: v, stoolCharacter: c });
-  return joinMultiHourlyStoolCell(entries);
+/** 食事列の短い表示（形態の繰り返しを省略） */
+function shortMealSlotLabel(text) {
+  const s = String(text ?? '').trim();
+  if (!s || s === '—') return '—';
+  return s
+    .replace(/主食\(([^)]+)\)(\d{1,2}割)?/gu, (_, _f, w) => (w ? `主${w}` : '主'))
+    .replace(/副食\(([^)]+)\)(\d{1,2}割)?/gu, (_, _f, w) => (w ? `副${w}` : '副'))
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function addDaysYmd(ymd, delta) {
@@ -238,7 +240,7 @@ export function ResidentBulkInputTable({
 
   const mealOrderCounts = useMemo(
     () =>
-      countMealOrdersForSlot(
+      countMealOrdersForDay(
         filteredResidents,
         bulkDraft,
         bulkGlobalMealSlot,
@@ -325,7 +327,7 @@ export function ResidentBulkInputTable({
         </div>
       </div>
       <p className="mb-2 text-sm font-bold leading-snug text-slate-500">
-        下の表では<strong>摂取割（主食・副食）</strong>を行ごとに入力します（食事形態はカードの個別指示で設定）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。24時間表は保存後も修正できます。同じ時間に複数回ある場合はセル右の「＋」で追加してください。
+        下の表では<strong>摂取割（主食・副食）</strong>を行ごとに入力します（食事形態はカードの個別指示で設定）。<strong>食(計上)</strong>列は、保存で食事メモ（最大1回／水分のみのときは除く）の目安です。<strong>発注集計</strong>は朝・昼・夜の合計です。24時間表は保存後も修正できます。同じ時間に複数回ある場合はセル右の「＋」で追加、「－」で最後の1件を削除できます。
         <strong className="text-slate-700"> 24時間行</strong>は紙の様式に近い巡視・尿・便のマスです（対象日は下で指定）。<strong>エンシュア等</strong>・<strong>ソリタ</strong>は割合を選ぶと食事メモに残ります（例: エンシュア1/2 ソリタ1/3）。
         <strong className="text-slate-700"> 間食・補助</strong>はパン・バナナなど自由に書け、食事メモの末尾に「／」で連結されます。<strong className="text-slate-700"> 経管メニュー</strong>は上の<strong className="text-slate-700">朝・昼・夜</strong>に合わせて記録され、保存後は左の食事列の<strong className="text-slate-700">朝／昼／夕</strong>行に表示されます（1日2〜3回は区分を切り替えてそれぞれ保存）。
         <span className="ml-1 text-slate-700">横移動は上の「← 左へ / 右へ →」か、Shift+ホイールでも可能です。</span>
@@ -358,8 +360,8 @@ export function ResidentBulkInputTable({
         <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto" role="group" aria-label="食事発注集計">
           <span className="text-xs font-black text-orange-900">発注（{bulkGlobalMealSlot || '—'}）</span>
           {[
-            { key: 'regular', label: '普通食', count: mealOrderCounts.regular.length, cls: 'border-emerald-600 bg-emerald-50 text-emerald-950 hover:bg-emerald-100' },
-            { key: 'mousse', label: 'ムース', count: mealOrderCounts.mousse.length, cls: 'border-pink-600 bg-pink-50 text-pink-950 hover:bg-pink-100' },
+            { key: 'regular', label: '普通食（1日）', count: mealOrderCounts.regular.length, cls: 'border-emerald-600 bg-emerald-50 text-emerald-950 hover:bg-emerald-100' },
+            { key: 'mousse', label: 'ムース（1日）', count: mealOrderCounts.mousse.length, cls: 'border-pink-600 bg-pink-50 text-pink-950 hover:bg-pink-100' },
           ].map(({ key, label, count, cls }) => {
             const active = orderDetail === key;
             return (
@@ -564,17 +566,15 @@ export function ResidentBulkInputTable({
               const urineSavedCodes = urineDetail.hourly?.codes ?? [];
               const urineSavedMls = urineDetail.hourly?.mls ?? [];
               const dayUrineMl = Number(urineDetail.totalMl ?? 0) || 0;
-              let urineCount = 0;
-              for (let uh = 0; uh < 24; uh++) {
-                const savedCode = String(urineSavedCodes[uh] ?? '').trim();
-                const draftCode = String(hu[uh] ?? '').trim();
-                const hourSaved = Boolean(hourlySaved.urine[uh]);
-                if (savedCode || (!hourSaved && draftCode)) urineCount++;
-              }
+              let urineCount = countHourlyUrineEntries(hu, urineSavedCodes, hourlySaved.urine);
               if (String(row.urineVolume ?? '').trim()) urineCount++;
-              const stoolCount =
-                hs.filter((v) => String(v ?? '').trim() !== '').length +
-                (String(row.stoolVolume ?? '').trim() || String(row.stoolCharacter ?? '').trim() ? 1 : 0);
+              let stoolCount = countHourlyStoolEntries(hs);
+              if (
+                stoolCount === 0 &&
+                (String(row.stoolVolume ?? '').trim() || String(row.stoolCharacter ?? '').trim())
+              ) {
+                stoolCount += 1;
+              }
               const latestVital = Report.getLatestVitalMetaForResidentDay(
                 id,
                 bulkSheetDate,
@@ -687,11 +687,13 @@ export function ResidentBulkInputTable({
                           ['夕', mealFrontBySlot.夜],
                         ]
                       ).map(([label, text]) => {
+                        const short = shortMealSlotLabel(text);
                         const isEnteral = /（実施）|（未実施）|ラコール|エンシュア|経管/u.test(String(text));
+                        if (short === '—') return null;
                         return (
                           <p key={label} className={`truncate ${isEnteral ? 'text-violet-900' : ''}`}>
                             <span className="mr-1 inline-block min-w-[1.4rem] rounded bg-white/80 px-1 text-center">{label}</span>
-                            {text}
+                            {short}
                           </p>
                         );
                       })}
@@ -841,19 +843,41 @@ export function ResidentBulkInputTable({
                                           aria-label={`${nm} カテ尿量 ${h}時`}
                                         />
                                       ) : null}
-                                      {cell ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const appended = appendMultiHourlyUrine(hu[h], hum[h], cell, urineMlValue);
-                                            patchBulkRow(id, { hourUrine: [...hu].map((v, i) => (i === h ? appended.codes : v)), hourUrineMl: [...hum].map((v, i) => (i === h ? appended.mls : v)) });
-                                          }}
-                                          className="absolute right-0 top-0 z-10 min-w-[0.85rem] bg-sky-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-sky-600"
-                                          title="同じ時間に追加（例: 2回目のトイレ）"
-                                          aria-label={`${nm} 尿 ${h}時 追加`}
-                                        >
-                                          ＋
-                                        </button>
+                                      {cell || multiCount > 0 ? (
+                                        <div className="absolute right-0 top-0 z-10 flex flex-col">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const appended = appendEmptyMultiHourlyUrine(hu[h], hum[h]);
+                                              patchBulkRow(id, {
+                                                hourUrine: [...hu].map((v, i) => (i === h ? appended.codes : v)),
+                                                hourUrineMl: [...hum].map((v, i) => (i === h ? appended.mls : v)),
+                                              });
+                                            }}
+                                            className="min-w-[0.85rem] bg-sky-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-sky-600"
+                                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
+                                            aria-label={`${nm} 尿 ${h}時 追加`}
+                                          >
+                                            ＋
+                                          </button>
+                                          {multiCount > 0 ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const popped = popMultiHourlyUrine(hu[h], hum[h]);
+                                                patchBulkRow(id, {
+                                                  hourUrine: [...hu].map((v, i) => (i === h ? popped.codes : v)),
+                                                  hourUrineMl: [...hum].map((v, i) => (i === h ? popped.mls : v)),
+                                                });
+                                              }}
+                                              className="min-w-[0.85rem] bg-rose-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-rose-600"
+                                              title="最後の1件を削除"
+                                              aria-label={`${nm} 尿 ${h}時 削除`}
+                                            >
+                                              －
+                                            </button>
+                                          ) : null}
+                                        </div>
                                       ) : null}
                                       {multiCount > 1 ? (
                                         <span className="text-[7px] font-black text-teal-800">×{multiCount}</span>
@@ -893,20 +917,37 @@ export function ResidentBulkInputTable({
                                           </option>
                                         ))}
                                       </select>
-                                      {(stoolVol || stoolChar) ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const base = [...hs];
-                                            base[h] = appendMultiHourlyStool(base[h], stoolVol, stoolChar);
-                                            patchBulkRow(id, { hourStool: base });
-                                          }}
-                                          className="absolute right-0 top-0 z-10 min-w-[0.85rem] bg-amber-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-amber-600"
-                                          title="同じ時間に追加（例: 2回目の下痢）"
-                                          aria-label={`${nm} 便 ${h}時 追加`}
-                                        >
-                                          ＋
-                                        </button>
+                                      {filled ? (
+                                        <div className="absolute right-0 top-0 z-10 flex flex-col">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const base = [...hs];
+                                              base[h] = appendEmptyMultiHourlyStool(base[h]);
+                                              patchBulkRow(id, { hourStool: base });
+                                            }}
+                                            className="min-w-[0.85rem] bg-amber-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-amber-600"
+                                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
+                                            aria-label={`${nm} 便 ${h}時 追加`}
+                                          >
+                                            ＋
+                                          </button>
+                                          {multiCount > 0 ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const base = [...hs];
+                                                base[h] = popMultiHourlyStool(base[h]);
+                                                patchBulkRow(id, { hourStool: base });
+                                              }}
+                                              className="min-w-[0.85rem] bg-rose-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-rose-600"
+                                              title="最後の1件を削除"
+                                              aria-label={`${nm} 便 ${h}時 削除`}
+                                            >
+                                              －
+                                            </button>
+                                          ) : null}
+                                        </div>
                                       ) : null}
                                       {multiCount > 1 ? (
                                         <span className="text-[7px] font-black text-amber-900">×{multiCount}</span>
