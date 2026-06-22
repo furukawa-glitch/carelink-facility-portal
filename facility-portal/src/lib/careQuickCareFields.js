@@ -227,14 +227,17 @@ export function countMealOrdersForDay(residents, bulkDraft, activeSlot, savedByR
  */
 export function getQuickCareMealEventKind(row, _globalMealSlot = '') {
   const meal = Boolean(row?.meal);
-  const composed = composeMealAmountForLog(row?.mealStaple, row?.mealSide, row?.mealStapleForm, row?.mealSideForm);
   const supplementLine = composeOralSupplementLines(row?.ensurePortion, row?.solitaPortion);
-  const extras = String(row?.mealExtras ?? '').trim();
-  const ma = composed || String(row?.mealAmount ?? '').trim() || supplementLine;
+  // 食事形態（主食/副食の「形態」）は居室メモから自動補完されるため、
+  // 形態だけ・間食メモだけでは食事として計上しない。
+  // 実際に「割（主食/副食の摂取量）」「食事量メモ」「補助食」「水分」「内服」「食事チェック」が必要。
+  const stapleWari = String(row?.mealStaple ?? '').trim();
+  const sideWari = String(row?.mealSide ?? '').trim();
+  const mealAmountTrim = String(row?.mealAmount ?? '').trim();
+  const ma = stapleWari || sideWari || mealAmountTrim || supplementLine;
   const wm = String(row?.waterMl ?? '').trim();
   const med = row?.medicationTaken === 'yes' ? row.medicationTaken : '';
-  // 食事形態（カード個別指示）だけでは保存しない — 割・水分・内服・間食等の入力が必要
-  const hasMealBody = Boolean(ma || wm || med || meal);
+  const hasMealBody = Boolean(ma || med || meal);
   const waterOnly = Boolean(wm && !hasMealBody);
   if (waterOnly) return 'fluid_intake';
   if (hasMealBody) return 'meal';

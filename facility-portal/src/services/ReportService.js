@@ -2012,12 +2012,38 @@ export function saveHomeVisitCalendar(linkKey, record) {
   const k = String(linkKey ?? '').trim();
   if (!k || !record || typeof record !== 'object') return false;
   const all = readJson(LS.homeVisitCalendar, {});
+  const prev = all[k] && typeof all[k] === 'object' ? all[k] : null;
+  const prevDays = Array.isArray(prev?.days) ? prev.days : [];
+  const newDays = Array.isArray(record.days) ? record.days : [];
+  // 取り込んだ月（YYYY-MM）の日付だけ差し替え、他の月の予定は保持する。
+  // （以前は days を丸ごと上書きしていたため、別月を取り込むと前月分が消えていた）
+  const monthsInNew = new Set(
+    newDays
+      .map((d) => String(d?.date ?? '').slice(0, 7))
+      .filter((ym) => /^\d{4}-\d{2}$/.test(ym))
+  );
+  const keptPrevDays =
+    newDays.length === 0
+      ? prevDays
+      : prevDays.filter((d) => !monthsInNew.has(String(d?.date ?? '').slice(0, 7)));
+  const mergedByDate = new Map();
+  for (const d of keptPrevDays) {
+    const date = String(d?.date ?? '').trim();
+    if (date) mergedByDate.set(date, d);
+  }
+  for (const d of newDays) {
+    const date = String(d?.date ?? '').trim();
+    if (date) mergedByDate.set(date, d);
+  }
+  const mergedDays = Array.from(mergedByDate.values()).sort((a, b) =>
+    String(a?.date ?? '').localeCompare(String(b?.date ?? ''))
+  );
   all[k] = {
-    yearMonth: String(record.yearMonth ?? '').trim(),
-    clinicName: String(record.clinicName ?? '').trim(),
+    yearMonth: String(record.yearMonth ?? prev?.yearMonth ?? '').trim(),
+    clinicName: String(record.clinicName ?? prev?.clinicName ?? '').trim(),
     updatedAt: String(record.updatedAt ?? new Date().toISOString()),
     sourceFileName: String(record.sourceFileName ?? '').trim(),
-    days: Array.isArray(record.days) ? record.days : [],
+    days: mergedDays,
   };
   writeJson(LS.homeVisitCalendar, all);
   void import('../lib/facilityPortalStoreSync.js').then((m) =>

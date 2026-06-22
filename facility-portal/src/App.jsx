@@ -3144,15 +3144,6 @@ const App = () => {
           geminiKey={GEMINI_KEY}
         />
       ) : null}
-      {(requireStaffLogin && staffAuthUnlocked) || (requirePortalAuth && portalAuthUnlocked) ? (
-        <button
-          type="button"
-          onClick={lockPortal}
-          className="fixed bottom-4 right-4 z-[300] max-w-[min(12rem,calc(100vw-2rem))] rounded-2xl border-2 border-slate-400 bg-white/95 px-3 py-2.5 text-center text-[11px] font-black leading-tight text-slate-800 shadow-lg backdrop-blur-sm transition hover:border-slate-600 hover:bg-slate-50"
-        >
-          {requireStaffLogin ? 'ログアウト' : '画面をロック'}
-        </button>
-      ) : null}
     </>
   );
 };

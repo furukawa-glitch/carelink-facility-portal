@@ -148,6 +148,312 @@ function emptySavedHourly() {
 }
 
 /**
+ * 24時間グリッド（巡視・尿・便）。利用者1人ぶん。
+ * 行ごとにメモ化し、触った行のグリッドだけ再描画する（重さ対策）。
+ * props は変化しない参照（生の hourXxx 配列）を渡すこと。
+ */
+const HourGrid = React.memo(function HourGrid({
+  id,
+  nm,
+  hourPatrol,
+  hourUrine,
+  hourUrineMl,
+  hourStool,
+  hourlySaved,
+  patchBulkRow,
+}) {
+  const hp = ensureHour24(hourPatrol);
+  const hu = ensureHour24Str(hourUrine);
+  const hum = ensureHour24Str(hourUrineMl);
+  const hs = ensureHour24Str(hourStool);
+  const hourlySavedSafe = hourlySaved ?? emptySavedHourly();
+  const hourRows = [
+    {
+      key: 'hourPatrol',
+      arr: hp,
+      savedKey: 'patrol',
+      label: '巡',
+      thBg: 'bg-cyan-50 text-cyan-800',
+      tdBg: 'bg-cyan-50/60',
+    },
+    {
+      key: 'hourUrine',
+      arr: hu,
+      mlArr: hum,
+      savedKey: 'urine',
+      label: '尿',
+      thBg: 'bg-sky-50 text-sky-800',
+      tdBg: 'bg-sky-50/60',
+    },
+    {
+      key: 'hourStoolChar',
+      arr: hs,
+      savedKey: 'stool',
+      label: '性状',
+      thBg: 'bg-amber-100 text-amber-950',
+      tdBg: 'bg-amber-50/80',
+    },
+    {
+      key: 'hourStoolVol',
+      arr: hs,
+      savedKey: 'stool',
+      label: '便量',
+      thBg: 'bg-amber-50 text-amber-900',
+      tdBg: 'bg-amber-50/60',
+    },
+  ];
+  return (
+    <table className="w-full min-w-[48rem] border-collapse text-[10px] font-black">
+      <tbody>
+        {hourRows.map((hr) => (
+          <tr key={hr.key}>
+            <th className={`w-7 border border-slate-300 px-0 py-0 text-center text-[11px] font-black ${hr.thBg}`}>
+              {hr.label}
+            </th>
+            {HOURS_24.map((h) => {
+              const saved = Boolean(hourlySavedSafe[hr.savedKey][h]);
+              const isPatrol = hr.key === 'hourPatrol';
+              const isStoolVol = hr.key === 'hourStoolVol';
+              const isStoolChar = hr.key === 'hourStoolChar';
+              const isUrine = hr.key === 'hourUrine';
+              const urineCodes = isUrine ? splitMultiHourlyValues(hu[h]) : [];
+              const urineMls = isUrine ? splitMultiHourlyValues(hum[h]) : [];
+              const stoolEntries = isStoolVol || isStoolChar ? splitMultiHourlyStoolCell(hs[h]) : [];
+              const lastStool = stoolEntries.length > 0 ? stoolEntries[stoolEntries.length - 1] : null;
+              const legacyStool = splitHourStoolCell(hr.arr[h]);
+              const stoolVol = lastStool?.stoolVolume ?? legacyStool.vol ?? '';
+              const stoolChar = lastStool?.stoolCharacter ?? legacyStool.char ?? '';
+              const cell = isPatrol
+                ? ''
+                : isStoolVol
+                  ? stoolVol
+                  : isStoolChar
+                    ? stoolChar
+                    : isUrine
+                      ? urineCodes[urineCodes.length - 1] || String(hu[h] ?? '').trim()
+                      : String(hr.arr[h] ?? '');
+              const draftPatrolOn = isPatrol && hr.arr[h] === true;
+              const filled = isPatrol
+                ? hp[h] === true
+                : Boolean(isUrine ? String(hu[h] ?? '').trim() : isStoolVol || isStoolChar ? String(hs[h] ?? '').trim() : cell);
+              const urineNeedsMl = isUrine && (cell === 'カテ' || cell === 'Ba' || cell === '尿測');
+              const urineMlValue =
+                urineMls.length > 0 ? urineMls[urineMls.length - 1] : String(hum[h] ?? '').trim();
+              const multiCount = isUrine
+                ? urineCodes.length
+                : isStoolVol || isStoolChar
+                  ? stoolEntries.length
+                  : 0;
+              return (
+                <td key={`${hr.key}-${h}`} className={`relative border border-slate-300 p-0 text-center ${hr.tdBg}`}>
+                  {isPatrol ? (
+                    <label
+                      className={`flex h-full min-h-[1.85rem] w-full min-w-[1.6rem] items-center justify-center rounded-sm border-2 px-0 py-0.5 transition ${
+                        draftPatrolOn || saved
+                          ? 'cursor-pointer border-teal-900 bg-teal-900'
+                          : 'cursor-pointer border-dashed border-slate-300 bg-white hover:border-sky-500 hover:bg-sky-50/90'
+                      }`}
+                      title={
+                        saved
+                          ? 'チェックを外して保存すると取消できます'
+                          : draftPatrolOn
+                            ? 'チェックを外すと取消（まだ保存していません）'
+                            : 'チェックでこの時間の巡視を記録 → 行の保存で確定'
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={hp[h] === true}
+                        onChange={() => {
+                          const base = [...hp];
+                          base[h] = !(base[h] === true);
+                          patchBulkRow(id, { hourPatrol: base });
+                        }}
+                        className={`h-5 w-5 shrink-0 rounded ${
+                          draftPatrolOn || saved
+                            ? 'border-white/30 accent-teal-300'
+                            : 'border-slate-300 accent-sky-600'
+                        }`}
+                        aria-label={`${nm} ${hr.label} ${h}時`}
+                      />
+                    </label>
+                  ) : isUrine ? (
+                    <div className="flex min-h-[1.7rem] flex-col">
+                      <select
+                        value={cell}
+                        onChange={(e) => {
+                          const base = [...hu];
+                          const mlBase = [...hum];
+                          const codes = splitMultiHourlyValues(base[h]);
+                          const mls = splitMultiHourlyValues(mlBase[h]);
+                          const nextCode = e.target.value;
+                          if (codes.length > 1) {
+                            codes[codes.length - 1] = nextCode;
+                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') {
+                              mls[mls.length - 1] = '';
+                            }
+                            base[h] = joinMultiHourlyValues(codes);
+                            mlBase[h] = joinMultiHourlyValues(mls);
+                          } else {
+                            base[h] = nextCode;
+                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') mlBase[h] = '';
+                          }
+                          patchBulkRow(id, { hourUrine: base, hourUrineMl: mlBase });
+                        }}
+                        className={`h-full w-full min-w-[2rem] bg-white px-0 py-1 text-[11px] font-black ${
+                          filled ? 'text-slate-900' : 'text-slate-500'
+                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
+                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
+                        aria-label={`${nm} ${hr.label} ${h}時`}
+                      >
+                        {HOURLY_URINE_OPTIONS.map((opt) => (
+                          <option key={`${hr.key}-${opt.value || 'empty'}`} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      {urineNeedsMl ? (
+                        <input
+                          value={urineMlValue}
+                          onChange={(e) => {
+                            const mlBase = [...hum];
+                            const mls = splitMultiHourlyValues(mlBase[h]);
+                            if (mls.length > 1) {
+                              mls[mls.length - 1] = e.target.value;
+                              mlBase[h] = joinMultiHourlyValues(mls);
+                            } else {
+                              mlBase[h] = e.target.value;
+                            }
+                            patchBulkRow(id, { hourUrineMl: mlBase });
+                          }}
+                          placeholder="ml"
+                          inputMode="numeric"
+                          className="w-full border-t border-sky-200 bg-sky-50/80 px-0 py-0.5 text-[11px] font-black"
+                          aria-label={`${nm} カテ尿量 ${h}時`}
+                        />
+                      ) : null}
+                      {cell || multiCount > 0 ? (
+                        <div className="mt-px flex items-stretch gap-px">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const appended = appendEmptyMultiHourlyUrine(hu[h], hum[h]);
+                              patchBulkRow(id, {
+                                hourUrine: [...hu].map((v, i) => (i === h ? appended.codes : v)),
+                                hourUrineMl: [...hum].map((v, i) => (i === h ? appended.mls : v)),
+                              });
+                            }}
+                            className="flex-1 rounded-sm bg-sky-700 py-1 text-sm font-black leading-none text-white hover:bg-sky-600"
+                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
+                            aria-label={`${nm} 尿 ${h}時 追加`}
+                          >
+                            ＋
+                          </button>
+                          {multiCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const popped = popMultiHourlyUrine(hu[h], hum[h]);
+                                patchBulkRow(id, {
+                                  hourUrine: [...hu].map((v, i) => (i === h ? popped.codes : v)),
+                                  hourUrineMl: [...hum].map((v, i) => (i === h ? popped.mls : v)),
+                                });
+                              }}
+                              className="flex-1 rounded-sm bg-rose-700 py-1 text-sm font-black leading-none text-white hover:bg-rose-600"
+                              title="最後の1件を削除"
+                              aria-label={`${nm} 尿 ${h}時 削除`}
+                            >
+                              －
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {multiCount > 1 ? (
+                        <span className="text-[10px] font-black text-teal-800">×{multiCount}</span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="relative flex min-h-[1.7rem] flex-col">
+                      <select
+                        value={cell}
+                        onChange={(e) => {
+                          const base = [...hs];
+                          const entries = splitMultiHourlyStoolCell(base[h]);
+                          const nextVal = e.target.value;
+                          if (entries.length > 1) {
+                            const last = entries[entries.length - 1] || { stoolVolume: '', stoolCharacter: '' };
+                            entries[entries.length - 1] = isStoolVol
+                              ? { ...last, stoolVolume: nextVal }
+                              : { ...last, stoolCharacter: nextVal };
+                            base[h] = joinMultiHourlyStoolCell(entries);
+                          } else {
+                            const parts = splitHourStoolCell(base[h]);
+                            base[h] = isStoolVol
+                              ? joinHourStoolCell(nextVal, parts.char)
+                              : joinHourStoolCell(parts.vol, nextVal);
+                          }
+                          patchBulkRow(id, { hourStool: base });
+                        }}
+                        className={`h-full min-h-[1.7rem] w-full min-w-[2rem] bg-white px-0 py-1 text-[11px] font-black ${
+                          filled ? 'text-slate-900' : 'text-slate-500'
+                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
+                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
+                        aria-label={`${nm} ${hr.label} ${h}時`}
+                      >
+                        {(isStoolVol ? STOOL_VOLUME_OPTIONS : STOOL_CHARACTER_OPTIONS).map((opt) => (
+                          <option key={`${hr.key}-${opt || 'empty'}`} value={opt}>
+                            {opt || '—'}
+                          </option>
+                        ))}
+                      </select>
+                      {filled ? (
+                        <div className="mt-px flex items-stretch gap-px">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const base = [...hs];
+                              base[h] = appendEmptyMultiHourlyStool(base[h]);
+                              patchBulkRow(id, { hourStool: base });
+                            }}
+                            className="flex-1 rounded-sm bg-amber-700 py-1 text-sm font-black leading-none text-white hover:bg-amber-600"
+                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
+                            aria-label={`${nm} 便 ${h}時 追加`}
+                          >
+                            ＋
+                          </button>
+                          {multiCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const base = [...hs];
+                                base[h] = popMultiHourlyStool(base[h]);
+                                patchBulkRow(id, { hourStool: base });
+                              }}
+                              className="flex-1 rounded-sm bg-rose-700 py-1 text-sm font-black leading-none text-white hover:bg-rose-600"
+                              title="最後の1件を削除"
+                              aria-label={`${nm} 便 ${h}時 削除`}
+                            >
+                              －
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {multiCount > 1 ? (
+                        <span className="text-[10px] font-black text-amber-900">×{multiCount}</span>
+                      ) : null}
+                    </div>
+                  )}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+});
+
+/**
  * @param {{
  *   filteredResidents: Record<string, unknown>[];
  *   bulkDraft: Record<string, typeof DEFAULT_ROW>;
@@ -558,9 +864,7 @@ export function ResidentBulkInputTable({
               const pa = splitPatrolDateTimeLocal(row.patrolAt);
               const mealKind = getQuickCareMealEventKind(row, bulkGlobalMealSlot);
               const hourlySaved = hourlySavedByResident[id] ?? emptySavedHourly();
-              const hp = ensureHour24(row.hourPatrol);
               const hu = ensureHour24Str(row.hourUrine);
-              const hum = ensureHour24Str(row.hourUrineMl);
               const hs = ensureHour24Str(row.hourStool);
               const urineDetail = bulkUrineDetailByResident[id] ?? { hourly: { codes: [], mls: [] }, totalMl: 0 };
               const urineSavedCodes = urineDetail.hourly?.codes ?? [];
@@ -622,42 +926,6 @@ export function ResidentBulkInputTable({
               const draftMealPreview =
                 mealSlotLabel && draftMealLabel ? `入力中 ${mealSlotLabel}:${draftMealLabel}` : '';
 
-              const hourRows = [
-                {
-                  key: 'hourPatrol',
-                  arr: hp,
-                  savedKey: 'patrol',
-                  label: '巡',
-                  thBg: 'bg-cyan-50 text-cyan-800',
-                  tdBg: 'bg-cyan-50/60',
-                },
-                {
-                  key: 'hourUrine',
-                  arr: hu,
-                  mlArr: hum,
-                  savedKey: 'urine',
-                  label: '尿',
-                  thBg: 'bg-sky-50 text-sky-800',
-                  tdBg: 'bg-sky-50/60',
-                },
-                {
-                  key: 'hourStoolChar',
-                  arr: hs,
-                  savedKey: 'stool',
-                  label: '性状',
-                  thBg: 'bg-amber-100 text-amber-950',
-                  tdBg: 'bg-amber-50/80',
-                },
-                {
-                  key: 'hourStoolVol',
-                  arr: hs,
-                  savedKey: 'stool',
-                  label: '便量',
-                  thBg: 'bg-amber-50 text-amber-900',
-                  tdBg: 'bg-amber-50/60',
-                },
-              ];
-
               return (
                 <tr key={id} className="odd:bg-white even:bg-slate-50/50">
                   <td className="sticky left-0 z-20 border border-slate-200 px-1 py-1 font-bold text-slate-900 shadow-[1px_0_0_0_rgba(226,232,240,1)] group-odd:bg-white group-even:bg-slate-50/50">
@@ -714,253 +982,16 @@ export function ResidentBulkInputTable({
                     {stoolCount}
                   </td>
                   <td className="border border-slate-200 bg-slate-50/40 p-0 align-top">
-                    <table className="w-full min-w-[28.5rem] border-collapse text-[9px] font-black">
-                      <tbody>
-                        {hourRows.map((hr) => (
-                          <tr key={hr.key}>
-                            <th className={`w-7 border border-slate-300 px-0 py-0 text-center text-[10px] font-black ${hr.thBg}`}>
-                              {hr.label}
-                            </th>
-                            {HOURS_24.map((h) => {
-                              const saved = Boolean(hourlySaved[hr.savedKey][h]);
-                              const isPatrol = hr.key === 'hourPatrol';
-                              const isStoolVol = hr.key === 'hourStoolVol';
-                              const isStoolChar = hr.key === 'hourStoolChar';
-                              const isUrine = hr.key === 'hourUrine';
-                              const urineCodes = isUrine ? splitMultiHourlyValues(hu[h]) : [];
-                              const urineMls = isUrine ? splitMultiHourlyValues(hum[h]) : [];
-                              const stoolEntries = isStoolVol || isStoolChar ? splitMultiHourlyStoolCell(hs[h]) : [];
-                              const lastStool = stoolEntries.length > 0 ? stoolEntries[stoolEntries.length - 1] : null;
-                              const legacyStool = splitHourStoolCell(hr.arr[h]);
-                              const stoolVol = lastStool?.stoolVolume ?? legacyStool.vol ?? '';
-                              const stoolChar = lastStool?.stoolCharacter ?? legacyStool.char ?? '';
-                              const cell = isPatrol
-                                ? ''
-                                : isStoolVol
-                                  ? stoolVol
-                                  : isStoolChar
-                                    ? stoolChar
-                                    : isUrine
-                                      ? urineCodes[urineCodes.length - 1] || String(hu[h] ?? '').trim()
-                                      : String(hr.arr[h] ?? '');
-                              const draftPatrolOn = isPatrol && hr.arr[h] === true;
-                              const filled = isPatrol
-                                ? hp[h] === true
-                                : Boolean(isUrine ? String(hu[h] ?? '').trim() : isStoolVol || isStoolChar ? String(hs[h] ?? '').trim() : cell);
-                              const urineNeedsMl = isUrine && (cell === 'カテ' || cell === 'Ba' || cell === '尿測');
-                              const urineMlValue =
-                                urineMls.length > 0 ? urineMls[urineMls.length - 1] : String(hum[h] ?? '').trim();
-                              const multiCount = isUrine
-                                ? urineCodes.length
-                                : isStoolVol || isStoolChar
-                                  ? stoolEntries.length
-                                  : 0;
-                              return (
-                                <td key={`${hr.key}-${h}`} className={`relative border border-slate-300 p-0 text-center ${hr.tdBg}`}>
-                                  {isPatrol ? (
-                                    <label
-                                      className={`flex h-full min-h-[1.55rem] w-full min-w-[1.35rem] items-center justify-center rounded-sm border-2 px-0 py-0.5 transition ${
-                                        draftPatrolOn || saved
-                                          ? 'cursor-pointer border-teal-900 bg-teal-900'
-                                          : 'cursor-pointer border-dashed border-slate-300 bg-white hover:border-sky-500 hover:bg-sky-50/90'
-                                      }`}
-                                      title={
-                                        saved
-                                          ? 'チェックを外して保存すると取消できます'
-                                          : draftPatrolOn
-                                            ? 'チェックを外すと取消（まだ保存していません）'
-                                            : 'チェックでこの時間の巡視を記録 → 行の保存で確定'
-                                      }
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={hp[h] === true}
-                                        onChange={() => {
-                                          const base = [...hp];
-                                          base[h] = !(base[h] === true);
-                                          patchBulkRow(id, { hourPatrol: base });
-                                        }}
-                                        className={`h-4 w-4 shrink-0 rounded ${
-                                          draftPatrolOn || saved
-                                            ? 'border-white/30 accent-teal-300'
-                                            : 'border-slate-300 accent-sky-600'
-                                        }`}
-                                        aria-label={`${nm} ${hr.label} ${h}時`}
-                                      />
-                                    </label>
-                                  ) : isUrine ? (
-                                    <div className="flex min-h-[1.4rem] flex-col">
-                                      <select
-                                        value={cell}
-                                        onChange={(e) => {
-                                          const base = [...hu];
-                                          const mlBase = [...hum];
-                                          const codes = splitMultiHourlyValues(base[h]);
-                                          const mls = splitMultiHourlyValues(mlBase[h]);
-                                          const nextCode = e.target.value;
-                                          if (codes.length > 1) {
-                                            codes[codes.length - 1] = nextCode;
-                                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') {
-                                              mls[mls.length - 1] = '';
-                                            }
-                                            base[h] = joinMultiHourlyValues(codes);
-                                            mlBase[h] = joinMultiHourlyValues(mls);
-                                          } else {
-                                            base[h] = nextCode;
-                                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') mlBase[h] = '';
-                                          }
-                                          patchBulkRow(id, { hourUrine: base, hourUrineMl: mlBase });
-                                        }}
-                                        className={`h-full w-full min-w-[1.15rem] bg-white px-0 py-0 text-[8px] font-black ${
-                                          filled ? 'text-slate-900' : 'text-slate-500'
-                                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
-                                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
-                                        aria-label={`${nm} ${hr.label} ${h}時`}
-                                      >
-                                        {HOURLY_URINE_OPTIONS.map((opt) => (
-                                          <option key={`${hr.key}-${opt.value || 'empty'}`} value={opt.value}>
-                                            {opt.label}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      {urineNeedsMl ? (
-                                        <input
-                                          value={urineMlValue}
-                                          onChange={(e) => {
-                                            const mlBase = [...hum];
-                                            const mls = splitMultiHourlyValues(mlBase[h]);
-                                            if (mls.length > 1) {
-                                              mls[mls.length - 1] = e.target.value;
-                                              mlBase[h] = joinMultiHourlyValues(mls);
-                                            } else {
-                                              mlBase[h] = e.target.value;
-                                            }
-                                            patchBulkRow(id, { hourUrineMl: mlBase });
-                                          }}
-                                          placeholder="ml"
-                                          inputMode="numeric"
-                                          className="w-full border-t border-sky-200 bg-sky-50/80 px-0 py-0 text-[8px] font-black"
-                                          aria-label={`${nm} カテ尿量 ${h}時`}
-                                        />
-                                      ) : null}
-                                      {cell || multiCount > 0 ? (
-                                        <div className="absolute right-0 top-0 z-10 flex flex-col">
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              const appended = appendEmptyMultiHourlyUrine(hu[h], hum[h]);
-                                              patchBulkRow(id, {
-                                                hourUrine: [...hu].map((v, i) => (i === h ? appended.codes : v)),
-                                                hourUrineMl: [...hum].map((v, i) => (i === h ? appended.mls : v)),
-                                              });
-                                            }}
-                                            className="min-w-[0.85rem] bg-sky-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-sky-600"
-                                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
-                                            aria-label={`${nm} 尿 ${h}時 追加`}
-                                          >
-                                            ＋
-                                          </button>
-                                          {multiCount > 0 ? (
-                                            <button
-                                              type="button"
-                                              onClick={() => {
-                                                const popped = popMultiHourlyUrine(hu[h], hum[h]);
-                                                patchBulkRow(id, {
-                                                  hourUrine: [...hu].map((v, i) => (i === h ? popped.codes : v)),
-                                                  hourUrineMl: [...hum].map((v, i) => (i === h ? popped.mls : v)),
-                                                });
-                                              }}
-                                              className="min-w-[0.85rem] bg-rose-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-rose-600"
-                                              title="最後の1件を削除"
-                                              aria-label={`${nm} 尿 ${h}時 削除`}
-                                            >
-                                              －
-                                            </button>
-                                          ) : null}
-                                        </div>
-                                      ) : null}
-                                      {multiCount > 1 ? (
-                                        <span className="text-[7px] font-black text-teal-800">×{multiCount}</span>
-                                      ) : null}
-                                    </div>
-                                  ) : (
-                                    <div className="relative flex min-h-[1.4rem] flex-col">
-                                      <select
-                                        value={cell}
-                                        onChange={(e) => {
-                                          const base = [...hs];
-                                          const entries = splitMultiHourlyStoolCell(base[h]);
-                                          const nextVal = e.target.value;
-                                          if (entries.length > 1) {
-                                            const last = entries[entries.length - 1] || { stoolVolume: '', stoolCharacter: '' };
-                                            entries[entries.length - 1] = isStoolVol
-                                              ? { ...last, stoolVolume: nextVal }
-                                              : { ...last, stoolCharacter: nextVal };
-                                            base[h] = joinMultiHourlyStoolCell(entries);
-                                          } else {
-                                            const parts = splitHourStoolCell(base[h]);
-                                            base[h] = isStoolVol
-                                              ? joinHourStoolCell(nextVal, parts.char)
-                                              : joinHourStoolCell(parts.vol, nextVal);
-                                          }
-                                          patchBulkRow(id, { hourStool: base });
-                                        }}
-                                        className={`h-full min-h-[1.4rem] w-full min-w-[1.15rem] bg-white px-0 py-0 text-[8px] font-black ${
-                                          filled ? 'text-slate-900' : 'text-slate-500'
-                                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
-                                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
-                                        aria-label={`${nm} ${hr.label} ${h}時`}
-                                      >
-                                        {(isStoolVol ? STOOL_VOLUME_OPTIONS : STOOL_CHARACTER_OPTIONS).map((opt) => (
-                                          <option key={`${hr.key}-${opt || 'empty'}`} value={opt}>
-                                            {opt || '—'}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      {filled ? (
-                                        <div className="absolute right-0 top-0 z-10 flex flex-col">
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              const base = [...hs];
-                                              base[h] = appendEmptyMultiHourlyStool(base[h]);
-                                              patchBulkRow(id, { hourStool: base });
-                                            }}
-                                            className="min-w-[0.85rem] bg-amber-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-amber-600"
-                                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
-                                            aria-label={`${nm} 便 ${h}時 追加`}
-                                          >
-                                            ＋
-                                          </button>
-                                          {multiCount > 0 ? (
-                                            <button
-                                              type="button"
-                                              onClick={() => {
-                                                const base = [...hs];
-                                                base[h] = popMultiHourlyStool(base[h]);
-                                                patchBulkRow(id, { hourStool: base });
-                                              }}
-                                              className="min-w-[0.85rem] bg-rose-700 px-0 py-0 text-[7px] font-black leading-none text-white hover:bg-rose-600"
-                                              title="最後の1件を削除"
-                                              aria-label={`${nm} 便 ${h}時 削除`}
-                                            >
-                                              －
-                                            </button>
-                                          ) : null}
-                                        </div>
-                                      ) : null}
-                                      {multiCount > 1 ? (
-                                        <span className="text-[7px] font-black text-amber-900">×{multiCount}</span>
-                                      ) : null}
-                                    </div>
-                                  )}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <HourGrid
+                      id={id}
+                      nm={nm}
+                      hourPatrol={row.hourPatrol}
+                      hourUrine={row.hourUrine}
+                      hourUrineMl={row.hourUrineMl}
+                      hourStool={row.hourStool}
+                      hourlySaved={hourlySaved}
+                      patchBulkRow={patchBulkRow}
+                    />
                   </td>
                   <td className="border border-slate-200 p-0">
                     <input
