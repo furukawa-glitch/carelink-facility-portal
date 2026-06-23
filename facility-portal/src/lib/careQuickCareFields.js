@@ -436,7 +436,13 @@ export function popMultiHourlyStool(cell) {
 
 export function appendEmptyMultiHourlyStool(cell) {
   const entries = splitMultiHourlyStoolCell(cell);
-  entries.push({ stoolVolume: '', stoolCharacter: '' });
+  // join は中身が空のエントリを除去するため、空を push しても消えて「＋が無反応」に見える。
+  // 直前の値を複製して必ず1件増やし（×2 表示）、利用者が最後の1件を選び直す運用にする。
+  const last = entries.length ? entries[entries.length - 1] : null;
+  entries.push({
+    stoolVolume: String(last?.stoolVolume ?? '') || '少',
+    stoolCharacter: String(last?.stoolCharacter ?? ''),
+  });
   return joinMultiHourlyStoolCell(entries);
 }
 

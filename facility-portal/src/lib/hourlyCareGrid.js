@@ -150,8 +150,11 @@ export function popMultiHourlyUrine(codesCell, mlCell) {
 export function appendEmptyMultiHourlyUrine(codesCell, mlCell) {
   const codes = splitMultiHourlyValues(codesCell);
   const mls = splitMultiHourlyValues(mlCell);
-  codes.push('');
-  mls.push('');
+  // join は空文字を除去するため、空を push しても消えて「＋が無反応」に見える。
+  // 直前の値を複製して必ず1件増やし（×2 表示）、利用者が最後の1件を選び直す運用にする。
+  const lastCode = codes.length ? codes[codes.length - 1] : '';
+  codes.push(lastCode || 'トイレ');
+  if (mls.length) mls.push(mls[mls.length - 1]);
   return { codes: joinMultiHourlyValues(codes), mls: joinMultiHourlyValues(mls) };
 }
 
