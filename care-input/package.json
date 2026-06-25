@@ -1,0 +1,25 @@
+{
+  "name": "care-input",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "ふれあいの里 ほか: 現場（スマホ/タブレット）専用の生活記録 入力アプリ。記録は care-sync 経由で Supabase に保存され、閲覧用の facility-portal に自動反映されます。",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.0.6"
+  }
+}

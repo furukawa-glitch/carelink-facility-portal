@@ -1,0 +1,19 @@
+{
+  "name": "ケア入力（現場用）",
+  "short_name": "ケア入力",
+  "description": "現場（スマホ/タブレット）から生活記録を入力するアプリ",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f766e",
+  "theme_color": "#0f766e",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
