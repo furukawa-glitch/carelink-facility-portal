@@ -1685,7 +1685,7 @@ const App = () => {
     setIsEnteral(Boolean(res?.isEnteral) || care.enteralExecuted);
     setIsBalloon(care.isBalloon || Boolean(res?.isBalloon));
     setBalloonAmount(care.balloonAmount);
-    setUrineMethod(care.urineMethod);
+    setUrineMethod(care.urineMethod === 'カテ' ? '導尿' : care.urineMethod);
     setUrineLevel(care.urineLevel);
     setCatheterMl('');
     if (care.stoolAmount) setStoolAmount(care.stoolAmount);
@@ -2037,10 +2037,10 @@ const App = () => {
         stoolForm,
         urineLevel: isBalloon
           ? `バルーン 1日Total(23時締め) ${balloonAmount || '記録なし'}ml`
-          : urineMethod === 'カテ'
-            ? `カテ ${catheterMl || '—'}ml`
+          : urineMethod === '導尿'
+            ? `導尿 ${catheterMl || '—'}ml`
             : `${urineMethod} ${urineLevel}`,
-        ...(urineMethod === 'カテ' && catheterMl ? { urineVolume: catheterMl, catheterMl } : {}),
+        ...(urineMethod === '導尿' && catheterMl ? { urineVolume: catheterMl, catheterMl } : {}),
       },
     });
     Report.recordStoolForIntervalAlert(id, { stoolAmount, stoolCharacter: stoolForm });
@@ -2892,7 +2892,7 @@ const App = () => {
               ) : (
                 <div className="space-y-3">
                   <div className="grid grid-cols-3 gap-2">
-                    {['おむつ', 'トイレ', 'カテ'].map((m) => (
+                    {['おむつ', 'トイレ', '導尿'].map((m) => (
                       <button
                         key={m}
                         type="button"
@@ -2906,7 +2906,7 @@ const App = () => {
                       </button>
                     ))}
                   </div>
-                  {urineMethod === 'カテ' ? (
+                  {urineMethod === '導尿' ? (
                     <div className="flex gap-3 items-center font-bold">
                       <input
                         type="number"

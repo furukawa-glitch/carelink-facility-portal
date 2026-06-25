@@ -1,7 +1,26 @@
 /** 名簿・帳票・薬局PDFなど、氏名表記の揺れ（スペース・カナ混在）を吸収して照合 */
 
+/**
+ * 異体字・旧字体を常用字へ正規化（カイポケ等で旧字体が使えないため）。
+ * 表示・照合の双方で使う。誤変換を避けるため、確実なものだけを対象にする。
+ */
+const KANJI_VARIANT_MAP = {
+  '𠮷': '吉', // つちよし（U+20BB7）→ 吉
+  '﨑': '崎',
+  '髙': '高',
+  '德': '徳',
+};
+
+export function normalizeKanjiVariants(raw) {
+  let s = String(raw ?? '');
+  for (const [from, to] of Object.entries(KANJI_VARIANT_MAP)) {
+    if (s.includes(from)) s = s.split(from).join(to);
+  }
+  return s;
+}
+
 export function normalizePersonNameForMatch(raw) {
-  let s = String(raw ?? '')
+  let s = normalizeKanjiVariants(String(raw ?? ''))
     .replace(/\u3000/g, ' ')
     .trim();
   try {

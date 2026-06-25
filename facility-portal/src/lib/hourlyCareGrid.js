@@ -200,7 +200,7 @@ export function buildHourlyCareFromEvents(events, ymd) {
   return { patrol, urine, stool };
 }
 
-const HOURLY_URINE_CODES = new Set(['トイレ', '尿器', '失禁', '少量', '中量', '多量', 'Ba', '尿測', 'カテ']);
+const HOURLY_URINE_CODES = new Set(['トイレ', '尿器', '失禁', '少量', '中量', '多量', 'Ba', '尿測', '導尿', 'カテ']);
 
 /**
  * @param {Record<string, unknown>} meta
@@ -208,9 +208,11 @@ const HOURLY_URINE_CODES = new Set(['トイレ', '尿器', '失禁', '少量', '
  */
 export function resolveHourlyUrineCodeAndMl(meta) {
   const m = meta && typeof meta === 'object' ? meta : {};
-  const codeRaw = String(m.urineCode ?? '').trim();
+  // 旧データの「カテ」は「導尿」に正規化して表示する。
+  const normCode = (c) => (String(c ?? '').trim() === 'カテ' ? '導尿' : String(c ?? '').trim());
+  const codeRaw = normCode(m.urineCode);
   const measured = String(m.measuredUrineMl ?? m.catheterMl ?? '').trim();
-  const uv = String(m.urineVolume ?? '').trim();
+  const uv = normCode(m.urineVolume);
   if (codeRaw) {
     return { code: codeRaw, ml: measured || (/^\d+$/u.test(uv) ? uv : '') };
   }
@@ -218,7 +220,7 @@ export function resolveHourlyUrineCodeAndMl(meta) {
     return { code: uv, ml: measured };
   }
   if (/^\d+$/u.test(uv)) {
-    return { code: measured ? 'カテ' : '', ml: uv };
+    return { code: measured ? '導尿' : '', ml: uv };
   }
   return { code: uv === 'plain' ? '' : uv, ml: measured };
 }
@@ -261,7 +263,7 @@ export function buildHourlyUrineCellsFromEvents(events, ymd) {
     if (hourlyKind !== 'urine' && !/排尿（\d{2}時）/u.test(note)) continue;
     const { code, ml } = resolveHourlyUrineCodeAndMl(meta);
     if (code) buckets[h].codes.push(code);
-    else if (ml) buckets[h].codes.push('カテ');
+    else if (ml) buckets[h].codes.push('導尿');
     if (ml) buckets[h].mls.push(ml);
   }
   const codes = buckets.map((b) => joinMultiHourlyValues(b.codes));

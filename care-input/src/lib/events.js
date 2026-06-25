@@ -101,3 +101,64 @@ export function buildFluidEvent(resident, { waterMl }, recordedBy, ts) {
   const meta = { waterMl: String(waterMl ?? '').trim(), note: '水分' };
   return baseEvent({ resident, type: 'fluid_intake', meta, ts, recordedBy });
 }
+
+/** 当日（東京時間）の 00:00 を ISO で返す（pull_events の sinceTs 用） */
+export function startOfTodayIso() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+/** 取り消し（無効化）イベント: 同じ id を無効フラグ付きで再送信し上書きする */
+export function voidEvent(ev) {
+  const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+  return { ...ev, voided: true, meta: { ...meta, voided: true } };
+}
+
+/**
+ * 編集: 新しく作ったイベントに、元イベントの id を引き継いで上書きさせる。
+ * ts は新しい値（画面の「時刻」）を使うので、時刻の修正も反映できる。
+ */
+export function withIdentity(newEvent, sourceEvent) {
+  if (!sourceEvent) return newEvent;
+  return { ...newEvent, id: String(sourceEvent.id ?? newEvent.id) };
+}
+
+/** 一覧表示用の {time, kind, summary} */
+export function describeEvent(ev) {
+  const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+  const type = String(ev?.type ?? '');
+  const d = new Date(String(ev?.ts ?? ''));
+  const time = Number.isFinite(d.getTime())
+    ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    : '--:--';
+  if (type === 'vital_snapshot') {
+    const parts = [];
+    if (meta.temp) parts.push(`体温${meta.temp}`);
+    if (meta.bpUpper || meta.bpLower) parts.push(`血圧${meta.bpUpper ?? ''}/${meta.bpLower ?? ''}`);
+    if (meta.pulse) parts.push(`脈${meta.pulse}`);
+    if (meta.spo2) parts.push(`SpO2 ${meta.spo2}`);
+    return { time, kind: 'バイタル', summary: parts.join(' ') || '記録' };
+  }
+  if (type === 'meal') {
+    const slot = String(meta.mealSlot ?? '').trim() || (meta.note === '間食' ? '間食' : '食事');
+    const amount = String(meta.mealAmount ?? '').trim();
+    return { time, kind: `食事(${slot})`, summary: amount || '記録' };
+  }
+  if (type === 'fluid_intake') {
+    return { time, kind: '水分', summary: meta.waterMl ? `${meta.waterMl}ml` : '記録' };
+  }
+  if (type === 'patrol') {
+    return { time, kind: '巡視', summary: '巡視' };
+  }
+  if (type === 'excretion') {
+    const hk = String(meta.hourlyKind ?? '').trim();
+    if (hk === 'stool') {
+      const s = [meta.stoolVolume, meta.stoolCharacter].filter(Boolean).join(' ');
+      return { time, kind: '排便', summary: s || '記録' };
+    }
+    const u = [meta.urineCode, meta.measuredUrineMl ? `${meta.measuredUrineMl}ml` : ''].filter(Boolean).join(' ');
+    return { time, kind: '排尿', summary: u || '記録' };
+  }
+  return { time, kind: type || '記録', summary: '' };
+}

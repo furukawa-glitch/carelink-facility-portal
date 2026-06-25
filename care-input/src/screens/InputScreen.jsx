@@ -25,8 +25,8 @@ const TABS = [
 const WARI = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
 // 閲覧側（facility-portal）の固定selectと値を一致させること。
 // 排尿: HOURLY_URINE_OPTIONS / 便量: STOOL_VOLUME_OPTIONS / 便性状: STOOL_CHARACTER_OPTIONS
-const URINE_CODES = ['トイレ', '尿器', '失禁', '少量', '中量', '多量', 'カテ'];
-const URINE_NEEDS_ML = new Set(['カテ']);
+const URINE_CODES = ['トイレ', '尿器', '失禁', '少量', '中量', '多量', '導尿'];
+const URINE_NEEDS_ML = new Set(['導尿']);
 const STOOL_VOLUME = ['多', '中', '小'];
 const STOOL_CHARACTER = ['普通便', '軟便', '硬便', '水様便', '泥状便'];
 const MEAL_TIMES = ['朝', '昼', '夜', '間食'];

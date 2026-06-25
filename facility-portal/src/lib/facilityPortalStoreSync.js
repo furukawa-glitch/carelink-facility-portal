@@ -85,6 +85,39 @@ function mergePlanLists(a, b) {
  * @param {{ store_type?: string; facility_link_key?: string; payload?: unknown; updated_at?: string }[]} rows
  */
 /**
+ * 往診カレンダーは「日付単位の和集合」でマージする。
+ * remote 丸ごと置換だと、別月だけの payload を受けたときに前月が消えるため。
+ * @param {any} local
+ * @param {any} remote
+ */
+function mergeHomeVisitRecord(local, remote) {
+  if (!remote || typeof remote !== 'object') return local ?? null;
+  if (!local || typeof local !== 'object') return remote;
+  const byDate = new Map();
+  for (const d of Array.isArray(local.days) ? local.days : []) {
+    const date = String(d?.date ?? '').trim();
+    if (date) byDate.set(date, d);
+  }
+  for (const d of Array.isArray(remote.days) ? remote.days : []) {
+    const date = String(d?.date ?? '').trim();
+    if (date) byDate.set(date, d);
+  }
+  const days = Array.from(byDate.values()).sort((a, b) =>
+    String(a?.date ?? '').localeCompare(String(b?.date ?? ''))
+  );
+  const remoteAt = String(remote.updatedAt ?? remote.updated_at ?? '');
+  const localAt = String(local.updatedAt ?? '');
+  const newer = remoteAt >= localAt ? remote : local;
+  return {
+    yearMonth: String(newer.yearMonth ?? remote.yearMonth ?? local.yearMonth ?? '').trim(),
+    clinicName: String(newer.clinicName ?? remote.clinicName ?? local.clinicName ?? '').trim(),
+    updatedAt: remoteAt >= localAt ? remoteAt : localAt,
+    sourceFileName: String(newer.sourceFileName ?? '').trim(),
+    days,
+  };
+}
+
+/**
  * @param {Record<string, { label?: string; importedAt?: string }>} local
  * @param {Record<string, { label?: string; importedAt?: string }>} remote
  */
@@ -296,10 +329,9 @@ function applyFacilityStoresToLocal(rows) {
       const remote = row.payload && typeof row.payload === 'object' ? row.payload : null;
       if (!remote) continue;
       const local = homeAll[linkKey];
-      const remoteAt = String(remote.updatedAt ?? remote.updated_at ?? '');
-      const localAt = String(local?.updatedAt ?? '');
-      if (!local || remoteAt >= localAt) {
-        homeAll[linkKey] = remote;
+      const merged = mergeHomeVisitRecord(local, remote);
+      if (merged && JSON.stringify(merged) !== JSON.stringify(local)) {
+        homeAll[linkKey] = merged;
         homeChanged++;
       }
     } else if (type === FACILITY_STORE_INJURY_DISEASE) {

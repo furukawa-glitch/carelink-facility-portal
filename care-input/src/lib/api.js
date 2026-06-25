@@ -59,3 +59,9 @@ export async function upsertEvents(events) {
   if (!list.length) return { ok: true, upserted: 0 };
   return postCareSync({ action: 'upsert_events', events: list });
 }
+
+/** 記録取得（訂正用。sinceTs 以降のイベント payload を新しい順で返す） */
+export async function pullEvents(sinceTs) {
+  const json = await postCareSync({ action: 'pull_events', sinceTs: sinceTs || '', limit: 1000 });
+  return Array.isArray(json?.events) ? json.events : [];
+}

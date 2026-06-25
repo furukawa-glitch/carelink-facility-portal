@@ -2146,12 +2146,21 @@ export function logCareEvent(payload) {
   const rawTs = String(payload?.ts ?? '').trim();
   const parsedTs = rawTs ? new Date(rawTs) : null;
   const ts = parsedTs && Number.isFinite(parsedTs.getTime()) ? parsedTs.toISOString() : new Date().toISOString();
+  // 呼び出し側が id を指定した場合はそれを採用（24時間表の保存で既存イベントの id を引き継ぎ、
+  // クラウド上も同一 id で上書き＝重複増殖を防ぐ）。未指定時のみ新規採番。
+  const providedId = String(payload?.id ?? '').trim();
   const row = {
-    id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ...payload,
+    id: providedId || `ev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ts,
   };
-  list.push(row);
+  if (providedId) {
+    const existingIdx = list.findIndex((e) => String(e?.id ?? '') === providedId);
+    if (existingIdx >= 0) list[existingIdx] = row;
+    else list.push(row);
+  } else {
+    list.push(row);
+  }
   persistCareEventsList(list);
   void idbAppendCareEvent(row);
   void import('../lib/careEventsSupabaseSync.js').then((m) => m.queueCareEventsCloudSync(row));
@@ -2297,22 +2306,37 @@ export function removeCareEventsForResidentDayHour(residentId, ymd, hour, opts =
   if (!rid || !day || !Number.isFinite(h) || h < 0 || h > 23) return 0;
   const types = Array.isArray(opts?.types) && opts.types.length ? new Set(opts.types.map((x) => String(x ?? '').trim())) : null;
   const hourlyKind = String(opts?.hourlyKind ?? '').trim();
+  // ctx（氏名+施設）を渡すと residentId 不一致（例: care-input 由来の Supabase UUID）でも本人一致で削除できる。
+  const ctx = opts?.ctx ?? null;
+  const returnRemoved = opts?.returnRemoved === true;
   const list = getAllCareEvents();
+  /** @type {any[]} */
+  const removedRows = [];
   const next = list.filter((e) => {
-    if (String(e.residentId ?? '').trim() !== rid) return true;
+    if (!careEventMatchesResidentIdentity(e, rid, ctx)) return true;
     const tsForDay = careEventTsForResidentDay(e);
     if (tokyoYmdFromTs(tsForDay) !== day) return true;
     if (tokyoHourFromTs(e?.ts) !== h) return true;
     const typ = String(e.type ?? '').trim();
     if (types && !types.has(typ)) return true;
-    if (hourlyKind && typ === 'hourly_excretion') {
+    // hourlyKind 指定時は hourly_excretion / excretion 両方で meta.hourlyKind を判定。
+    // 単発の詳細排泄（excretion で hourlyKind 無し）は対象外（保持）。
+    if (hourlyKind && (typ === 'hourly_excretion' || typ === 'excretion')) {
       const meta = e?.meta && typeof e.meta === 'object' ? e.meta : {};
       if (String(meta.hourlyKind ?? '').trim() !== hourlyKind) return true;
     }
+    removedRows.push(e);
     return false;
   });
   const removed = list.length - next.length;
   if (removed > 0) persistCareEventsList(next);
+  if (returnRemoved) {
+    return removedRows
+      .slice()
+      .sort((a, b) => new Date(a?.ts ?? 0) - new Date(b?.ts ?? 0))
+      .map((e) => String(e?.id ?? ''))
+      .filter(Boolean);
+  }
   return removed;
 }
 
@@ -2447,6 +2471,7 @@ export function getCareEventsForResidentDay(residentId, ymd, ctx = null) {
   if (!rid || !day) return [];
   return getAllCareEvents()
     .filter((e) => {
+      if (e?.voided === true || (e?.meta && typeof e.meta === 'object' && e.meta.voided === true)) return false;
       if (!careEventMatchesResidentIdentity(e, rid, ctx)) return false;
       const tsForDay = careEventTsForResidentDay(e);
       const t = new Date(tsForDay);

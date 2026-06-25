@@ -230,6 +230,8 @@ export function EnteralNutritionMenuModal({
           </button>
         </div>
 
+        {/* ズーム時でも入力欄に届くよう、ヘッダー以外は1つの縦スクロール領域にまとめる */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="flex shrink-0 flex-wrap items-end gap-2 border-b border-slate-100 bg-white px-3 py-2 sm:px-4">
           <label className="text-xs font-black text-slate-800">
             更新日
@@ -366,7 +368,7 @@ export function EnteralNutritionMenuModal({
           </p>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-2 py-2 sm:px-3">
+        <div className="overflow-x-auto px-2 py-2 sm:px-3">
           <table className="w-full min-w-[960px] border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-violet-200 text-slate-900">
               <tr>
@@ -547,6 +549,7 @@ export function EnteralNutritionMenuModal({
               保存して閉じる前に確認
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

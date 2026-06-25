@@ -351,7 +351,7 @@ export const HOURLY_URINE_OPTIONS = Object.freeze([
   { value: '多量', label: '多量' },
   { value: 'Ba', label: 'Ba' },
   { value: '尿測', label: '尿測' },
-  { value: 'カテ', label: 'カテ' },
+  { value: '導尿', label: '導尿' },
 ]);
 
 const HOURLY_STOOL_DELIM = '\t';
@@ -441,7 +441,7 @@ export function appendEmptyMultiHourlyStool(cell) {
   // 直前の値を複製して必ず1件増やし（×2 表示）、利用者が最後の1件を選び直す運用にする。
   const last = entries.length ? entries[entries.length - 1] : null;
   entries.push({
-    stoolVolume: String(last?.stoolVolume ?? '') || '少',
+    stoolVolume: String(last?.stoolVolume ?? '') || '中',
     stoolCharacter: String(last?.stoolCharacter ?? ''),
   });
   return joinMultiHourlyStoolCell(entries);

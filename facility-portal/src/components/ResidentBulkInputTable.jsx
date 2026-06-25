@@ -236,7 +236,7 @@ const HourGrid = React.memo(function HourGrid({
               const filled = isPatrol
                 ? hp[h] === true
                 : Boolean(isUrine ? String(hu[h] ?? '').trim() : isStoolVol || isStoolChar ? String(hs[h] ?? '').trim() : cell);
-              const urineNeedsMl = isUrine && (cell === 'カテ' || cell === 'Ba' || cell === '尿測');
+              const urineNeedsMl = isUrine && (cell === '導尿' || cell === 'カテ' || cell === 'Ba' || cell === '尿測');
               const urineMlValue =
                 urineMls.length > 0 ? urineMls[urineMls.length - 1] : String(hum[h] ?? '').trim();
               const multiCount = isUrine
@@ -278,60 +278,67 @@ const HourGrid = React.memo(function HourGrid({
                       />
                     </label>
                   ) : isUrine ? (
-                    <div className="flex min-h-[1.7rem] flex-col">
-                      <select
-                        value={cell}
-                        onChange={(e) => {
-                          const base = [...hu];
-                          const mlBase = [...hum];
-                          const codes = splitMultiHourlyValues(base[h]);
-                          const mls = splitMultiHourlyValues(mlBase[h]);
-                          const nextCode = e.target.value;
-                          if (codes.length > 1) {
-                            codes[codes.length - 1] = nextCode;
-                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') {
-                              mls[mls.length - 1] = '';
-                            }
-                            base[h] = joinMultiHourlyValues(codes);
-                            mlBase[h] = joinMultiHourlyValues(mls);
-                          } else {
-                            base[h] = nextCode;
-                            if (nextCode !== 'カテ' && nextCode !== 'Ba' && nextCode !== '尿測') mlBase[h] = '';
-                          }
-                          patchBulkRow(id, { hourUrine: base, hourUrineMl: mlBase });
-                        }}
-                        className={`h-full w-full min-w-[2rem] bg-white px-0 py-1 text-[11px] font-black ${
-                          filled ? 'text-slate-900' : 'text-slate-500'
-                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
-                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
-                        aria-label={`${nm} ${hr.label} ${h}時`}
-                      >
-                        {HOURLY_URINE_OPTIONS.map((opt) => (
-                          <option key={`${hr.key}-${opt.value || 'empty'}`} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                      {urineNeedsMl ? (
-                        <input
-                          value={urineMlValue}
-                          onChange={(e) => {
-                            const mlBase = [...hum];
-                            const mls = splitMultiHourlyValues(mlBase[h]);
-                            if (mls.length > 1) {
-                              mls[mls.length - 1] = e.target.value;
-                              mlBase[h] = joinMultiHourlyValues(mls);
-                            } else {
-                              mlBase[h] = e.target.value;
-                            }
-                            patchBulkRow(id, { hourUrineMl: mlBase });
-                          }}
-                          placeholder="ml"
-                          inputMode="numeric"
-                          className="w-full border-t border-sky-200 bg-sky-50/80 px-0 py-0.5 text-[11px] font-black"
-                          aria-label={`${nm} カテ尿量 ${h}時`}
-                        />
-                      ) : null}
+                    <div className="flex min-h-[1.7rem] flex-col gap-px">
+                      {(urineCodes.length ? urineCodes : ['']).map((codeI, ui) => {
+                        const codeVal = String(codeI ?? '');
+                        const mlVal = String(urineMls[ui] ?? '');
+                        const needsMlI =
+                          codeVal === 'カテ' || codeVal === '導尿' || codeVal === 'Ba' || codeVal === '尿測';
+                        return (
+                          <div key={`u-${h}-${ui}`} className="flex flex-col">
+                            <select
+                              value={codeVal}
+                              onChange={(e) => {
+                                const codes = urineCodes.length ? [...urineCodes] : [''];
+                                const mls = [...urineMls];
+                                while (mls.length < codes.length) mls.push('');
+                                const nextCode = e.target.value;
+                                if (!nextCode && urineCodes.length > 1) {
+                                  codes.splice(ui, 1);
+                                  mls.splice(ui, 1);
+                                } else {
+                                  codes[ui] = nextCode;
+                                  const keepMl =
+                                    nextCode === 'カテ' || nextCode === '導尿' || nextCode === 'Ba' || nextCode === '尿測';
+                                  if (!keepMl) mls[ui] = '';
+                                }
+                                patchBulkRow(id, {
+                                  hourUrine: hu.map((v, k) => (k === h ? joinMultiHourlyValues(codes) : v)),
+                                  hourUrineMl: hum.map((v, k) => (k === h ? joinMultiHourlyValues(mls) : v)),
+                                });
+                              }}
+                              className={`h-full w-full min-w-[2rem] bg-white px-0 py-1 text-[11px] font-black ${
+                                codeVal ? 'text-slate-900' : 'text-slate-500'
+                              } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
+                              title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
+                              aria-label={`${nm} ${hr.label} ${h}時 ${ui + 1}件目`}
+                            >
+                              {HOURLY_URINE_OPTIONS.map((opt) => (
+                                <option key={`${hr.key}-${ui}-${opt.value || 'empty'}`} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                            {needsMlI ? (
+                              <input
+                                value={mlVal}
+                                onChange={(e) => {
+                                  const mls = [...urineMls];
+                                  while (mls.length < (urineCodes.length || 1)) mls.push('');
+                                  mls[ui] = e.target.value;
+                                  patchBulkRow(id, {
+                                    hourUrineMl: hum.map((v, k) => (k === h ? joinMultiHourlyValues(mls) : v)),
+                                  });
+                                }}
+                                placeholder="ml"
+                                inputMode="numeric"
+                                className="w-full border-t border-sky-200 bg-sky-50/80 px-0 py-0.5 text-[11px] font-black"
+                                aria-label={`${nm} 導尿量 ${h}時 ${ui + 1}件目`}
+                              />
+                            ) : null}
+                          </div>
+                        );
+                      })}
                       {cell || multiCount > 0 ? (
                         <div className="mt-px flex items-stretch gap-px">
                           <button
@@ -344,7 +351,7 @@ const HourGrid = React.memo(function HourGrid({
                               });
                             }}
                             className="flex-1 rounded-sm bg-sky-700 py-1 text-sm font-black leading-none text-white hover:bg-sky-600"
-                            title="同じ時間に空欄を追加（性状・量を別々に入力）"
+                            title="同じ時間にもう1件追加（各行で別の量・コードに変更できます）"
                             aria-label={`${nm} 尿 ${h}時 追加`}
                           >
                             ＋
@@ -373,39 +380,46 @@ const HourGrid = React.memo(function HourGrid({
                       ) : null}
                     </div>
                   ) : (
-                    <div className="relative flex min-h-[1.7rem] flex-col">
-                      <select
-                        value={cell}
-                        onChange={(e) => {
-                          const base = [...hs];
-                          const entries = splitMultiHourlyStoolCell(base[h]);
-                          const nextVal = e.target.value;
-                          if (entries.length > 1) {
-                            const last = entries[entries.length - 1] || { stoolVolume: '', stoolCharacter: '' };
-                            entries[entries.length - 1] = isStoolVol
-                              ? { ...last, stoolVolume: nextVal }
-                              : { ...last, stoolCharacter: nextVal };
-                            base[h] = joinMultiHourlyStoolCell(entries);
-                          } else {
-                            const parts = splitHourStoolCell(base[h]);
-                            base[h] = isStoolVol
-                              ? joinHourStoolCell(nextVal, parts.char)
-                              : joinHourStoolCell(parts.vol, nextVal);
-                          }
-                          patchBulkRow(id, { hourStool: base });
-                        }}
-                        className={`h-full min-h-[1.7rem] w-full min-w-[2rem] bg-white px-0 py-1 text-[11px] font-black ${
-                          filled ? 'text-slate-900' : 'text-slate-500'
-                        } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
-                        title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
-                        aria-label={`${nm} ${hr.label} ${h}時`}
-                      >
-                        {(isStoolVol ? STOOL_VOLUME_OPTIONS : STOOL_CHARACTER_OPTIONS).map((opt) => (
-                          <option key={`${hr.key}-${opt || 'empty'}`} value={opt}>
-                            {opt || '—'}
-                          </option>
-                        ))}
-                      </select>
+                    <div className="relative flex min-h-[1.7rem] flex-col gap-px">
+                      {(stoolEntries.length ? stoolEntries : [{ stoolVolume: '', stoolCharacter: '' }]).map(
+                        (entryI, si) => {
+                          const entryVal = isStoolVol
+                            ? String(entryI?.stoolVolume ?? '')
+                            : String(entryI?.stoolCharacter ?? '');
+                          return (
+                            <select
+                              key={`s-${hr.key}-${h}-${si}`}
+                              value={entryVal}
+                              onChange={(e) => {
+                                const entries = (
+                                  stoolEntries.length
+                                    ? stoolEntries.map((x) => ({ ...x }))
+                                    : [{ stoolVolume: '', stoolCharacter: '' }]
+                                );
+                                const nextVal = e.target.value;
+                                const cur = entries[si] || { stoolVolume: '', stoolCharacter: '' };
+                                entries[si] = isStoolVol
+                                  ? { ...cur, stoolVolume: nextVal }
+                                  : { ...cur, stoolCharacter: nextVal };
+                                patchBulkRow(id, {
+                                  hourStool: hs.map((v, k) => (k === h ? joinMultiHourlyStoolCell(entries) : v)),
+                                });
+                              }}
+                              className={`h-full min-h-[1.7rem] w-full min-w-[2rem] bg-white px-0 py-1 text-[11px] font-black ${
+                                entryVal ? 'text-slate-900' : 'text-slate-500'
+                              } ${saved ? 'ring-1 ring-teal-600/40' : ''}`}
+                              title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
+                              aria-label={`${nm} ${hr.label} ${h}時 ${si + 1}件目`}
+                            >
+                              {(isStoolVol ? STOOL_VOLUME_OPTIONS : STOOL_CHARACTER_OPTIONS).map((opt) => (
+                                <option key={`${hr.key}-${si}-${opt || 'empty'}`} value={opt}>
+                                  {opt || '—'}
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        }
+                      )}
                       {filled ? (
                         <div className="mt-px flex items-stretch gap-px">
                           <button

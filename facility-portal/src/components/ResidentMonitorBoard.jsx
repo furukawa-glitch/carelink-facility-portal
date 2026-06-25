@@ -173,7 +173,7 @@ export function ResidentMonitorBoard({
       </div>
 
       <div
-        className={`min-h-0 flex-1 ${dense ? 'overflow-hidden p-0.5' : 'overflow-auto p-1 sm:p-1.5'}`}
+        className={`min-h-0 flex-1 ${dense ? 'overflow-y-auto p-0.5' : 'overflow-auto p-1 sm:p-1.5'}`}
         style={dense ? undefined : { maxHeight: 'min(78vh, calc(100dvh - 11rem))' }}
       >
         {paddedVisible.length === 0 ? (
@@ -188,9 +188,11 @@ export function ResidentMonitorBoard({
                 ? {
                     display: 'grid',
                     gridTemplateColumns: `repeat(${gridSpec.cols}, minmax(0, 1fr))`,
-                    gridTemplateRows: `repeat(${gridSpec.rows}, minmax(0, 1fr))`,
+                    // ズーム時はセルが潰れて中身が見えなくなるため、読める最小高を確保し、
+                    // 収まらないときは親(overflow-y-auto)でスクロールできるようにする。
+                    gridTemplateRows: `repeat(${gridSpec.rows}, minmax(2.4rem, 1fr))`,
                     gap: 2,
-                    height: '100%',
+                    minHeight: '100%',
                     width: '100%',
                   }
                 : {

@@ -135,6 +135,7 @@ import {
   buildPersonNameMatchCandidates,
   findResidentByPersonNameCandidates,
   findResidentForHomeVisitCalendarName,
+  normalizeKanjiVariants,
 } from '../lib/residentNameMatch.js';
 import { STAY_STATUS_CHANGED_EVENT } from '../lib/residentStayStatus.js';
 import {
@@ -169,9 +170,9 @@ import { isNursingOfficeUiEnabled } from '../services/NearMissLedgerService.js';
 import { fetchFacilityCalendarEvents } from '../services/GoogleCalendarService.js';
 import * as Report from '../services/ReportService.js';
 
-/** 名簿に「様」付きで入っているときの重複を避ける */
+/** 名簿に「様」付きで入っているときの重複を避ける（旧字体 𠮷→吉 等も正規化） */
 function residentNameWithoutSama(nameRaw) {
-  return String(nameRaw ?? '')
+  return normalizeKanjiVariants(String(nameRaw ?? ''))
     .replace(/様\s*$/u, '')
     .trim();
 }
@@ -1459,10 +1460,17 @@ export function RecordPage({
   const [bulkGlobalMealSlot, setBulkGlobalMealSlot] = useState('昼');
   /** 一覧表の24時間グリッド・時間別ログの対象日（ローカル暦） */
   const [bulkSheetDate, setBulkSheetDate] = useState(() => currentYmd());
+  // 日付跨ぎ（深夜0時）でのみ自動で翌日へ進める。ただし「その時点の今日」を表示中だった場合に限る。
+  // （以前は今日以外だと30秒ごとに今日へ強制移動していたため、前日を入力中に今日へ飛ばされていた）
+  const prevTodayRef = useRef(currentYmd());
   useEffect(() => {
     const id = window.setInterval(() => {
       const today = currentYmd();
-      setBulkSheetDate((prev) => (String(prev ?? '').slice(0, 10) === today ? prev : today));
+      const prevToday = prevTodayRef.current;
+      if (today !== prevToday) {
+        setBulkSheetDate((prev) => (String(prev ?? '').slice(0, 10) === prevToday ? today : prev));
+        prevTodayRef.current = today;
+      }
     }, 30000);
     return () => window.clearInterval(id);
   }, []);
@@ -2565,15 +2573,25 @@ export function RecordPage({
   }, [clock, displayResidents, selectedSheetTitle]);
 
   useEffect(() => {
+    // クラウド同期は短時間に連続発火しうる。即時に毎回 setState すると巨大ページが
+    // 再描画され続け、入力（周知事項など）がカクつく。数秒に1回へ集約（デバウンス）する。
+    let timer = null;
     const onCloudSync = () => {
-      setTick((n) => n + 1);
-      setPlanRev((n) => n + 1);
-      setHomeVisitCalendarRev((n) => n + 1);
-      setNursingRev((n) => n + 1);
-      setRoomNotesRev((n) => n + 1);
+      if (timer) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        setTick((n) => n + 1);
+        setPlanRev((n) => n + 1);
+        setHomeVisitCalendarRev((n) => n + 1);
+        setNursingRev((n) => n + 1);
+        setRoomNotesRev((n) => n + 1);
+      }, 4000);
     };
     window.addEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
-    return () => window.removeEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
+    return () => {
+      window.removeEventListener(CARE_EVENTS_SYNC_EVENT, onCloudSync);
+      if (timer) window.clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -2777,12 +2795,15 @@ export function RecordPage({
     const sc = String(stoolCharacter ?? '').trim();
     const tg = Boolean(toiletGuidance);
     const hasDetailedEx = u || sv || sc;
+    // 単発の排泄（クイック）は対象日に1件。固定時刻＋決定的idにして、
+    // 保存の度に新規作成されない（再保存・再同期は同一idを上書き）ようにする。
+    const exTs = bulkCareEventTs(ymdLog, 'excretion', { useNowIfToday: false });
+    const exId = `qx_${id}_${bulkTableYmd(bulkSheetDate)}`;
     if (hasDetailedEx) {
-      const ets = bulkCareEventTs(ymdLog, 'excretion');
-      Report.removeCareEventsByResidentAtMinute(id, ets, ['excretion']);
       Report.logCareEvent({
+        id: exId,
         type: 'excretion',
-        ts: ets,
+        ts: exTs,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -2796,10 +2817,10 @@ export function RecordPage({
       if (sv || sc) Report.recordStoolForIntervalAlert(id, { stoolVolume: sv, stoolCharacter: sc });
       if (u || tg) Report.setLastUrineNow(id);
     } else if (excretion) {
-      const ets = bulkCareEventTs(ymdLog, 'excretion');
       Report.logCareEvent({
+        id: exId,
         type: 'excretion',
-        ts: ets,
+        ts: exTs,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -2808,10 +2829,10 @@ export function RecordPage({
       Report.setLastStoolNow(id);
       Report.setLastUrineNow(id);
     } else if (tg) {
-      const ets = bulkCareEventTs(ymdLog, 'excretion');
       Report.logCareEvent({
+        id: exId,
         type: 'excretion',
-        ts: ets,
+        ts: exTs,
         residentId: id,
         residentName: name,
         facilitySheetTitle: fac,
@@ -2947,7 +2968,10 @@ export function RecordPage({
         });
         occ = { ...occ, patrol: occ.patrol.map((v, i) => (i === h ? true : v)) };
       } else if (!wantPatrol && occ.patrol[h]) {
-        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, { types: ['patrol'] });
+        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
+          types: ['patrol'],
+          ctx: { residentName: name, facilitySheetTitle: fac },
+        });
         occ = { ...occ, patrol: occ.patrol.map((v, i) => (i === h ? false : v)) };
       }
 
@@ -2955,15 +2979,19 @@ export function RecordPage({
       const urineMls = splitMultiHourlyValues(hum[h]);
       const urineCell = String(hu[h] ?? '').trim();
       if (occ.urine[h] || urineCell) {
-        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
-          types: ['hourly_excretion'],
+        // 既存（care-input 由来含む）を本人一致で除去し、その id を再利用して再作成→クラウドも上書き。
+        const reuseUrineIds = Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
+          types: ['hourly_excretion', 'excretion'],
           hourlyKind: 'urine',
+          ctx: { residentName: name, facilitySheetTitle: fac },
+          returnRemoved: true,
         });
         if (urineCodes.length) {
           urineCodes.forEach((uCode, idx) => {
             const cMl = String(urineMls[idx] ?? urineMls[0] ?? '').trim();
-            const needsMeasuredMl = uCode === 'カテ' || uCode === 'Ba' || uCode === '尿測';
+            const needsMeasuredMl = uCode === 'カテ' || uCode === '導尿' || uCode === 'Ba' || uCode === '尿測';
             Report.logCareEvent({
+              id: Array.isArray(reuseUrineIds) ? reuseUrineIds[idx] || undefined : undefined,
               type: 'hourly_excretion',
               ts: tokyoDateHourMinuteToIso(ymdLog, h, Math.min(59, idx * 5)),
               residentId: id,
@@ -2991,13 +3019,16 @@ export function RecordPage({
       const stoolEntries = splitMultiHourlyStoolCell(hs[h]);
       const stoolCell = String(hs[h] ?? '').trim();
       if (occ.stool[h] || stoolCell) {
-        Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
-          types: ['hourly_excretion'],
+        const reuseStoolIds = Report.removeCareEventsForResidentDayHour(id, ymdLog, h, {
+          types: ['hourly_excretion', 'excretion'],
           hourlyKind: 'stool',
+          ctx: { residentName: name, facilitySheetTitle: fac },
+          returnRemoved: true,
         });
         if (stoolEntries.length) {
           stoolEntries.forEach((parsedStool, idx) => {
             Report.logCareEvent({
+              id: Array.isArray(reuseStoolIds) ? reuseStoolIds[idx] || undefined : undefined,
               type: 'hourly_excretion',
               ts: tokyoDateHourMinuteToIso(ymdLog, h, Math.min(59, idx * 5)),
               residentId: id,
@@ -5797,6 +5828,20 @@ export function RecordPage({
                     />
                   </div>
                   {residentInputView === 'table' ? (
+                    <>
+                    <div id="bulk-care-table-anchor" className="scroll-mt-2" />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .getElementById('bulk-care-table-anchor')
+                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
+                      className="fixed bottom-4 right-4 z-[120] rounded-full border-2 border-white bg-sky-700 px-4 py-3 text-sm font-black text-white shadow-2xl hover:bg-sky-600 sm:text-base"
+                      title="排泄表（一覧入力）の先頭へスクロール"
+                    >
+                      ↑ 排泄表へ
+                    </button>
                     <ResidentBulkInputTable
                       key={`bulk-input-${bulkTableYmd(bulkSheetDate)}`}
                       filteredResidents={displayResidents}
@@ -5819,6 +5864,7 @@ export function RecordPage({
                       geminiApiKey={GEMINI_KEY}
                       facilityLinkKey={selectedFacilityLinkKey}
                     />
+                    </>
                   ) : residentInputView === 'monitor' ? (
                     <ResidentMonitorBoard
                       residents={displayResidents}
