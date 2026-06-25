@@ -325,7 +325,17 @@ function mealFormsFromRoomNotes(residentId) {
 
 function withMealFormsFromRoomNotes(residentId, row) {
   const forms = mealFormsFromRoomNotes(residentId);
-  return { ...row, ...forms };
+  // 食事形態（主食/副食）は居室メモから自動反映する。
+  // 「間食・補助食」は手入力欄なので、入力済みの値は必ず保持し、
+  // 空のときだけ個別指示（とろみ等）で補完する。これをしないと
+  // patchBulkRow が1キー入力ごとに mealExtras を空へ上書きしてしまう。
+  const typed = String(row?.mealExtras ?? '').trim();
+  return {
+    ...row,
+    mealStapleForm: forms.mealStapleForm,
+    mealSideForm: forms.mealSideForm,
+    mealExtras: typed ? row.mealExtras : forms.mealExtras,
+  };
 }
 
 function formatEnteralMealSlotLabel(note) {
