@@ -73,16 +73,26 @@ export function buildStoolEvent(resident, { stoolVolume, stoolCharacter }, recor
   return baseEvent({ resident, type: 'excretion', meta, ts, recordedBy });
 }
 
-/** 食事（主食/副食の割・任意メモ） */
-export function buildMealEvent(resident, { mealTime, mealStaple, mealSide, mealAmount }, recordedBy, ts) {
+/** 食事（主食/副食の割） */
+export function buildMealEvent(resident, { mealTime, mealStaple, mealSide }, recordedBy, ts) {
+  // 閲覧側（facility-portal）の一覧表が読む形式に合わせる:
+  //  - meta.mealSlot: '朝' | '昼' | '夜'（間食は区分外なので note で残す）
+  //  - meta.mealAmount: 例 "主食8割 副食7割"（composeMealAmountForLog 互換）
+  const t = String(mealTime ?? '').trim();
+  const slot = t === '朝' || t === '昼' || t === '夜' ? t : '';
+  const sw = String(mealStaple ?? '').trim();
+  const dw = String(mealSide ?? '').trim();
+  const parts = [];
+  if (sw) parts.push(`主食${sw}割`);
+  if (dw) parts.push(`副食${dw}割`);
+  const mealAmount = parts.join(' ');
   const meta = {
-    mealTime: String(mealTime ?? '').trim(),
-    mealStaple: String(mealStaple ?? '').trim(),
-    mealSide: String(mealSide ?? '').trim(),
-    mealAmount: String(mealAmount ?? '').trim(),
+    mealSlot: slot,
+    mealAmount,
+    mealStaple: sw ? `${sw}割` : '',
+    mealSide: dw ? `${dw}割` : '',
   };
-  // 閲覧側の旧キー互換（mealValue/mealTime）
-  if (meta.mealStaple) meta.mealValue = meta.mealStaple;
+  if (t === '間食') meta.note = '間食';
   return baseEvent({ resident, type: 'meal', meta, ts, recordedBy });
 }
 
