@@ -200,7 +200,7 @@ export function buildHourlyCareFromEvents(events, ymd) {
   return { patrol, urine, stool };
 }
 
-const HOURLY_URINE_CODES = new Set(['トイレ', '尿器', '少量', '中量', '多量', 'Ba', '尿測', 'カテ']);
+const HOURLY_URINE_CODES = new Set(['トイレ', '尿器', '失禁', '少量', '中量', '多量', 'Ba', '尿測', 'カテ']);
 
 /**
  * @param {Record<string, unknown>} meta

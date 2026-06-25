@@ -345,6 +345,7 @@ export const HOURLY_URINE_OPTIONS = Object.freeze([
   { value: '', label: '—' },
   { value: 'トイレ', label: 'トイレ' },
   { value: '尿器', label: '尿器' },
+  { value: '失禁', label: '失禁' },
   { value: '少量', label: '少量' },
   { value: '中量', label: '中量' },
   { value: '多量', label: '多量' },
