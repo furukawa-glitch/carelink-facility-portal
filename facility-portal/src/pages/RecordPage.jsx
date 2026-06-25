@@ -24,6 +24,7 @@ import {
   MessageSquarePlus,
   Mic,
   Monitor,
+  Printer,
   RefreshCw,
   Smartphone,
   Sparkles,
@@ -128,6 +129,7 @@ import {
 import { importR8VisitCalendarFromBuffer } from '../lib/r8VisitCalendarImport.js';
 import { HomeVisitNoteModal } from '../components/HomeVisitNoteModal.jsx';
 import { EnteralNutritionMenuModal } from '../components/EnteralNutritionMenuModal.jsx';
+import { PeriodRecordExportModal } from '../components/PeriodRecordExportModal.jsx';
 import { BathingScheduleModal } from '../components/BathingScheduleModal.jsx';
 import { formatBathPlanShort } from '../lib/bathingSchedule.js';
 import { mergeMedicineLists } from '../lib/pharmacyMedicineFormat.js';
@@ -1444,6 +1446,7 @@ export function RecordPage({
 
   const [calOpenId, setCalOpenId] = useState('');
   const [auditMonth, setAuditMonth] = useState(currentYearMonth);
+  const [periodExportOpen, setPeriodExportOpen] = useState(false);
 
   /** 'cards' | 'table' | 'monitor' — カード / 一覧表 / アラーム一覧（1画面） */
   const [residentInputView, setResidentInputView] = useState(() => {
@@ -4769,6 +4772,15 @@ export function RecordPage({
               <FileText className="h-3.5 w-3.5" />
               監査HTML
             </button>
+            <button
+              type="button"
+              onClick={() => setPeriodExportOpen(true)}
+              title="期間（例:3〜5月）と利用者を指定して、記録をそのまま日別・時系列で出力（印刷/PDF・CSV）"
+              className="flex items-center gap-0.5 rounded-md bg-sky-700 px-1.5 py-1 text-[10px] font-bold text-white hover:bg-sky-600 sm:text-xs"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              期間記録
+            </button>
           </div>
           {typeof onOpenNotionNewResidents === 'function' ? (
             <button
@@ -6998,6 +7010,12 @@ export function RecordPage({
         sheetsApiKey={SHEETS_KEY}
         residents={displayResidents}
         onImported={refreshBulkEnteralPlans}
+      />
+      <PeriodRecordExportModal
+        open={periodExportOpen}
+        onClose={() => setPeriodExportOpen(false)}
+        residents={filteredResidents}
+        facilitySheetTitle={selectedSheetTitle}
       />
       <BathingScheduleModal
         open={bathScheduleOpen}

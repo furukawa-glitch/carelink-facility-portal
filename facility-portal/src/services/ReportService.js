@@ -3197,6 +3197,294 @@ export function downloadPaidAuditNarrativeHtml(facilitySheetTitle, yearMonth, ro
   URL.revokeObjectURL(a.href);
 }
 
+/* ============================================================
+ * 監査用：期間（開始〜終了）×利用者を指定した「生記録」出力
+ *  - 月次要約（監査HTML/CSV）とは別物で、記録をそのまま日別・時系列で出す。
+ *  - CSV: 1行1記録 / HTML: 利用者ごと・日別の時系列表（ブラウザ印刷でPDF化）
+ * ============================================================ */
+
+const PERIOD_EXPORT_TYPE_JA = Object.freeze({
+  patrol: '巡視',
+  meal: '食事',
+  excretion: '排泄',
+  hourly_excretion: '排泄',
+  vital_snapshot: 'バイタル',
+  enteral: '経管栄養',
+  fluid_intake: '水分',
+  note: '様子',
+});
+
+/** YYYY-MM-DD（ローカル日付）を開始〜終了まで列挙（最大400日で安全停止） */
+function enumerateLocalYmdRange(startYmd, endYmd) {
+  const parse = (s) => {
+    const [y, m, d] = String(s ?? '')
+      .trim()
+      .split('-')
+      .map((x) => parseInt(x, 10));
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+    const dt = new Date(y, m - 1, d);
+    return Number.isFinite(dt.getTime()) ? dt : null;
+  };
+  const start = parse(startYmd);
+  const end = parse(endYmd);
+  if (!start || !end || start.getTime() > end.getTime()) return [];
+  const out = [];
+  const cur = new Date(start);
+  let guard = 0;
+  while (cur.getTime() <= end.getTime() && guard < 400) {
+    out.push(
+      `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`
+    );
+    cur.setDate(cur.getDate() + 1);
+    guard++;
+  }
+  return out;
+}
+
+/** イベントの HH:MM（Asia/Tokyo） */
+function periodExportTimeLabel(ts) {
+  const t = new Date(ts);
+  if (!Number.isFinite(t.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(t);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 1記録を {種別, 内容} に整形（生記録出力用）
+ * @param {{ type?: string; meta?: Record<string, unknown> }} e
+ * @returns {{ kind: string; detail: string }}
+ */
+function describeCareEventForExport(e) {
+  const m = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+  const type = String(e?.type ?? '');
+  const kind = PERIOD_EXPORT_TYPE_JA[type] ?? (type || '記録');
+  const note = String(m.note ?? '').trim();
+  if (type === 'vital_snapshot') return { kind, detail: formatVitalMetaLine(m) };
+  if (type === 'excretion' || type === 'hourly_excretion') {
+    const parts = [];
+    const code = String(m.urineCode ?? '').trim().replace(/^カテ$/u, '導尿');
+    const uv = String(m.urineVolume ?? '').trim();
+    const ml = String(m.measuredUrineMl ?? m.catheterMl ?? '').trim();
+    const sv = String(m.stoolVolume ?? '').trim();
+    const sc = String(m.stoolCharacter ?? '').trim();
+    const tg = Boolean(m.toiletGuidance);
+    const urineLabel = code || (uv && uv !== 'plain' ? uv : '');
+    if (urineLabel) parts.push(`排尿 ${urineLabel}${ml ? `(${ml}ml)` : ''}`);
+    else if (ml) parts.push(`排尿 ${ml}ml`);
+    if (sv || sc) parts.push(`排便 ${[sv && `量${sv}`, sc].filter(Boolean).join(' ')}`.trim());
+    if (tg) parts.push('トイレ誘導');
+    if (!parts.length && note) parts.push(note);
+    return { kind, detail: parts.join(' / ') || '記録' };
+  }
+  if (type === 'fluid_intake') {
+    const wm = String(m.waterMl ?? '').trim();
+    return { kind, detail: wm ? `水分 ${wm}ml` : note || '記録' };
+  }
+  if (type === 'meal') {
+    const slot = String(m.mealSlot ?? '').trim() || (note === '間食' ? '間食' : '');
+    const amt = String(m.mealAmount ?? '').trim();
+    const wm = String(m.waterMl ?? '').trim();
+    const med = m.medicationTaken === 'yes';
+    const parts = [];
+    if (slot) parts.push(slot);
+    if (amt) parts.push(amt);
+    if (wm) parts.push(`水分${wm}ml`);
+    if (med) parts.push('内服済');
+    return { kind, detail: parts.join(' / ') || note || '記録' };
+  }
+  if (type === 'enteral') return { kind, detail: note || '記録' };
+  if (type === 'note') {
+    const d = String(m.dayNote ?? '').trim();
+    const n = String(m.nightNote ?? '').trim();
+    const parts = [];
+    if (d) parts.push(`日中: ${d}`);
+    if (n) parts.push(`夜勤: ${n}`);
+    return { kind, detail: parts.join(' / ') || '記録' };
+  }
+  return { kind, detail: note || '記録' };
+}
+
+/** @param {{ recordedBy?: string; meta?: Record<string, unknown> }} e */
+function periodExportRecorder(e) {
+  const direct = String(e?.recordedBy ?? '').trim();
+  if (direct) return direct;
+  const m = e?.meta && typeof e.meta === 'object' ? e.meta : {};
+  return String(m.recordedBy ?? m.recorderName ?? '').trim();
+}
+
+/**
+ * 期間×利用者の生記録 CSV（1行1記録）
+ * @param {string} facilitySheetTitle
+ * @param {string} startYmd YYYY-MM-DD
+ * @param {string} endYmd YYYY-MM-DD
+ * @param {Array<Record<string, unknown>>} roster 出力対象の利用者（id/name/room）
+ */
+export function buildPeriodRecordCsv(facilitySheetTitle, startYmd, endYmd, roster = []) {
+  const q = (v) => {
+    const t = String(v ?? '');
+    return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const days = enumerateLocalYmdRange(startYmd, endYmd);
+  const lines = [['日付', '時刻', '利用者名', '居室', '種別', '内容', '記録者'].map(q).join(',')];
+  for (const r of Array.isArray(roster) ? roster : []) {
+    const id = String(r?.id ?? '').trim();
+    if (!id) continue;
+    const name = String(r?.name ?? r?.residentName ?? '').trim();
+    const room = String(r?.room ?? '').trim() || '—';
+    const ctx = careEventResidentContext(r, facilitySheetTitle);
+    for (const ymd of days) {
+      const events = getCareEventsForResidentDay(id, ymd, ctx);
+      for (const e of events) {
+        const tsForDay = careEventTsForResidentDay(e);
+        const { kind, detail } = describeCareEventForExport(e);
+        lines.push(
+          [ymd, periodExportTimeLabel(tsForDay), name, room, kind, detail, periodExportRecorder(e)]
+            .map(q)
+            .join(',')
+        );
+      }
+    }
+  }
+  return lines.join('\r\n');
+}
+
+export function downloadPeriodRecordCsv(facilitySheetTitle, startYmd, endYmd, roster = []) {
+  const csv = buildPeriodRecordCsv(facilitySheetTitle, startYmd, endYmd, roster);
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const safe = String(facilitySheetTitle).replace(/[\\/:*?"<>|]/g, '_');
+  a.download = `ケア記録_${safe}_${startYmd}_${endYmd}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/** @param {string} ymd YYYY-MM-DD → 「2026年6月22日（月）」 */
+function periodExportDayHeading(ymd) {
+  const [y, m, d] = String(ymd ?? '')
+    .trim()
+    .split('-')
+    .map((x) => parseInt(x, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return String(ymd ?? '');
+  const dt = new Date(y, m - 1, d);
+  const wd = ['日', '月', '火', '水', '木', '金', '土'][dt.getDay()] ?? '';
+  return `${y}年${m}月${d}日（${wd}）`;
+}
+
+/**
+ * 期間×利用者の生記録 HTML（利用者ごと・日別の時系列表。ブラウザ印刷でPDF化）
+ * @param {string} facilitySheetTitle
+ * @param {string} startYmd
+ * @param {string} endYmd
+ * @param {Array<Record<string, unknown>>} roster
+ */
+export function buildPeriodRecordHtml(facilitySheetTitle, startYmd, endYmd, roster = []) {
+  const days = enumerateLocalYmdRange(startYmd, endYmd);
+  const facility = escapeHtml(String(facilitySheetTitle ?? '').trim() || '（施設未選択）');
+  const generatedAt = new Date().toLocaleString('ja-JP', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  const sections = [];
+  for (const r of Array.isArray(roster) ? roster : []) {
+    const id = String(r?.id ?? '').trim();
+    if (!id) continue;
+    const name = escapeHtml(String(r?.name ?? r?.residentName ?? '').trim() || '（氏名未登録）');
+    const room = escapeHtml(String(r?.room ?? '').trim() || '—');
+    const ctx = careEventResidentContext(r, facilitySheetTitle);
+
+    const dayBlocks = [];
+    let total = 0;
+    for (const ymd of days) {
+      const events = getCareEventsForResidentDay(id, ymd, ctx);
+      if (!events.length) continue;
+      total += events.length;
+      const rows = events
+        .map((e) => {
+          const tsForDay = careEventTsForResidentDay(e);
+          const { kind, detail } = describeCareEventForExport(e);
+          return `<tr><td class="t">${escapeHtml(periodExportTimeLabel(tsForDay))}</td><td class="k">${escapeHtml(
+            kind
+          )}</td><td>${escapeHtml(detail)}</td><td class="r">${escapeHtml(periodExportRecorder(e))}</td></tr>`;
+        })
+        .join('');
+      dayBlocks.push(
+        `<div class="day"><h3>${escapeHtml(periodExportDayHeading(ymd))}<span class="cnt">${events.length}件</span></h3>` +
+          `<table><thead><tr><th class="t">時刻</th><th class="k">種別</th><th>内容</th><th class="r">記録者</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      );
+    }
+
+    sections.push(
+      `<section class="resident"><h2>${name}<span class="room">居室 ${room}</span><span class="cnt">期間計 ${total}件</span></h2>` +
+        (dayBlocks.length ? dayBlocks.join('') : '<p class="empty">この期間に記録はありません。</p>') +
+        `</section>`
+    );
+  }
+
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ケア記録 ${facility} ${escapeHtml(startYmd)}〜${escapeHtml(endYmd)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif; color: #1e293b; margin: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .meta { color: #475569; font-size: 13px; margin-bottom: 16px; }
+  .toolbar { margin-bottom: 16px; }
+  .toolbar button { font-size: 15px; font-weight: 700; padding: 10px 18px; border: 0; border-radius: 8px; background: #0d9488; color: #fff; cursor: pointer; }
+  section.resident { margin-bottom: 28px; page-break-inside: auto; }
+  section.resident + section.resident { page-break-before: always; }
+  h2 { font-size: 17px; border-bottom: 2px solid #0d9488; padding-bottom: 4px; margin: 0 0 10px; }
+  h2 .room { font-size: 13px; font-weight: 600; color: #475569; margin-left: 10px; }
+  h2 .cnt, h3 .cnt { font-size: 12px; font-weight: 600; color: #64748b; margin-left: 10px; }
+  .day { margin-bottom: 12px; page-break-inside: avoid; }
+  h3 { font-size: 14px; margin: 10px 0 4px; color: #0f766e; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; }
+  td.t, th.t { width: 56px; white-space: nowrap; }
+  td.k, th.k { width: 64px; white-space: nowrap; }
+  td.r, th.r { width: 90px; white-space: nowrap; color: #475569; }
+  .empty { color: #94a3b8; font-size: 13px; }
+  @media print {
+    body { margin: 10mm; }
+    .no-print { display: none !important; }
+    h2 { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style></head>
+<body>
+  <div class="toolbar no-print"><button onclick="window.print()">印刷／PDF保存</button></div>
+  <h1>ケア記録（生記録）</h1>
+  <div class="meta">施設: ${facility} ／ 期間: ${escapeHtml(startYmd)} 〜 ${escapeHtml(endYmd)} ／ 出力日時: ${escapeHtml(
+    generatedAt
+  )} ／ 対象: ${(Array.isArray(roster) ? roster.length : 0)}名</div>
+  ${sections.join('\n') || '<p class="empty">対象の利用者がありません。</p>'}
+</body></html>`;
+}
+
+export function downloadPeriodRecordHtml(facilitySheetTitle, startYmd, endYmd, roster = []) {
+  const html = buildPeriodRecordHtml(facilitySheetTitle, startYmd, endYmd, roster);
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const safe = String(facilitySheetTitle).replace(/[\\/:*?"<>|]/g, '_');
+  a.download = `ケア記録_${safe}_${startYmd}_${endYmd}.html`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /** @param {string} residentId */
 export function getEmergencyContact(residentId) {
   const all = readJson(LS.emergencyContact, {});
