@@ -66,6 +66,7 @@ import {
   composeMealAmountForLog,
   composeMealIndividualInstructions,
   composeOralSupplementLines,
+  parseOralSupplementsFromMealLog,
   getQuickCareMealEventKind,
   joinMultiHourlyStoolCell,
   MEAL_FLUID_THICKEN_OPTIONS,
@@ -1231,6 +1232,24 @@ function bulkCareSeedForResidentDay(residentId, bulkSheetDate, ctx = null) {
         if (parsed.mealStaple) seed.mealStaple = parsed.mealStaple;
         if (parsed.mealSideForm) seed.mealSideForm = parsed.mealSideForm;
         if (parsed.mealSide) seed.mealSide = parsed.mealSide;
+        const oral = parseOralSupplementsFromMealLog(meta.mealAmount);
+        if (oral.ensurePortion) seed.ensurePortion = oral.ensurePortion;
+        if (oral.solitaPortion) seed.solitaPortion = oral.solitaPortion;
+        const slashIdx = String(meta.mealAmount).indexOf('／');
+        if (slashIdx >= 0) {
+          const extras = String(meta.mealAmount).slice(slashIdx + 1).trim();
+          if (extras) seed.mealExtras = extras;
+        }
+      }
+      // care-input が生metaも送ってくる場合は優先
+      if (meta.ensurePortion != null && String(meta.ensurePortion).trim() !== '') {
+        seed.ensurePortion = String(meta.ensurePortion).trim();
+      }
+      if (meta.solitaPortion != null && String(meta.solitaPortion).trim() !== '') {
+        seed.solitaPortion = String(meta.solitaPortion).trim();
+      }
+      if (meta.mealExtras != null && String(meta.mealExtras).trim() !== '') {
+        seed.mealExtras = String(meta.mealExtras).trim();
       }
       if (meta.mealStapleForm != null && String(meta.mealStapleForm).trim() !== '') {
         seed.mealStapleForm = String(meta.mealStapleForm);

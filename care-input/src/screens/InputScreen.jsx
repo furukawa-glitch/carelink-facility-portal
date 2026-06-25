@@ -85,6 +85,28 @@ function parseUrineCode(raw) {
 const STOOL_VOLUME = ['多', '中', '小'];
 const STOOL_CHARACTER = ['普通便', '軟便', '硬便', '水様便', '泥状便'];
 const MEAL_TIMES = ['朝', '昼', '夜', '間食'];
+// エンシュア・ソリタの摂取量（facility-portal の ENSURE_PORTION_OPTIONS と一致させること）
+const ENSURE_PORTIONS = ['1/3', '1/2', '2/3', '1缶'];
+
+/** 食事metaからエンシュア/ソリタの割合を復元（生meta優先、無ければmealAmountから抽出） */
+function parseMealMetaPortion(meta, which) {
+  const raw = which === 'ensure' ? meta?.ensurePortion : meta?.solitaPortion;
+  const v = String(raw ?? '').trim();
+  if (v) return v;
+  const amount = String(meta?.mealAmount ?? '');
+  const re = which === 'ensure' ? /エンシュア(1\/3|1\/2|2\/3|1缶)/u : /ソリタ(1\/3|1\/2|2\/3|1缶)/u;
+  const m = amount.match(re);
+  return m ? m[1] : '';
+}
+
+/** 食事metaから間食・補助食の自由記述を復元（生meta優先、無ければ「／」以降を抽出） */
+function parseMealMetaExtras(meta) {
+  const v = String(meta?.mealExtras ?? '').trim();
+  if (v) return v;
+  const amount = String(meta?.mealAmount ?? '');
+  const idx = amount.indexOf('／');
+  return idx >= 0 ? amount.slice(idx + 1).trim() : '';
+}
 
 /** 今日の日付 + 指定 time(HH:MM) を ISO に。time 未指定なら現在時刻。 */
 function tsFromTime(time) {
@@ -235,6 +257,10 @@ export function InputScreen({ resident, staffName, onBack }) {
         mealTime: String(meta.mealSlot ?? '').trim() || (meta.note === '間食' ? '間食' : ''),
         mealStaple: String(meta.mealStaple ?? '').replace(/割$/u, ''),
         mealSide: String(meta.mealSide ?? '').replace(/割$/u, ''),
+        medicationTaken: meta.medicationTaken === 'yes' ? 'yes' : '',
+        ensurePortion: parseMealMetaPortion(meta, 'ensure'),
+        solitaPortion: parseMealMetaPortion(meta, 'solita'),
+        mealExtras: parseMealMetaExtras(meta),
         waterMl: '',
       };
     } else if (type === 'fluid_intake') {
@@ -538,11 +564,86 @@ function WariSelect({ label, value, onChange }) {
   );
 }
 
+function PortionSelect({ label, value, onChange, options }) {
+  return (
+    <label className="block">
+      <span className="text-sm font-bold text-slate-600">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-lg font-bold"
+      >
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+const MEAL_EXTRAS_MAXLEN = 40;
+
 function MealPanel({ busy, onRecordMeal, onRecordFluid, initial }) {
   const [mealTime, setMealTime] = useState(initial?.mealTime ?? '');
   const [mealStaple, setMealStaple] = useState(initial?.mealStaple ?? '');
   const [mealSide, setMealSide] = useState(initial?.mealSide ?? '');
+  const [ensurePortion, setEnsurePortion] = useState(initial?.ensurePortion ?? '');
+  const [solitaPortion, setSolitaPortion] = useState(initial?.solitaPortion ?? '');
+  const [mealExtras, setMealExtras] = useState(initial?.mealExtras ?? '');
+  const [medTaken, setMedTaken] = useState(initial?.medicationTaken === 'yes' ? 'yes' : '');
   const [waterMl, setWaterMl] = useState(initial?.waterMl ?? '');
+  const [voiceLang, setVoiceLang] = useState('ja');
+  const [listening, setListening] = useState(false);
+  const [notice, setNotice] = useState('');
+  const speechOK = isSpeechRecognitionSupported();
+
+  const appendExtras = (text) => {
+    const t = String(text ?? '').trim();
+    if (!t) return;
+    setMealExtras((prev) => {
+      const joined = prev ? `${prev}${prev.endsWith('。') ? '' : '、'}${t}` : t;
+      return joined.slice(0, MEAL_EXTRAS_MAXLEN);
+    });
+  };
+
+  const startVoice = () => {
+    if (listening) return;
+    setNotice('');
+    setListening(true);
+    const lang = voiceLang === 'en' ? 'en-US' : 'ja-JP';
+    const recog = createRecognizer(lang, {
+      onResult: async (text) => {
+        if (voiceLang === 'en') {
+          const ja = await translateText(text, 'en', 'ja');
+          if (ja) {
+            appendExtras(ja);
+          } else {
+            appendExtras(text);
+            setNotice('このブラウザは自動翻訳に未対応のため、英語のまま入力しました（Chrome 最新版で日本語化されます）。');
+          }
+        } else {
+          appendExtras(text);
+        }
+      },
+      onError: (m) => {
+        if (m) setNotice(m);
+      },
+      onEnd: () => setListening(false),
+    });
+    recog.start();
+  };
+
+  const resetMeal = () => {
+    setMealStaple('');
+    setMealSide('');
+    setEnsurePortion('');
+    setSolitaPortion('');
+    setMealExtras('');
+    setMedTaken('');
+  };
 
   return (
     <div className="space-y-4">
@@ -566,13 +667,99 @@ function MealPanel({ busy, onRecordMeal, onRecordFluid, initial }) {
           <WariSelect label="主食" value={mealStaple} onChange={setMealStaple} />
           <WariSelect label="副食" value={mealSide} onChange={setMealSide} />
         </div>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <PortionSelect label="エンシュア" value={ensurePortion} onChange={setEnsurePortion} options={ENSURE_PORTIONS} />
+          <PortionSelect label="ソリタ" value={solitaPortion} onChange={setSolitaPortion} options={ENSURE_PORTIONS} />
+        </div>
+
+        <div className="mt-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-slate-600">間食・補助食（食べた内容）</span>
+            <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5 text-xs font-black">
+              <button
+                type="button"
+                onClick={() => setVoiceLang('ja')}
+                className={`rounded-md px-2 py-1 ${voiceLang === 'ja' ? 'bg-white text-teal-700 shadow' : 'text-slate-500'}`}
+              >
+                日本語
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceLang('en')}
+                className={`rounded-md px-2 py-1 ${voiceLang === 'en' ? 'bg-white text-teal-700 shadow' : 'text-slate-500'}`}
+              >
+                English
+              </button>
+            </div>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              value={mealExtras}
+              onChange={(e) => setMealExtras(e.target.value.slice(0, MEAL_EXTRAS_MAXLEN))}
+              maxLength={MEAL_EXTRAS_MAXLEN}
+              placeholder="例: パン半分、バナナ、ゼリー"
+              className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-2 text-base font-bold text-slate-800"
+            />
+            <button
+              type="button"
+              disabled={!speechOK}
+              onClick={startVoice}
+              className={`flex shrink-0 items-center gap-1 rounded-lg px-3 py-2 text-sm font-black text-white disabled:opacity-40 ${
+                listening ? 'animate-pulse bg-rose-600' : 'bg-teal-600'
+              }`}
+              title={speechOK ? '音声で入力' : 'このブラウザは音声入力に未対応です'}
+            >
+              {listening ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              {listening ? '停止' : voiceLang === 'en' ? '英語' : '音声'}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            「English」を選ぶと、英語で話した内容を日本語に変換して入力します。
+          </p>
+        </div>
+
+        <div className="mt-3">
+          <span className="text-sm font-bold text-slate-600">内服</span>
+          <div className="mt-1 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMedTaken((p) => (p === 'yes' ? '' : 'yes'))}
+              className={`rounded-xl py-3 text-base font-black ${
+                medTaken === 'yes' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              内服済
+            </button>
+            <button
+              type="button"
+              onClick={() => setMedTaken('')}
+              className={`rounded-xl py-3 text-base font-black ${
+                medTaken === '' ? 'bg-slate-300 text-slate-800' : 'bg-slate-100 text-slate-500'
+              }`}
+            >
+              なし
+            </button>
+          </div>
+        </div>
+
+        {notice && (
+          <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">{notice}</div>
+        )}
+
         <div className="mt-3">
           <BigRecordButton
             busy={busy}
             onClick={() => {
-              onRecordMeal({ mealTime, mealStaple, mealSide });
-              setMealStaple('');
-              setMealSide('');
+              onRecordMeal({
+                mealTime,
+                mealStaple,
+                mealSide,
+                ensurePortion,
+                solitaPortion,
+                mealExtras,
+                medicationTaken: medTaken,
+              });
+              resetMeal();
             }}
           >
             食事を記録

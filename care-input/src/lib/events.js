@@ -74,25 +74,42 @@ export function buildStoolEvent(resident, { stoolVolume, stoolCharacter }, recor
 }
 
 /** 食事（主食/副食の割） */
-export function buildMealEvent(resident, { mealTime, mealStaple, mealSide }, recordedBy, ts) {
+export function buildMealEvent(
+  resident,
+  { mealTime, mealStaple, mealSide, medicationTaken, ensurePortion, solitaPortion, mealExtras },
+  recordedBy,
+  ts
+) {
   // 閲覧側（facility-portal）の一覧表が読む形式に合わせる:
   //  - meta.mealSlot: '朝' | '昼' | '夜'（間食は区分外なので note で残す）
-  //  - meta.mealAmount: 例 "主食8割 副食7割"（composeMealAmountForLog 互換）
+  //  - meta.mealAmount: 例 "主食8割 副食7割 エンシュア1/2 ソリタ1/3 ／ パン半分"
+  //    （facility の parseMealAmountFieldsFromLog / parseOralSupplementsFromMealLog 互換）
   const t = String(mealTime ?? '').trim();
   const slot = t === '朝' || t === '昼' || t === '夜' ? t : '';
   const sw = String(mealStaple ?? '').trim();
   const dw = String(mealSide ?? '').trim();
+  const ens = String(ensurePortion ?? '').trim();
+  const sol = String(solitaPortion ?? '').trim();
+  const extras = String(mealExtras ?? '').trim();
   const parts = [];
   if (sw) parts.push(`主食${sw}割`);
   if (dw) parts.push(`副食${dw}割`);
-  const mealAmount = parts.join(' ');
+  if (ens) parts.push(`エンシュア${ens}`);
+  if (sol) parts.push(`ソリタ${sol}`);
+  let mealAmount = parts.join(' ');
+  if (extras) mealAmount = [mealAmount, extras].filter(Boolean).join(' ／ ');
   const meta = {
     mealSlot: slot,
     mealAmount,
     mealStaple: sw ? `${sw}割` : '',
     mealSide: dw ? `${dw}割` : '',
   };
+  // 編集（care-input 側）で値を復元しやすいよう生の値も保持（facility は mealAmount を読む）
+  if (ens) meta.ensurePortion = ens;
+  if (sol) meta.solitaPortion = sol;
+  if (extras) meta.mealExtras = extras;
   if (t === '間食') meta.note = '間食';
+  if (medicationTaken === 'yes') meta.medicationTaken = 'yes';
   return baseEvent({ resident, type: 'meal', meta, ts, recordedBy });
 }
 
@@ -171,7 +188,9 @@ export function describeEvent(ev) {
   if (type === 'meal') {
     const slot = String(meta.mealSlot ?? '').trim() || (meta.note === '間食' ? '間食' : '食事');
     const amount = String(meta.mealAmount ?? '').trim();
-    return { time, kind: `食事(${slot})`, summary: amount || '記録' };
+    const med = meta.medicationTaken === 'yes' ? '内服済' : '';
+    const summary = [amount, med].filter(Boolean).join(' / ') || '記録';
+    return { time, kind: `食事(${slot})`, summary };
   }
   if (type === 'fluid_intake') {
     return { time, kind: '水分', summary: meta.waterMl ? `${meta.waterMl}ml` : '記録' };
