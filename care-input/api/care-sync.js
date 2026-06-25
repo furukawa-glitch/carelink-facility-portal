@@ -180,11 +180,22 @@ export default async function handler(req, res) {
     }
 
     if (action === 'pull_residents') {
-      const rows = await supabaseSelectJson(
-        supabaseUrl,
-        serviceKey,
-        `residents?organization_id=eq.${organizationId}&select=id,legacy_row_key,name,name_kana,room,sheet_status,care_level_label,condition_note,home_doctor,care_manager_label,insurance_label,insurance_category,medical_insurance_target_label,is_medical_insurance_target,birth_date_label,age_label,gender_label,meal_count_this_month,is_enteral,source_sheet_title,facility_id,facilities(sheet_title,tab_label)&order=name.asc&limit=5000`
-      );
+      // 列名を固定指定すると DB スキーマ差異（legacy_row_key 無し等）で 400 になるため、
+      // select=* で全列取得し、施設の埋め込みも任意化（失敗時は素の列だけにフォールバック）。
+      let rows = [];
+      try {
+        rows = await supabaseSelectJson(
+          supabaseUrl,
+          serviceKey,
+          `residents?organization_id=eq.${organizationId}&select=*,facilities(sheet_title,tab_label)&order=name.asc&limit=5000`
+        );
+      } catch {
+        rows = await supabaseSelectJson(
+          supabaseUrl,
+          serviceKey,
+          `residents?organization_id=eq.${organizationId}&select=*&order=name.asc&limit=5000`
+        );
+      }
       sendJson(res, 200, { ok: true, residents: rows, count: rows.length });
       return;
     }
