@@ -98,8 +98,9 @@ export function buildWeeklyFlowSheetModel(residentId, resident = {}) {
   const stay = Report.getResidentStayStatus(id);
 
   /** @type {import('./weeklyFlowSheetData.js').DayColumn[]} */
+  const flowCtx = Report.careEventResidentContext(resident);
   const columns = days.map((ymd) => {
-    const evs = Report.getCareEventsForResidentDay(id, ymd);
+    const evs = Report.getCareEventsForResidentDay(id, ymd, flowCtx);
     const vitals = evs
       .filter((e) => e.type === 'vital_snapshot')
       .map((e) => {

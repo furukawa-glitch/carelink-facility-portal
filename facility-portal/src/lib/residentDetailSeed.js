@@ -55,7 +55,7 @@ export function vitalStateFromSaved(res, ymd = localYmd()) {
 }
 
 /** 当日の保存ログから食事・水分・内服・排泄の最新値 */
-export function careStateFromTodayEvents(residentId, ymd = localYmd()) {
+export function careStateFromTodayEvents(residentId, ymd = localYmd(), ctx = null) {
   const id = String(residentId ?? '').trim();
   const out = {
     mealValue: '10',
@@ -74,7 +74,7 @@ export function careStateFromTodayEvents(residentId, ymd = localYmd()) {
   };
   if (!id) return out;
 
-  const events = Report.getCareEventsForResidentDay(id, ymd);
+  const events = Report.getCareEventsForResidentDay(id, ymd, ctx);
   /** @type {Record<string, unknown> | null} */
   let lastMeal = null;
   /** @type {Record<string, unknown> | null} */

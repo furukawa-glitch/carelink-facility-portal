@@ -1672,7 +1672,10 @@ const App = () => {
       }
     );
 
-    const care = careStateFromTodayEvents(id, ymd);
+    const care = careStateFromTodayEvents(id, ymd, {
+      residentName: String(res?.name ?? ''),
+      facilitySheetTitle: String(res?.facility ?? res?.sourceSheetTitle ?? res?.facilitySheetTitle ?? ''),
+    });
     setMealValue(care.mealValue);
     setIsMissedMeal(care.isMissedMeal);
     setHydration(care.hydration || '150');

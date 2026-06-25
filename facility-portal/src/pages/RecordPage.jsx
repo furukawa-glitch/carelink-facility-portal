@@ -1202,11 +1202,11 @@ function localDateTimeForInput(ts) {
 }
 
 /** 保存済みログから一覧入力行の初期値を復元（対象日） */
-function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
+function bulkCareSeedForResidentDay(residentId, bulkSheetDate, ctx = null) {
   const ymd = bulkTableYmd(bulkSheetDate);
   const rid = String(residentId ?? '').trim();
   if (!rid) return { ...BULK_CARE_RESET };
-  const events = Report.getCareEventsForResidentDay(rid, ymd);
+  const events = Report.getCareEventsForResidentDay(rid, ymd, ctx);
   const seed = { ...BULK_CARE_RESET };
   for (const ev of events) {
     const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
@@ -1255,7 +1255,7 @@ function bulkCareSeedForResidentDay(residentId, bulkSheetDate) {
 }
 
 /** 24時間表（巡視・尿・便）の保存済み値を対象日から復元 */
-function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
+function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate, ctx = null) {
   const ymd = bulkTableYmd(bulkSheetDate);
   const rid = String(residentId ?? '').trim();
   const out = {
@@ -1265,7 +1265,7 @@ function hourlyDraftSeedForResidentDay(residentId, bulkSheetDate) {
     hourStool: freshHourlyText24(),
   };
   if (!rid) return out;
-  const events = Report.getCareEventsForResidentDay(rid, ymd);
+  const events = Report.getCareEventsForResidentDay(rid, ymd, ctx);
   const urineCells = buildHourlyUrineCellsFromEvents(events, ymd);
   out.hourUrine = urineCells.codes;
   out.hourUrineMl = urineCells.mls;
@@ -1712,7 +1712,10 @@ export function RecordPage({
     const ymd = bulkTableYmd(bulkSheetDate);
     for (const r of displayResidents) {
       const id = String(r.id);
-      m[id] = buildHourlyCareFromEvents(Report.getCareEventsForResidentDay(id, ymd), ymd);
+      m[id] = buildHourlyCareFromEvents(
+        Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r)),
+        ymd
+      );
     }
     return m;
   }, [displayResidents, bulkSheetDate, tick]);
@@ -1724,7 +1727,7 @@ export function RecordPage({
     for (const r of displayResidents) {
       const id = String(r.id);
       const slots = { 朝: '', 昼: '', 夜: '' };
-      const events = Report.getCareEventsForResidentDay(id, ymd);
+      const events = Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r));
       for (const ev of events) {
         const typ = String(ev?.type ?? '');
         const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
@@ -1739,6 +1742,14 @@ export function RecordPage({
           if (!amount && note === '食事確認（クイック）') continue;
           const display = amount || [wm && `水分${wm}ml`, med && '内服済'].filter(Boolean).join(' ');
           if (display) appendMealSlotSummary(slots, slot, display);
+          continue;
+        }
+        if (typ === 'fluid_intake') {
+          const wm = String(meta.waterMl ?? '').trim();
+          if (!wm) continue;
+          const h = tokyoHourFromTs(ev?.ts);
+          const slot = Number.isFinite(h) ? (h < 10 ? '朝' : h < 15 ? '昼' : '夜') : '昼';
+          appendMealSlotSummary(slots, slot, `水分${wm}ml`);
           continue;
         }
         if (typ === 'enteral') {
@@ -1759,7 +1770,7 @@ export function RecordPage({
     const out = {};
     for (const r of displayResidents) {
       const id = String(r.id);
-      const events = Report.getCareEventsForResidentDay(id, ymd);
+      const events = Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r));
       out[id] = {
         hourly: buildHourlyUrineCellsFromEvents(events, ymd),
         totalMl: computeDailyUrineTotalMlFromEvents(events, ymd),
@@ -1788,12 +1799,13 @@ export function RecordPage({
       for (const r of list) {
         const id = String(r.id);
         const stored = !isPastDay && storedRows[id] && typeof storedRows[id] === 'object' ? storedRows[id] : {};
+        const ctx = Report.careEventResidentContext(r);
         const vital = vitalSeedForBulkTableRow(id, ymd, r);
-        const hourly = hourlyDraftSeedForResidentDay(id, ymd);
-        const savedCare = bulkCareSeedForResidentDay(id, ymd);
+        const hourly = hourlyDraftSeedForResidentDay(id, ymd, ctx);
+        const savedCare = bulkCareSeedForResidentDay(id, ymd, ctx);
         let row;
         if (isToday) {
-          const savedHourly = buildHourlyCareFromEvents(Report.getCareEventsForResidentDay(id, ymd), ymd);
+          const savedHourly = buildHourlyCareFromEvents(Report.getCareEventsForResidentDay(id, ymd, ctx), ymd);
           row = {
             ...vital,
             ...hourly,
@@ -2526,7 +2538,7 @@ export function RecordPage({
       if (!rid) continue;
       const markKey = `${String(selectedSheetTitle ?? '')}::${rid}::${ymd}`;
       if (state[markKey]) continue;
-      const events = Report.getCareEventsForResidentDay(rid, ymd);
+      const events = Report.getCareEventsForResidentDay(rid, ymd, Report.careEventResidentContext(r));
       const totalMl = computeDailyUrineTotalMlFromEvents(events, ymd);
       if (totalMl > 0) {
         Report.logCareEvent({
@@ -2920,7 +2932,7 @@ export function RecordPage({
     const hu = normalizeHourlyText24(hourUrine);
     const hum = normalizeHourlyText24(hourUrineMl);
     const hs = normalizeHourlyText24(hourStool);
-    const dayEv = Report.getCareEventsForResidentDay(id, ymdLog);
+    const dayEv = Report.getCareEventsForResidentDay(id, ymdLog, { residentName: name, facilitySheetTitle: fac });
     let occ = buildHourlyCareFromEvents(dayEv, ymdLog);
     for (let h = 0; h < 24; h++) {
       const wantPatrol = hp[h] === true;
