@@ -1,7 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronLeft, Check, Loader2, Activity, Utensils, Footprints, Toilet, Pencil, Trash2, X } from 'lucide-react';
+import {
+  ChevronLeft,
+  Check,
+  Loader2,
+  Activity,
+  Utensils,
+  Footprints,
+  Toilet,
+  Pencil,
+  Trash2,
+  X,
+  NotebookPen,
+  Mic,
+  Square,
+} from 'lucide-react';
 import { sendOrQueue } from '../lib/queue.js';
 import { pullEvents } from '../lib/api.js';
+import { createRecognizer, isSpeechRecognitionSupported, translateText } from '../lib/speech.js';
 import {
   buildVitalEvent,
   buildPatrolEvent,
@@ -9,6 +24,7 @@ import {
   buildStoolEvent,
   buildMealEvent,
   buildFluidEvent,
+  buildNoteEvent,
   describeEvent,
   voidEvent,
   withIdentity,
@@ -20,6 +36,25 @@ const TABS = [
   { key: 'meal', label: '食事・水分', icon: Utensils },
   { key: 'patrol', label: '巡視', icon: Footprints },
   { key: 'excretion', label: '排泄', icon: Toilet },
+  { key: 'note', label: '様子', icon: NotebookPen },
+];
+
+/** 様子メモ1行あたりの目安文字数 */
+const NOTE_MAXLEN = 30;
+
+/** プルダウンで選べる定型文（日中・夜勤共通。先頭の空は「選択」） */
+const NOTE_PRESETS = [
+  '日中フロアで過ごされている。',
+  '日中テレビをみて過ごされている。',
+  '居室で休まれている。',
+  '左側臥位で眠られている。',
+  '右側臥位で眠られている。',
+  '仰臥位で眠られている。',
+  '開眼されている。',
+  '閉眼し休まれている。',
+  '傾眠傾向。',
+  '声かけに反応あり。',
+  '落ち着いて過ごされている。',
 ];
 
 const WARI = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
@@ -105,6 +140,7 @@ const KIND_COLOR = {
   排尿: 'bg-sky-100 text-sky-700',
   排便: 'bg-amber-100 text-amber-700',
   水分: 'bg-cyan-100 text-cyan-700',
+  様子: 'bg-emerald-100 text-emerald-700',
 };
 
 /** @param {{ resident: object; staffName: string; onBack: () => void }} props */
@@ -215,6 +251,9 @@ export function InputScreen({ resident, staffName, onBack }) {
         stoolVolume: String(meta.stoolVolume ?? ''),
         stoolCharacter: String(meta.stoolCharacter ?? ''),
       };
+    } else if (type === 'note') {
+      nextTab = 'note';
+      initial = { dayNote: String(meta.dayNote ?? ''), nightNote: String(meta.nightNote ?? '') };
     }
     setEditing(ev);
     setEditInitial(initial);
@@ -232,6 +271,14 @@ export function InputScreen({ resident, staffName, onBack }) {
 
   const ts = () => tsFromTime(time);
   const panelKey = `${tab}-${editNonce}`;
+  // 今日の様子メモ（あれば）をプルダウン/手入力の初期値に使う
+  const todayNote = records.find((e) => String(e?.type ?? '') === 'note') ?? null;
+  const todayNoteInitial = todayNote
+    ? {
+        dayNote: String(todayNote.meta?.dayNote ?? ''),
+        nightNote: String(todayNote.meta?.nightNote ?? ''),
+      }
+    : null;
 
   return (
     <div>
@@ -323,6 +370,14 @@ export function InputScreen({ resident, staffName, onBack }) {
           initial={editing && editInitial ? editInitial : null}
           onRecordUrine={(v) => record(buildUrineEvent(resident, v, staffName, ts()))}
           onRecordStool={(v) => record(buildStoolEvent(resident, v, staffName, ts()))}
+        />
+      )}
+      {tab === 'note' && (
+        <NotePanel
+          key={`note-${editNonce}-${todayNote ? String(todayNote.id) : 'new'}`}
+          busy={busy}
+          initial={editing && editInitial ? editInitial : todayNoteInitial}
+          onRecordNote={(v) => record(buildNoteEvent(resident, v, staffName, ts()))}
         />
       )}
 
@@ -691,6 +746,168 @@ function ExcretionPanel({ busy, onRecordUrine, onRecordStool, initial }) {
             }}
           >
             排便を記録
+          </BigRecordButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NoteRow({ label, value, onChange, onPreset, voiceLang, onVoice, listening, speechOK }) {
+  const len = value.length;
+  const over = len > NOTE_MAXLEN;
+  return (
+    <div className="rounded-xl border border-slate-200 p-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-black text-slate-700">{label}</span>
+        <span className={`text-xs font-bold ${over ? 'text-rose-600' : 'text-slate-400'}`}>
+          {len}/{NOTE_MAXLEN}
+        </span>
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={2}
+        maxLength={NOTE_MAXLEN}
+        placeholder="様子を入力（プルダウン・音声でも入力できます）"
+        className="mt-1 w-full resize-none rounded-lg border border-slate-300 px-2 py-2 text-base font-bold text-slate-800"
+      />
+      <div className="mt-1 flex items-center gap-2">
+        <select
+          value=""
+          onChange={(e) => {
+            if (e.target.value) onPreset(e.target.value);
+            e.target.value = '';
+          }}
+          className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-bold text-slate-700"
+        >
+          <option value="">定型文を選ぶ…</option>
+          {NOTE_PRESETS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={!speechOK}
+          onClick={onVoice}
+          className={`flex shrink-0 items-center gap-1 rounded-lg px-3 py-2 text-sm font-black text-white disabled:opacity-40 ${
+            listening ? 'animate-pulse bg-rose-600' : 'bg-teal-600'
+          }`}
+          title={speechOK ? '音声で入力' : 'このブラウザは音声入力に未対応です'}
+        >
+          {listening ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          {listening ? '停止' : voiceLang === 'en' ? '英語' : '音声'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NotePanel({ busy, onRecordNote, initial }) {
+  const [dayNote, setDayNote] = useState(initial?.dayNote ?? '');
+  const [nightNote, setNightNote] = useState(initial?.nightNote ?? '');
+  const [voiceLang, setVoiceLang] = useState('ja');
+  const [listening, setListening] = useState('');
+  const [notice, setNotice] = useState('');
+  const speechOK = isSpeechRecognitionSupported();
+
+  const appendTo = (which, text) => {
+    const t = String(text ?? '').trim();
+    if (!t) return;
+    const setter = which === 'day' ? setDayNote : setNightNote;
+    setter((prev) => {
+      const joined = prev ? `${prev}${prev.endsWith('。') ? '' : ' '}${t}` : t;
+      return joined.slice(0, NOTE_MAXLEN);
+    });
+  };
+
+  const startVoice = (which) => {
+    if (listening) return;
+    setNotice('');
+    setListening(which);
+    const lang = voiceLang === 'en' ? 'en-US' : 'ja-JP';
+    const recog = createRecognizer(lang, {
+      onResult: async (text) => {
+        if (voiceLang === 'en') {
+          const ja = await translateText(text, 'en', 'ja');
+          if (ja) {
+            appendTo(which, ja);
+          } else {
+            appendTo(which, text);
+            setNotice('このブラウザは自動翻訳に未対応のため、英語のまま入力しました（Chrome 最新版で日本語化されます）。');
+          }
+        } else {
+          appendTo(which, text);
+        }
+      },
+      onError: (m) => {
+        if (m) setNotice(m);
+      },
+      onEnd: () => setListening(''),
+    });
+    recog.start();
+  };
+
+  const hasAny = String(dayNote).trim() || String(nightNote).trim();
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl bg-white p-3 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-slate-600">様子メモ（日中・夜勤）</div>
+          <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5 text-xs font-black">
+            <button
+              type="button"
+              onClick={() => setVoiceLang('ja')}
+              className={`rounded-md px-2 py-1 ${voiceLang === 'ja' ? 'bg-white text-teal-700 shadow' : 'text-slate-500'}`}
+            >
+              日本語
+            </button>
+            <button
+              type="button"
+              onClick={() => setVoiceLang('en')}
+              className={`rounded-md px-2 py-1 ${voiceLang === 'en' ? 'bg-white text-teal-700 shadow' : 'text-slate-500'}`}
+            >
+              English
+            </button>
+          </div>
+        </div>
+        <p className="mt-1 text-xs text-slate-400">
+          音声の言語を「English」にすると、英語で話した内容を日本語に変換して入力します。
+        </p>
+
+        <div className="mt-2 space-y-2">
+          <NoteRow
+            label="日中"
+            value={dayNote}
+            onChange={(v) => setDayNote(v.slice(0, NOTE_MAXLEN))}
+            onPreset={(p) => appendTo('day', p)}
+            voiceLang={voiceLang}
+            onVoice={() => startVoice('day')}
+            listening={listening === 'day'}
+            speechOK={speechOK}
+          />
+          <NoteRow
+            label="夜勤"
+            value={nightNote}
+            onChange={(v) => setNightNote(v.slice(0, NOTE_MAXLEN))}
+            onPreset={(p) => appendTo('night', p)}
+            voiceLang={voiceLang}
+            onVoice={() => startVoice('night')}
+            listening={listening === 'night'}
+            speechOK={speechOK}
+          />
+        </div>
+
+        {notice && (
+          <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">{notice}</div>
+        )}
+
+        <div className="mt-3">
+          <BigRecordButton busy={busy} onClick={() => onRecordNote({ dayNote, nightNote })}>
+            {hasAny ? '様子を記録' : '記録（入力なし）'}
           </BigRecordButton>
         </div>
       </div>

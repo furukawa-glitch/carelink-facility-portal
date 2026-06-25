@@ -102,6 +102,34 @@ export function buildFluidEvent(resident, { waterMl }, recordedBy, ts) {
   return baseEvent({ resident, type: 'fluid_intake', meta, ts, recordedBy });
 }
 
+/** 当日（端末ローカル日付）の YYYY-MM-DD */
+function localYmd(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  const x = Number.isFinite(d.getTime()) ? d : new Date();
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 様子メモ（日中1行・夜勤1行）。利用者×日付で1件に集約（同じ id で上書き）。
+ * @param {{ id?: string; name: string; facility: string }} resident
+ * @param {{ dayNote?: string; nightNote?: string }} note
+ */
+export function buildNoteEvent(resident, { dayNote, nightNote }, recordedBy, ts) {
+  const day = String(dayNote ?? '').trim();
+  const night = String(nightNote ?? '').trim();
+  const meta = {
+    noteKind: 'dayNight',
+    dayNote: day,
+    nightNote: night,
+    note: [day && `日中: ${day}`, night && `夜勤: ${night}`].filter(Boolean).join(' / ') || '様子',
+  };
+  const ev = baseEvent({ resident, type: 'note', meta, ts, recordedBy });
+  // 利用者×日付で常に同じ id にし、再保存で上書き（重複させない）。
+  const key = String(resident?.id ?? '').trim() || String(resident?.name ?? '').trim();
+  ev.id = `note_dn_${key}_${localYmd(ts)}`;
+  return ev;
+}
+
 /** 当日（東京時間）の 00:00 を ISO で返す（pull_events の sinceTs 用） */
 export function startOfTodayIso() {
   const d = new Date();
@@ -150,6 +178,12 @@ export function describeEvent(ev) {
   }
   if (type === 'patrol') {
     return { time, kind: '巡視', summary: '巡視' };
+  }
+  if (type === 'note') {
+    const day = String(meta.dayNote ?? '').trim();
+    const night = String(meta.nightNote ?? '').trim();
+    const s = [day && `日中: ${day}`, night && `夜勤: ${night}`].filter(Boolean).join(' / ');
+    return { time, kind: '様子', summary: s || String(meta.note ?? '').trim() || '記録' };
   }
   if (type === 'excretion') {
     const hk = String(meta.hourlyKind ?? '').trim();
