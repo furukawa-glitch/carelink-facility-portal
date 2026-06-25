@@ -1714,28 +1714,32 @@ export function RecordPage({
     });
   }, [displayResidents, selectedFacilityLinkKey, bulkGlobalMealSlot]);
 
-  /** 一覧表・24時間グリッド用（保存済みログからマスを埋める） */
-  const bulkHourlySavedByResident = useMemo(() => {
-    const m = {};
+  /**
+   * 一覧表（24時間表）の各種集計を1パスで作成。
+   * 以前は hourlySaved / meal / urine / note を別々の useMemo で計算し、
+   * 利用者ごとに getCareEventsForResidentDay（全イベント走査）を4回呼んでいた。
+   * 同期のたびに重くなる主因だったため、利用者あたり1回の取得にまとめる。
+   */
+  const bulkCareDerivedByResident = useMemo(() => {
     const ymd = bulkTableYmd(bulkSheetDate);
+    const hourlySaved = {};
+    const mealSummary = {};
+    const urineDetail = {};
+    const dayNightNote = {};
     for (const r of displayResidents) {
       const id = String(r.id);
-      m[id] = buildHourlyCareFromEvents(
-        Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r)),
-        ymd
-      );
-    }
-    return m;
-  }, [displayResidents, bulkSheetDate, tick]);
-
-  /** 一覧表先頭表示用: 当日の食事（朝・昼・夜）の最新保存値 */
-  const bulkMealSummaryByResident = useMemo(() => {
-    const ymd = bulkTableYmd(bulkSheetDate);
-    const out = {};
-    for (const r of displayResidents) {
-      const id = String(r.id);
-      const slots = { 朝: '', 昼: '', 夜: '' };
       const events = Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r));
+
+      hourlySaved[id] = buildHourlyCareFromEvents(events, ymd);
+      urineDetail[id] = {
+        hourly: buildHourlyUrineCellsFromEvents(events, ymd),
+        totalMl: computeDailyUrineTotalMlFromEvents(events, ymd),
+      };
+
+      const slots = { 朝: '', 昼: '', 夜: '' };
+      let dayNote = '';
+      let nightNote = '';
+      let noteTs = 0;
       for (const ev of events) {
         const typ = String(ev?.type ?? '');
         const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
@@ -1750,67 +1754,36 @@ export function RecordPage({
           if (!amount && note === '食事確認（クイック）') continue;
           const display = amount || [wm && `水分${wm}ml`, med && '内服済'].filter(Boolean).join(' ');
           if (display) appendMealSlotSummary(slots, slot, display);
-          continue;
-        }
-        if (typ === 'fluid_intake') {
+        } else if (typ === 'fluid_intake') {
           const wm = String(meta.waterMl ?? '').trim();
           if (!wm) continue;
           const h = tokyoHourFromTs(ev?.ts);
           const slot = Number.isFinite(h) ? (h < 10 ? '朝' : h < 15 ? '昼' : '夜') : '昼';
           appendMealSlotSummary(slots, slot, `水分${wm}ml`);
-          continue;
-        }
-        if (typ === 'enteral') {
+        } else if (typ === 'enteral') {
           const note = formatEnteralMealSlotLabel(meta.note);
           if (!note) continue;
           const slot = enteralMealSlotForSummary(meta, String(ev?.ts ?? ''));
           appendMealSlotSummary(slots, slot, note);
+        } else if (typ === 'note') {
+          const t = new Date(String(ev?.ts ?? '')).getTime();
+          const ts = Number.isFinite(t) ? t : 0;
+          if (ts < noteTs) continue;
+          noteTs = ts;
+          dayNote = String(meta.dayNote ?? '').trim();
+          nightNote = String(meta.nightNote ?? '').trim();
         }
       }
-      out[id] = slots;
+      mealSummary[id] = slots;
+      if (dayNote || nightNote) dayNightNote[id] = { dayNote, nightNote };
     }
-    return out;
+    return { hourlySaved, mealSummary, urineDetail, dayNightNote };
   }, [displayResidents, bulkSheetDate, tick]);
 
-  /** 一覧表: 24時間尿列の保存済み表示・日計 ml */
-  const bulkUrineDetailByResident = useMemo(() => {
-    const ymd = bulkTableYmd(bulkSheetDate);
-    const out = {};
-    for (const r of displayResidents) {
-      const id = String(r.id);
-      const events = Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r));
-      out[id] = {
-        hourly: buildHourlyUrineCellsFromEvents(events, ymd),
-        totalMl: computeDailyUrineTotalMlFromEvents(events, ymd),
-      };
-    }
-    return out;
-  }, [displayResidents, bulkSheetDate, tick]);
-
-  /** 一覧表: 様子メモ（日中・夜勤）。care-input の「様子」タブ（type:'note'）を当日分から復元 */
-  const bulkDayNightNoteByResident = useMemo(() => {
-    const ymd = bulkTableYmd(bulkSheetDate);
-    const out = {};
-    for (const r of displayResidents) {
-      const id = String(r.id);
-      const events = Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r));
-      let dayNote = '';
-      let nightNote = '';
-      let latestTs = 0;
-      for (const ev of events) {
-        if (String(ev?.type ?? '') !== 'note') continue;
-        const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
-        const t = new Date(String(ev?.ts ?? '')).getTime();
-        const ts = Number.isFinite(t) ? t : 0;
-        if (ts < latestTs) continue;
-        latestTs = ts;
-        dayNote = String(meta.dayNote ?? '').trim();
-        nightNote = String(meta.nightNote ?? '').trim();
-      }
-      if (dayNote || nightNote) out[id] = { dayNote, nightNote };
-    }
-    return out;
-  }, [displayResidents, bulkSheetDate, tick]);
+  const bulkHourlySavedByResident = bulkCareDerivedByResident.hourlySaved;
+  const bulkMealSummaryByResident = bulkCareDerivedByResident.mealSummary;
+  const bulkUrineDetailByResident = bulkCareDerivedByResident.urineDetail;
+  const bulkDayNightNoteByResident = bulkCareDerivedByResident.dayNightNote;
 
   const displayResidentsForBulkHydrateRef = useRef(displayResidents);
   displayResidentsForBulkHydrateRef.current = displayResidents;
@@ -2576,6 +2549,8 @@ export function RecordPage({
   // 文字入力のカクつきを防ぐ。フォーカスを外したら溜まった更新を1回だけ反映する。
   const boardEditingRef = useRef(false);
   const pendingTickRef = useRef(false);
+  const residentInputViewRef = useRef(residentInputView);
+  residentInputViewRef.current = residentInputView;
   const handleBoardEditingChange = useCallback((editing) => {
     boardEditingRef.current = !!editing;
     if (!editing && pendingTickRef.current) {
@@ -2592,6 +2567,11 @@ export function RecordPage({
     const id = setInterval(() => {
       if (boardEditingRef.current) {
         pendingTickRef.current = true;
+        return;
+      }
+      // 入力表（24時間表）表示中は、巨大ページの定期再描画が重さの主因になる。
+      // 保存・クラウド同期では即時に tick が上がるため、ここでの定期更新は省いて軽くする。
+      if (residentInputViewRef.current === 'table') {
         return;
       }
       setTick((n) => n + 1);
