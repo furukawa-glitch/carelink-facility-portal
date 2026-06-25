@@ -1846,6 +1846,63 @@ export function RecordPage({
     });
   }, [bulkSheetDate, residentInputView, bulkDraftScopeKey, selectedFacilityLinkKey]);
 
+  /**
+   * 他端末（care-input 等）から同期された排尿・排便・巡視を24時間表の下書きへ反映する。
+   * 既に保存済みイベントを基準に「空いているセルだけ」を埋めるため、入力途中の編集は壊さない。
+   * （カウントは保存イベント基準で増えるのにセルが空＝再シート漏れ、を防ぐ）
+   */
+  useEffect(() => {
+    if (residentInputView !== 'table') return;
+    const ymd = bulkTableYmd(bulkSheetDate);
+    const list = displayResidentsForBulkHydrateRef.current;
+    setBulkDraft((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      const fillEmptyText = (savedArr, curArr) => {
+        const c = Array.isArray(curArr) && curArr.length === 24 ? [...curArr] : freshHourlyText24();
+        const s = Array.isArray(savedArr) ? savedArr : [];
+        let touched = false;
+        for (let h = 0; h < 24; h++) {
+          const cv = String(c[h] ?? '').trim();
+          const sv = String(s[h] ?? '').trim();
+          if (!cv && sv) {
+            c[h] = s[h];
+            touched = true;
+          }
+        }
+        return touched ? c : curArr;
+      };
+      const fillEmptyBool = (savedArr, curArr) => {
+        const c = Array.isArray(curArr) && curArr.length === 24 ? [...curArr] : freshHourly24();
+        const s = Array.isArray(savedArr) ? savedArr : [];
+        let touched = false;
+        for (let h = 0; h < 24; h++) {
+          if (!c[h] && s[h]) {
+            c[h] = true;
+            touched = true;
+          }
+        }
+        return touched ? c : curArr;
+      };
+      for (const r of list) {
+        const id = String(r.id);
+        const cur = prev[id];
+        if (!cur) continue;
+        const ctx = Report.careEventResidentContext(r);
+        const seeded = hourlyDraftSeedForResidentDay(id, ymd, ctx);
+        const nu = fillEmptyText(seeded.hourUrine, cur.hourUrine);
+        const num = fillEmptyText(seeded.hourUrineMl, cur.hourUrineMl);
+        const ns = fillEmptyText(seeded.hourStool, cur.hourStool);
+        const np = fillEmptyBool(seeded.hourPatrol, cur.hourPatrol);
+        if (nu !== cur.hourUrine || num !== cur.hourUrineMl || ns !== cur.hourStool || np !== cur.hourPatrol) {
+          next[id] = { ...cur, hourUrine: nu, hourUrineMl: num, hourStool: ns, hourPatrol: np };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [tick, residentInputView, bulkSheetDate]);
+
   useEffect(() => {
     if (residentInputView !== 'table') return;
     setBulkDraft((prev) => {
