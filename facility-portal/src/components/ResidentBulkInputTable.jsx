@@ -313,7 +313,10 @@ const HourGrid = React.memo(function HourGrid({
                               title={saved ? '保存済み（変更後に再保存で上書き）' : undefined}
                               aria-label={`${nm} ${hr.label} ${h}時 ${ui + 1}件目`}
                             >
-                              {HOURLY_URINE_OPTIONS.map((opt) => (
+                              {(codeVal && !HOURLY_URINE_OPTIONS.some((o) => o.value === codeVal)
+                                ? [{ value: codeVal, label: codeVal }, ...HOURLY_URINE_OPTIONS]
+                                : HOURLY_URINE_OPTIONS
+                              ).map((opt) => (
                                 <option key={`${hr.key}-${ui}-${opt.value || 'empty'}`} value={opt.value}>
                                   {opt.label}
                                 </option>

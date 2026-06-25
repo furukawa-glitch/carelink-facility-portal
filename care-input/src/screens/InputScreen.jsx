@@ -25,8 +25,28 @@ const TABS = [
 const WARI = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
 // 閲覧側（facility-portal）の固定selectと値を一致させること。
 // 排尿: HOURLY_URINE_OPTIONS / 便量: STOOL_VOLUME_OPTIONS / 便性状: STOOL_CHARACTER_OPTIONS
-const URINE_CODES = ['トイレ', '尿器', '失禁', '少量', '中量', '多量', '導尿'];
+// 排尿は「方法」と「量」を独立に選べるようにする（両方選んでも1記録＝回数1）。
+// facility-portal へは「方法・量」を中点で連結した1コードで送る（カウントは1のまま）。
+const URINE_METHODS = ['トイレ', '尿器', '失禁', '導尿'];
+const URINE_AMOUNTS = ['少量', '中量', '多量'];
 const URINE_NEEDS_ML = new Set(['導尿']);
+
+/** 連結コード（例「トイレ・中量」「導尿」）を 方法/量 に分解。旧データ(カテ等)も吸収 */
+function parseUrineCode(raw) {
+  const parts = String(raw ?? '')
+    .split('・')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let method = '';
+  let amount = '';
+  for (const p of parts) {
+    const m = p === 'カテ' ? '導尿' : p;
+    if (URINE_METHODS.includes(m)) method = m;
+    else if (URINE_AMOUNTS.includes(m)) amount = m;
+    else if (!method) method = m;
+  }
+  return { method, amount };
+}
 const STOOL_VOLUME = ['多', '中', '小'];
 const STOOL_CHARACTER = ['普通便', '軟便', '硬便', '水様便', '泥状便'];
 const MEAL_TIMES = ['朝', '昼', '夜', '間食'];
@@ -555,30 +575,54 @@ function PatrolPanel({ busy, onRecord }) {
 }
 
 function ExcretionPanel({ busy, onRecordUrine, onRecordStool, initial }) {
-  const [urineCode, setUrineCode] = useState(initial?.urineCode ?? '');
+  const initUrine = parseUrineCode(initial?.urineCode);
+  const [urineMethod, setUrineMethod] = useState(initUrine.method);
+  const [urineAmount, setUrineAmount] = useState(initUrine.amount);
   const [urineMl, setUrineMl] = useState(initial?.urineMl ?? '');
   const [stoolVolume, setStoolVolume] = useState(initial?.stoolVolume ?? '');
   const [stoolCharacter, setStoolCharacter] = useState(initial?.stoolCharacter ?? '');
+
+  const toggle = (setter) => (v) => setter((prev) => (prev === v ? '' : v));
 
   return (
     <div className="space-y-4">
       <div className="rounded-2xl bg-white p-3 shadow-sm">
         <div className="text-sm font-bold text-slate-600">排尿</div>
-        <div className="mt-2 grid grid-cols-3 gap-2">
-          {URINE_CODES.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setUrineCode(c)}
-              className={`rounded-xl py-3 text-lg font-black ${
-                urineCode === c ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {c}
-            </button>
-          ))}
+        <div className="mt-2">
+          <span className="text-xs font-bold text-slate-500">方法</span>
+          <div className="mt-1 grid grid-cols-4 gap-2">
+            {URINE_METHODS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => toggle(setUrineMethod)(c)}
+                className={`rounded-xl py-3 text-base font-black ${
+                  urineMethod === c ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
         </div>
-        {URINE_NEEDS_ML.has(urineCode) && (
+        <div className="mt-2">
+          <span className="text-xs font-bold text-slate-500">量</span>
+          <div className="mt-1 grid grid-cols-3 gap-2">
+            {URINE_AMOUNTS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => toggle(setUrineAmount)(c)}
+                className={`rounded-xl py-3 text-lg font-black ${
+                  urineAmount === c ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+        {URINE_NEEDS_ML.has(urineMethod) && (
           <div className="mt-2">
             <NumField label="尿量" unit="ml" value={urineMl} onChange={setUrineMl} placeholder="200" />
           </div>
@@ -588,8 +632,10 @@ function ExcretionPanel({ busy, onRecordUrine, onRecordStool, initial }) {
             busy={busy}
             color="sky"
             onClick={() => {
+              const urineCode = [urineMethod, urineAmount].filter(Boolean).join('・');
               onRecordUrine({ urineCode, measuredUrineMl: urineMl });
-              setUrineCode('');
+              setUrineMethod('');
+              setUrineAmount('');
               setUrineMl('');
             }}
           >
