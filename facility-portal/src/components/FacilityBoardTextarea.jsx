@@ -13,6 +13,7 @@ export const FacilityBoardTextarea = memo(function FacilityBoardTextarea({
   className = '',
   saveButtonClassName = 'mt-2 w-full rounded-lg bg-amber-600 px-3 py-2 text-sm font-black text-white hover:bg-amber-500',
   saveLabel = '保存',
+  onEditingChange,
 }) {
   const [value, setValue] = useState(initialValue);
   const [saveFlash, setSaveFlash] = useState(false);
@@ -37,7 +38,12 @@ export const FacilityBoardTextarea = memo(function FacilityBoardTextarea({
 
   const handleFocus = useCallback(() => {
     dirtyRef.current = true;
-  }, []);
+    onEditingChange?.(true);
+  }, [onEditingChange]);
+
+  const handleBlur = useCallback(() => {
+    onEditingChange?.(false);
+  }, [onEditingChange]);
 
   const handleSave = useCallback(() => {
     onSave?.(value);
@@ -51,6 +57,7 @@ export const FacilityBoardTextarea = memo(function FacilityBoardTextarea({
       <textarea
         value={value}
         onFocus={handleFocus}
+        onBlur={handleBlur}
         onChange={handleChange}
         rows={rows}
         placeholder={placeholder}

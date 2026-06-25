@@ -1787,6 +1787,31 @@ export function RecordPage({
     return out;
   }, [displayResidents, bulkSheetDate, tick]);
 
+  /** 一覧表: 様子メモ（日中・夜勤）。care-input の「様子」タブ（type:'note'）を当日分から復元 */
+  const bulkDayNightNoteByResident = useMemo(() => {
+    const ymd = bulkTableYmd(bulkSheetDate);
+    const out = {};
+    for (const r of displayResidents) {
+      const id = String(r.id);
+      const events = Report.getCareEventsForResidentDay(id, ymd, Report.careEventResidentContext(r));
+      let dayNote = '';
+      let nightNote = '';
+      let latestTs = 0;
+      for (const ev of events) {
+        if (String(ev?.type ?? '') !== 'note') continue;
+        const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+        const t = new Date(String(ev?.ts ?? '')).getTime();
+        const ts = Number.isFinite(t) ? t : 0;
+        if (ts < latestTs) continue;
+        latestTs = ts;
+        dayNote = String(meta.dayNote ?? '').trim();
+        nightNote = String(meta.nightNote ?? '').trim();
+      }
+      if (dayNote || nightNote) out[id] = { dayNote, nightNote };
+    }
+    return out;
+  }, [displayResidents, bulkSheetDate, tick]);
+
   const displayResidentsForBulkHydrateRef = useRef(displayResidents);
   displayResidentsForBulkHydrateRef.current = displayResidents;
   const bulkGlobalMealSlotHydrateRef = useRef(bulkGlobalMealSlot);
@@ -2547,8 +2572,30 @@ export function RecordPage({
     setPlanRev((n) => n + 1);
   }, [allResidents, filteredResidents, selectedFacilityLinkKey]);
 
+  // 掲示板（周知事項・申し送り）入力中は、巨大ページの周期的な再描画を止めて
+  // 文字入力のカクつきを防ぐ。フォーカスを外したら溜まった更新を1回だけ反映する。
+  const boardEditingRef = useRef(false);
+  const pendingTickRef = useRef(false);
+  const handleBoardEditingChange = useCallback((editing) => {
+    boardEditingRef.current = !!editing;
+    if (!editing && pendingTickRef.current) {
+      pendingTickRef.current = false;
+      setTick((n) => n + 1);
+      setPlanRev((n) => n + 1);
+      setHomeVisitCalendarRev((n) => n + 1);
+      setNursingRev((n) => n + 1);
+      setRoomNotesRev((n) => n + 1);
+    }
+  }, []);
+
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 15000);
+    const id = setInterval(() => {
+      if (boardEditingRef.current) {
+        pendingTickRef.current = true;
+        return;
+      }
+      setTick((n) => n + 1);
+    }, 15000);
     return () => clearInterval(id);
   }, []);
 
@@ -2637,6 +2684,11 @@ export function RecordPage({
       if (timer) return;
       timer = window.setTimeout(() => {
         timer = null;
+        // 入力中は反映を保留し、フォーカスが外れたタイミングでまとめて更新する。
+        if (boardEditingRef.current) {
+          pendingTickRef.current = true;
+          return;
+        }
         setTick((n) => n + 1);
         setPlanRev((n) => n + 1);
         setHomeVisitCalendarRev((n) => n + 1);
@@ -4834,6 +4886,7 @@ export function RecordPage({
                   externalRevision={facilityBoardRevision}
                   initialValue={facilityNoticeInitial}
                   onSave={saveFacilityNoticeFromBoard}
+                  onEditingChange={handleBoardEditingChange}
                   rows={4}
                   placeholder="施設全体への周知（面会制限・感染対策・本日の連絡事項など）"
                   className="min-h-[5.5rem] max-h-[50vh] w-full resize-y overflow-auto rounded-xl border-2 border-amber-300 bg-white/95 px-3 py-2 text-sm font-bold leading-relaxed text-amber-950 outline-none focus:ring-2 focus:ring-amber-400 sm:text-base"
@@ -5245,6 +5298,7 @@ export function RecordPage({
                   externalRevision={facilityBoardRevision + roomNotesRev}
                   initialValue={continuousHandoverText}
                   onSave={saveFacilityHandoverFromBoard}
+                  onEditingChange={handleBoardEditingChange}
                   rows={4}
                   placeholder="例：夜間見守り強化／移乗は2名介助／水分促し など"
                   className="w-full flex-1 rounded-xl border-2 border-indigo-200 bg-white px-3 py-2 text-sm font-bold leading-relaxed text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
@@ -5910,6 +5964,7 @@ export function RecordPage({
                       hourlySavedByResident={bulkHourlySavedByResident}
                       bulkMealSummaryByResident={bulkMealSummaryByResident}
                       bulkUrineDetailByResident={bulkUrineDetailByResident}
+                      bulkDayNightNoteByResident={bulkDayNightNoteByResident}
                       residentNameWithoutSama={residentNameWithoutSama}
                       patchBulkRow={patchBulkRow}
                       setBulkPatrolForAllVisible={setBulkPatrolForAllVisible}

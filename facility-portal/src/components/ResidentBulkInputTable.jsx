@@ -503,6 +503,7 @@ export function ResidentBulkInputTable({
   hourlySavedByResident,
   bulkMealSummaryByResident,
   bulkUrineDetailByResident = {},
+  bulkDayNightNoteByResident = {},
   residentNameWithoutSama,
   patchBulkRow,
   setBulkPatrolForAllVisible,
@@ -787,6 +788,12 @@ export function ResidentBulkInputTable({
                 尿回数<span className="block text-[9px] font-bold normal-case">／日計ml</span>
               </th>
               <th className="border border-slate-200 bg-amber-50/70 px-0.5 py-1 whitespace-nowrap text-amber-900">便回数</th>
+              <th
+                className="border border-slate-200 bg-emerald-50/70 px-0.5 py-1 whitespace-nowrap text-emerald-900"
+                title="care-input「様子」タブの日中・夜勤メモ"
+              >
+                様子<span className="block text-[9px] font-bold normal-case">日中／夜勤</span>
+              </th>
               <th className="border border-slate-200 bg-slate-50 px-0 py-0 text-center align-bottom">
                 <div className="min-w-[28.5rem] px-0.5 py-1">
                   <p className="mb-0.5 text-[10px] font-black normal-case text-slate-800">
@@ -997,6 +1004,30 @@ export function ResidentBulkInputTable({
                   </td>
                   <td className="border border-slate-200 bg-amber-50/50 px-1 py-1 text-center font-mono text-[11px] font-bold text-amber-900 sm:text-xs">
                     {stoolCount}
+                  </td>
+                  <td className="min-w-[9rem] max-w-[12rem] border border-slate-200 bg-emerald-50/30 px-1 py-1 text-[10px] font-bold leading-snug text-emerald-950 sm:text-xs">
+                    {(() => {
+                      const note = bulkDayNightNoteByResident[id];
+                      const dayNote = String(note?.dayNote ?? '').trim();
+                      const nightNote = String(note?.nightNote ?? '').trim();
+                      if (!dayNote && !nightNote) return <span className="text-slate-400">—</span>;
+                      return (
+                        <div className="space-y-0.5">
+                          {dayNote ? (
+                            <p className="whitespace-pre-wrap break-words">
+                              <span className="mr-1 inline-block rounded bg-amber-200/70 px-1 text-[9px] text-amber-900">日中</span>
+                              {dayNote}
+                            </p>
+                          ) : null}
+                          {nightNote ? (
+                            <p className="whitespace-pre-wrap break-words">
+                              <span className="mr-1 inline-block rounded bg-indigo-200/70 px-1 text-[9px] text-indigo-900">夜勤</span>
+                              {nightNote}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="border border-slate-200 bg-slate-50/40 p-0 align-top">
                     <HourGrid
