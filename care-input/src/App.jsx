@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { LogOut, RefreshCw, WifiOff, CloudUpload } from 'lucide-react';
-import { isConfigured, DEFAULT_FACILITY, FACILITIES, BUILD_ID } from './config.js';
+import { isConfigured, DEFAULT_FACILITY, FACILITIES, BUILD_ID, LOGIN_MODE } from './config.js';
 import { getSession, setSession, clearSession } from './lib/session.js';
 import { pullResidents } from './lib/api.js';
 import { flush, pendingCount, subscribePending } from './lib/queue.js';
 import { LoginScreen } from './screens/LoginScreen.jsx';
+import { SharedLoginScreen } from './screens/SharedLoginScreen.jsx';
 import { ResidentListScreen } from './screens/ResidentListScreen.jsx';
 import { InputScreen } from './screens/InputScreen.jsx';
 
@@ -113,7 +114,11 @@ export default function App() {
   }
 
   if (!session) {
-    return <LoginScreen onLoggedIn={handleLoggedIn} />;
+    return LOGIN_MODE === 'shared' ? (
+      <SharedLoginScreen onLoggedIn={handleLoggedIn} />
+    ) : (
+      <LoginScreen onLoggedIn={handleLoggedIn} />
+    );
   }
 
   return (
@@ -123,7 +128,9 @@ export default function App() {
           <div className="truncate text-sm font-bold opacity-90">
             {facility || 'ケア入力'}
           </div>
-          <div className="truncate text-xs opacity-80">{session.staff?.displayName} さん</div>
+          <div className="truncate text-xs opacity-80">
+            {session.staff?.displayName ? `${session.staff.displayName} さん` : '記録者名 未設定'}
+          </div>
         </div>
         {!online && (
           <span className="flex items-center gap-1 rounded bg-amber-500 px-2 py-1 text-xs font-bold">

@@ -10,7 +10,9 @@
 
 ## しくみ（データ連携）
 
-1. 職員コードでログイン（`/api/staff-auth`、facility-portal と同じ `staff_accounts`）
+1. ログイン
+   - 既定: 職員コード＋個人パスワード（`/api/staff-auth`、facility-portal と同じ `staff_accounts`）
+   - `VITE_CARE_INPUT_PASSWORD` を設定した場合: 共有パスワード＋記録者名（端末に記憶）
 2. 名簿を取得（`/api/care-sync` の `pull_residents`）
 3. 入力 → ケアイベントを送信（`/api/care-sync` の `upsert_events`）
 4. facility-portal が `pull_events` で取得し、24時間表・記録に反映
@@ -25,7 +27,8 @@
 | --- | --- | --- |
 | `VITE_CARELINK_ORGANIZATION_ID` | 組織ID（UUID） | クライアント |
 | `VITE_CARE_SYNC_SECRET` | 同期シークレット | クライアント |
-| `VITE_CARE_INPUT_FACILITY` | 既定施設名（例: `ふれあいの里`、複数はカンマ区切り） | クライアント |
+| `VITE_CARE_INPUT_FACILITY` | 既定施設名（例: `ふれあいの里` / ケアサポートは `中川本館,愛西,北名古屋,千音寺`） | クライアント |
+| `VITE_CARE_INPUT_PASSWORD` | 設定すると共有パスワードでログイン（例: ケアサポート）。未設定なら職員コード方式 | クライアント |
 | `VITE_SUPABASE_URL` | Supabase URL | クライアント/サーバ |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role | **サーバのみ** |
 | `CARE_SYNC_SECRET` | 同期シークレット（VITE_ と同じ値） | **サーバのみ** |
