@@ -45,6 +45,7 @@ import {
   getResidentCountFromSheetSummary,
   normalizeCareLevelLabel,
   parseCsv,
+  readPersistedResidentsSnapshot,
 } from '../services/GoogleSheetService.js';
 import {
   CARELINK_FACILITIES,
@@ -2335,14 +2336,25 @@ export function RecordPage({
     setSelectedSheetTitle(t);
   }, []);
 
-  /** 開いた直後・ポータルから施設が変わったときはキャッシュを使わず必ず再取得する */
+  /**
+   * 開いた直後は「前回の名簿を即表示 → 裏で最新を取得」（stale-while-revalidate）。
+   * 以前は毎回ブロッキングの強制再取得で、開くたびに数秒待たされていた。
+   */
   useEffect(() => {
     const t = String(initialSheetTitle ?? '').trim();
     if (t && CARELINK_FACILITIES.some((f) => f.sheetTitle === t)) {
       preferredSheetRef.current = t;
       setSelectedSheetTitle(t);
     }
-    void load(true);
+    const snap = readPersistedResidentsSnapshot();
+    if (snap && Array.isArray(snap.residents) && snap.residents.length > 0) {
+      const rows = Report.applyInjuryDiseaseImportsToResidentList(snap.residents);
+      setAllResidents(rows);
+      setLoading(false);
+      void load(true);
+    } else {
+      void load(true);
+    }
   }, [initialSheetTitle, load]);
 
   useEffect(() => {

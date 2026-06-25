@@ -65,6 +65,49 @@ let residentsFetchCacheAt = 0;
 /** @type {Promise<{ residents: Record<string, unknown>[]; source: string; mode: string }> | null} */
 let residentsFetchInFlight = null;
 
+/** 名簿スナップショットの永続化キー（再読込・再来訪でも即表示するため localStorage に保持） */
+const RESIDENTS_PERSIST_KEY = 'carelink.residentsSnapshot';
+
+/** 取得成功した名簿を localStorage に保存（stale-while-revalidate の「即表示」用） */
+function persistResidentsSnapshot(result) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (!result || !Array.isArray(result.residents) || result.residents.length === 0) return;
+    const payload = {
+      ...result,
+      cacheVersion: RESIDENT_SUMMARY_CACHE_VERSION,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(RESIDENTS_PERSIST_KEY, JSON.stringify(payload));
+  } catch {
+    /* 容量超過・利用不可時はメモリキャッシュにフォールバック */
+  }
+}
+
+/**
+ * 直近に取得した名簿スナップショットを localStorage から復元する。
+ * 「前回の一覧を即表示 → 裏で最新取得」（stale-while-revalidate）用。
+ * @returns {{ residents: Record<string, unknown>[]; source: string; mode: string; savedAt?: number } | null}
+ */
+export function readPersistedResidentsSnapshot() {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(RESIDENTS_PERSIST_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.cacheVersion !== RESIDENT_SUMMARY_CACHE_VERSION) return null;
+    if (!Array.isArray(parsed.residents) || parsed.residents.length === 0) return null;
+    restoreFacilitySheetSummaryMapsFromSnapshot({
+      medicalTargetSummaryBySheet: parsed.medicalTargetSummaryBySheet,
+      averageCareLevelSummaryBySheet: parsed.averageCareLevelSummaryBySheet,
+      residentCountSummaryBySheet: parsed.residentCountSummaryBySheet,
+    });
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 /** タブ名（sheetTitle）→ シート上部セル由来の医療対象者人数（施設サマリー表示用） */
 const MEDICAL_TARGET_COUNT_FROM_SHEET_SUMMARY = new Map();
 /** タブ名 → シート上部の平均介護度（小数可、施設サマリー表示用） */
@@ -2250,6 +2293,7 @@ export async function fetchResidentsFromSheet(opts = {}) {
       averageCareLevelSummaryBySheet: result.averageCareLevelSummaryBySheet,
       residentCountSummaryBySheet: result.residentCountSummaryBySheet,
     });
+    persistResidentsSnapshot(result);
     return result;
   });
 
