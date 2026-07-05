@@ -382,6 +382,93 @@ function enteralSeedForResidentMealSlot(residentId, bulkSheetDate, mealSlot) {
   return legacy || empty;
 }
 
+/** 食事イベント meta から一覧表の食事欄を復元 */
+function mealFieldsFromMealEventMeta(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const out = bulkMealFieldsEmpty('');
+  if (m.mealAmount != null && String(m.mealAmount).trim() !== '') {
+    out.mealAmount = String(m.mealAmount);
+    const parsed = parseMealAmountFieldsFromLog(m.mealAmount);
+    if (parsed.mealStapleForm) out.mealStapleForm = parsed.mealStapleForm;
+    if (parsed.mealStaple) out.mealStaple = parsed.mealStaple;
+    if (parsed.mealSideForm) out.mealSideForm = parsed.mealSideForm;
+    if (parsed.mealSide) out.mealSide = parsed.mealSide;
+    const oral = parseOralSupplementsFromMealLog(m.mealAmount);
+    if (oral.ensurePortion) out.ensurePortion = oral.ensurePortion;
+    if (oral.solitaPortion) out.solitaPortion = oral.solitaPortion;
+    const slashIdx = String(m.mealAmount).indexOf('／');
+    if (slashIdx >= 0) {
+      const extras = String(m.mealAmount).slice(slashIdx + 1).trim();
+      if (extras) out.mealExtras = extras;
+    }
+  }
+  if (m.mealStaple != null && String(m.mealStaple).trim() !== '') {
+    out.mealStaple = String(m.mealStaple).trim();
+  }
+  if (m.mealSide != null && String(m.mealSide).trim() !== '') {
+    out.mealSide = String(m.mealSide).trim();
+  }
+  if (m.mealStapleForm != null && String(m.mealStapleForm).trim() !== '') {
+    out.mealStapleForm = String(m.mealStapleForm).trim();
+  }
+  if (m.mealSideForm != null && String(m.mealSideForm).trim() !== '') {
+    out.mealSideForm = String(m.mealSideForm).trim();
+  }
+  if (m.ensurePortion != null && String(m.ensurePortion).trim() !== '') {
+    out.ensurePortion = String(m.ensurePortion).trim();
+  }
+  if (m.solitaPortion != null && String(m.solitaPortion).trim() !== '') {
+    out.solitaPortion = String(m.solitaPortion).trim();
+  }
+  if (m.mealExtras != null && String(m.mealExtras).trim() !== '') {
+    out.mealExtras = String(m.mealExtras).trim();
+  }
+  if (m.waterMl != null && String(m.waterMl).trim() !== '') out.waterMl = String(m.waterMl);
+  if (m.medicationTaken === 'yes' || m.medicationTaken === 'no') {
+    out.medicationTaken = m.medicationTaken;
+  }
+  return out;
+}
+
+/** 保存済み食事ログを食事区分（朝・昼・夜）ごとに復元（care-input 同期含む） */
+function mealSeedForResidentMealSlot(residentId, bulkSheetDate, mealSlot, ctx = null) {
+  const ymd = bulkTableYmd(bulkSheetDate);
+  const rid = String(residentId ?? '').trim();
+  const want = normalizeBulkMealSlot(mealSlot);
+  const empty = bulkMealFieldsEmpty(want);
+  if (!rid) return empty;
+  /** @type {ReturnType<typeof bulkMealFieldsEmpty> | null} */
+  let legacy = null;
+  for (const ev of Report.getCareEventsForResidentDay(rid, ymd, ctx)) {
+    if (String(ev?.type ?? '') !== 'meal') continue;
+    const meta = ev?.meta && typeof ev.meta === 'object' ? ev.meta : {};
+    const slot = resolveBulkMealSlotForEvent(meta, String(ev?.ts ?? ''));
+    const fields = mealFieldsFromMealEventMeta(meta);
+    const row = { ...empty, ...fields, meal: true, mealSlot: want || slot };
+    if (want && slot === want) return row;
+    if (!slot) legacy = row;
+  }
+  return legacy || empty;
+}
+
+/** localStorage 下書きと保存済み食事をマージ（下書き優先、空欄は保存値で補完） */
+function mergeMealDraftWithSaved(stored, saved, mealSlot) {
+  const draft = pickMealDraftFromStored(stored, mealSlot);
+  const hasDraft =
+    draft.meal ||
+    String(draft.mealStaple ?? '').trim() !== '' ||
+    String(draft.mealSide ?? '').trim() !== '' ||
+    String(draft.mealAmount ?? '').trim() !== '' ||
+    String(draft.waterMl ?? '').trim() !== '' ||
+    String(draft.mealExtras ?? '').trim() !== '' ||
+    String(draft.ensurePortion ?? '').trim() !== '' ||
+    String(draft.solitaPortion ?? '').trim() !== '' ||
+    draft.medicationTaken === 'yes' ||
+    draft.medicationTaken === 'no';
+  if (hasDraft) return draft;
+  return { ...saved, mealSlot: String(mealSlot ?? saved.mealSlot ?? '').trim() || saved.mealSlot };
+}
+
 /** 保存ログから巡視・排泄だけ復元（食事入力欄には載せない） */
 function bulkNonMealCareFromSeed(seed) {
   const s = seed && typeof seed === 'object' ? seed : {};
@@ -1844,11 +1931,12 @@ export function RecordPage({
         let row;
         if (isToday) {
           const savedHourly = buildHourlyCareFromEvents(Report.getCareEventsForResidentDay(id, ymd, ctx), ymd);
+          const savedMeal = mealSeedForResidentMealSlot(id, ymd, mealSlot, ctx);
           row = {
             ...vital,
             ...hourly,
             ...bulkNonMealCareFromSeed(savedCare),
-            ...pickMealDraftFromStored(stored, mealSlot),
+            ...mergeMealDraftWithSaved(stored, savedMeal, mealSlot),
             ...enteralSeedForResidentMealSlot(id, ymd, mealSlot),
           };
           row = mergeHourlyDraftFromStored(row, stored, savedHourly);
@@ -1860,11 +1948,13 @@ export function RecordPage({
             if (legacy) row = { ...row, enteralStatus: 'done' };
           }
         } else {
+          const savedMeal = mealSeedForResidentMealSlot(id, ymd, mealSlot, ctx);
           row = {
             ...vital,
             ...hourly,
-            ...savedCare,
-            mealSlot: stored.mealSlot || savedCare.mealSlot || mealSlot,
+            ...bulkNonMealCareFromSeed(savedCare),
+            ...savedMeal,
+            mealSlot: stored.mealSlot || savedMeal.mealSlot || mealSlot,
             ...stored,
             vitalHandwritingDataUrl: '',
           };
@@ -1932,6 +2022,59 @@ export function RecordPage({
       return changed ? next : prev;
     });
   }, [tick, residentInputView, bulkSheetDate]);
+
+  /** care-input 等から同期された食事を、今日の食事入力欄へ反映（空欄のみ・区分一致時） */
+  useEffect(() => {
+    if (residentInputView !== 'table') return;
+    const ymd = bulkTableYmd(bulkSheetDate);
+    if (ymd !== currentYmd()) return;
+    const mealSlot = bulkGlobalMealSlotHydrateRef.current;
+    const list = displayResidentsForBulkHydrateRef.current;
+    setBulkDraft((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      const fillIfEmpty = (cur, saved, key) => {
+        const cv = cur[key];
+        const sv = saved[key];
+        if (typeof cv === 'boolean') {
+          if (!cv && sv) return sv;
+          return cv;
+        }
+        if (String(cv ?? '').trim()) return cv;
+        if (String(sv ?? '').trim()) return sv;
+        return cv;
+      };
+      for (const r of list) {
+        const id = String(r.id);
+        const cur = prev[id];
+        if (!cur) continue;
+        const ctx = Report.careEventResidentContext(r);
+        const saved = mealSeedForResidentMealSlot(id, ymd, mealSlot, ctx);
+        if (!saved.meal && !String(saved.mealStaple ?? '').trim() && !String(saved.mealSide ?? '').trim()) {
+          continue;
+        }
+        const merged = { ...cur };
+        let rowChanged = false;
+        for (const k of BULK_MEAL_FIELD_KEYS) {
+          if (k === 'mealSlot') continue;
+          const nv = fillIfEmpty(cur, saved, k);
+          if (nv !== cur[k]) {
+            merged[k] = nv;
+            rowChanged = true;
+          }
+        }
+        if (!cur.meal && saved.meal) {
+          merged.meal = true;
+          rowChanged = true;
+        }
+        if (rowChanged) {
+          next[id] = merged;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [tick, residentInputView, bulkSheetDate, bulkGlobalMealSlot]);
 
   useEffect(() => {
     if (residentInputView !== 'table') return;
@@ -3212,25 +3355,14 @@ export function RecordPage({
           const id = String(r.id);
           const cur = next[id];
           if (cur) {
+            const ctx = Report.careEventResidentContext(r);
+            const savedMeal = mealSeedForResidentMealSlot(id, ymd, slot, ctx);
             next[id] = applyEnteralBulkPlanToRow(
               {
                 ...cur,
+                ...bulkMealFieldsEmpty(slot),
+                ...savedMeal,
                 mealSlot: slot,
-                meal: false,
-                mealStapleForm: '',
-                mealStaple: '',
-                mealSideForm: '',
-                mealSide: '',
-                mealAmount: '',
-                waterMl: '',
-                medicationTaken: '',
-                ensurePortion: '',
-                solitaPortion: '',
-                enteralMenu: '',
-                enteralMenuPlan: '',
-                enteralMenuMed: '',
-                enteralStatus: '',
-                mealExtras: '',
                 ...enteralSeedForResidentMealSlot(id, ymd, slot),
               },
               r,
@@ -3278,6 +3410,7 @@ export function RecordPage({
       row.medicationTaken === 'no' ||
       String(row.ensurePortion ?? '').trim() !== '' ||
       String(row.solitaPortion ?? '').trim() !== '' ||
+      String(row.mealExtras ?? '').trim() !== '' ||
       String(row.enteralStatus ?? '').trim() !== '' ||
       String(row.enteralMenu ?? '').trim() !== '' ||
       row.meal === true;
@@ -5964,13 +6097,14 @@ export function RecordPage({
                     <div id="bulk-care-table-anchor" className="scroll-mt-2" />
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent('carelink-open-hourly-grid'));
                         document
                           .getElementById('bulk-care-table-anchor')
-                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                      }
+                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
                       className="fixed bottom-4 right-4 z-[120] rounded-full border-2 border-white bg-sky-700 px-4 py-3 text-sm font-black text-white shadow-2xl hover:bg-sky-600 sm:text-base"
-                      title="排泄表（一覧入力）の先頭へスクロール"
+                      title="排泄表（一覧入力）の先頭へスクロールし、24時間表を開く"
                     >
                       ↑ 排泄表へ
                     </button>
@@ -5996,6 +6130,7 @@ export function RecordPage({
                       saveBulkVitalsOnly={saveBulkVitalsOnly}
                       geminiApiKey={GEMINI_KEY}
                       facilityLinkKey={selectedFacilityLinkKey}
+                      onTableEditingChange={handleBoardEditingChange}
                     />
                     </>
                   ) : residentInputView === 'monitor' ? (

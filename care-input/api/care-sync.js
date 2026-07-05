@@ -179,6 +179,25 @@ export default async function handler(req, res) {
       return;
     }
 
+    if (action === 'pull_events') {
+      const sinceTs = String(payload.sinceTs ?? '').trim();
+      const parsedSince = sinceTs ? new Date(sinceTs) : null;
+      const limitRaw = Number(payload.limit ?? 1000);
+      const limit = Math.max(50, Math.min(5000, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 1000));
+      const sinceIso = parsedSince && Number.isFinite(parsedSince.getTime()) ? parsedSince.toISOString() : '';
+      const whereSince = sinceIso ? `&event_ts=gt.${encodeURIComponent(sinceIso)}` : '';
+      const rows = await supabaseSelectJson(
+        supabaseUrl,
+        serviceKey,
+        `care_events?organization_id=eq.${organizationId}${whereSince}&select=payload,event_ts&order=event_ts.desc&limit=${limit}`
+      );
+      const events = rows
+        .map((r) => (r && typeof r.payload === 'object' ? r.payload : null))
+        .filter(Boolean);
+      sendJson(res, 200, { ok: true, events, count: events.length });
+      return;
+    }
+
     if (action === 'pull_residents') {
       // 列名を固定指定すると DB スキーマ差異（legacy_row_key 無し等）で 400 になるため、
       // select=* で全列取得し、施設の埋め込みも任意化（失敗時は素の列だけにフォールバック）。

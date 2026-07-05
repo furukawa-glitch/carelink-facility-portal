@@ -209,7 +209,7 @@ export function EnteralNutritionMenuModal({
       aria-modal="true"
       aria-labelledby="enteral-menu-title"
     >
-      <div className="flex max-h-[94vh] w-full max-w-[96rem] flex-col overflow-hidden rounded-2xl border-2 border-violet-300 bg-white shadow-2xl">
+      <div className="flex h-[min(96dvh,100vh)] max-h-[96dvh] w-full max-w-[96rem] flex-col overflow-hidden rounded-2xl border-2 border-violet-300 bg-white shadow-2xl">
         <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-violet-100 bg-violet-50 px-3 py-3 sm:px-4">
           <div>
             <h2 id="enteral-menu-title" className="flex items-center gap-2 text-base font-black text-violet-950 sm:text-lg">
@@ -231,7 +231,7 @@ export function EnteralNutritionMenuModal({
         </div>
 
         {/* ズーム時でも入力欄に届くよう、ヘッダー以外は1つの縦スクロール領域にまとめる */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
         <div className="flex shrink-0 flex-wrap items-end gap-2 border-b border-slate-100 bg-white px-3 py-2 sm:px-4">
           <label className="text-xs font-black text-slate-800">
             更新日
@@ -277,6 +277,15 @@ export function EnteralNutritionMenuModal({
           >
             <RefreshCw className="h-4 w-4" aria-hidden />
             名簿と再同期
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              document.getElementById('enteral-menu-table-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+            className="inline-flex items-center gap-1.5 rounded-xl border-2 border-violet-600 bg-violet-600 px-3 py-2 text-xs font-black text-white hover:bg-violet-500"
+          >
+            ↓ 入力表へ
           </button>
           <button
             type="button"
@@ -368,7 +377,7 @@ export function EnteralNutritionMenuModal({
           </p>
         </div>
 
-        <div className="overflow-x-auto px-2 py-2 sm:px-3">
+        <div className="overflow-x-auto px-2 py-2 sm:px-3" id="enteral-menu-table-anchor">
           <table className="w-full min-w-[960px] border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-violet-200 text-slate-900">
               <tr>

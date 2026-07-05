@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Mic, PenLine, Table2 } from 'lucide-react';
 import {
   HOURLY_URINE_OPTIONS,
@@ -514,16 +514,49 @@ export function ResidentBulkInputTable({
   saveBulkVitalsOnly,
   geminiApiKey = '',
   facilityLinkKey = '',
+  onTableEditingChange,
 }) {
   const [voiceTarget, setVoiceTarget] = React.useState({ id: '', name: '' });
   const [handTarget, setHandTarget] = React.useState({ id: '', name: '' });
   const [savedFlashById, setSavedFlashById] = React.useState(/** @type {Record<string, boolean>} */ ({}));
+  const [showHourlyGrid, setShowHourlyGrid] = React.useState(false);
+  const [hourlyVisibleCount, setHourlyVisibleCount] = React.useState(0);
+  const [, startHourlyTransition] = useTransition();
   const urineVolumeOptions = React.useMemo(
     () => [{ value: '', label: '—' }, ...WATER_ML_50_OPTIONS.filter((o) => o.value !== '')],
     []
   );
   const tableScrollRef = React.useRef(/** @type {HTMLDivElement | null} */ (null));
   const mealInputHeaderRef = React.useRef(/** @type {HTMLTableCellElement | null} */ (null));
+
+  React.useEffect(() => {
+    const onOpen = () => {
+      startHourlyTransition(() => setShowHourlyGrid(true));
+    };
+    window.addEventListener('carelink-open-hourly-grid', onOpen);
+    return () => window.removeEventListener('carelink-open-hourly-grid', onOpen);
+  }, []);
+
+  React.useEffect(() => {
+    if (!showHourlyGrid) {
+      setHourlyVisibleCount(0);
+      return;
+    }
+    const total = filteredResidents.length;
+    if (total <= 0) return;
+    let count = 0;
+    let cancelled = false;
+    const step = () => {
+      if (cancelled) return;
+      count = Math.min(total, count + 2);
+      setHourlyVisibleCount(count);
+      if (count < total) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return () => {
+      cancelled = true;
+    };
+  }, [showHourlyGrid, filteredResidents.length]);
   const showDetailedCareColumns = false;
   const scrollTableX = React.useCallback((delta) => {
     const el = tableScrollRef.current;
@@ -622,6 +655,21 @@ export function ResidentBulkInputTable({
             title="対象日の過去時間（現在時刻まで）の巡視を全員分まとめてON"
           >
             巡視し忘れ分を一括ON
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (showHourlyGrid) setShowHourlyGrid(false);
+              else startHourlyTransition(() => setShowHourlyGrid(true));
+            }}
+            className={`rounded-lg border px-3 py-1.5 text-sm font-black ${
+              showHourlyGrid
+                ? 'border-sky-800 bg-sky-700 text-white hover:bg-sky-600'
+                : 'border-sky-500 bg-sky-50 text-sky-900 hover:bg-sky-100'
+            }`}
+            title="初期表示を軽くするため24時間表は閉じています。排泄入力時に開いてください。"
+          >
+            {showHourlyGrid ? '24時間表を閉じる' : '24時間表を開く'}
           </button>
         </div>
       </div>
@@ -753,11 +801,19 @@ export function ResidentBulkInputTable({
           })}
         </div>
         <p className="max-w-xl text-xs font-bold leading-snug text-cyan-900 sm:text-sm">
-          日付は<strong>日本時間の暦日</strong>で集計します。<strong>今日</strong>の食事入力欄は空から始まり、保存済みは各行の<strong>朝・昼・夜プレビュー</strong>に表示されます（昨日以前を選ぶとその日の記録を入力欄に読み込みます）。巡視マスは<strong>チェック</strong>で入力（未保存は水色・保存済みは濃い緑・空は白の点線枠）。
+          日付は<strong>日本時間の暦日</strong>で集計します。<strong>今日</strong>の食事は<strong>朝・昼・夜</strong>の区分を合わせると入力欄に反映されます（care-input からの同期含む）。<strong>24時間表</strong>は重さ対策のため初期は閉じています（「24時間表を開く」または「↑排泄表へ」）。
         </p>
       </div>
       <div
         ref={tableScrollRef}
+        onFocusCapture={() => onTableEditingChange?.(true)}
+        onBlurCapture={(e) => {
+          const root = tableScrollRef.current;
+          if (!root) return;
+          const next = e.relatedTarget;
+          if (next && root.contains(next)) return;
+          onTableEditingChange?.(false);
+        }}
         onWheel={(e) => {
           if (!e.shiftKey) return;
           const el = tableScrollRef.current;
@@ -880,7 +936,7 @@ export function ResidentBulkInputTable({
             </tr>
           </thead>
           <tbody>
-            {filteredResidents.map((res) => {
+            {filteredResidents.map((res, rowIndex) => {
               const id = String(res.id);
               const nm = residentNameWithoutSama(res.name);
               const diseaseLabel = residentDiseaseLabel(res);
@@ -1030,16 +1086,36 @@ export function ResidentBulkInputTable({
                     })()}
                   </td>
                   <td className="border border-slate-200 bg-slate-50/40 p-0 align-top">
-                    <HourGrid
-                      id={id}
-                      nm={nm}
-                      hourPatrol={row.hourPatrol}
-                      hourUrine={row.hourUrine}
-                      hourUrineMl={row.hourUrineMl}
-                      hourStool={row.hourStool}
-                      hourlySaved={hourlySaved}
-                      patchBulkRow={patchBulkRow}
-                    />
+                    {showHourlyGrid && rowIndex < hourlyVisibleCount ? (
+                      <HourGrid
+                        id={id}
+                        nm={nm}
+                        hourPatrol={row.hourPatrol}
+                        hourUrine={row.hourUrine}
+                        hourUrineMl={row.hourUrineMl}
+                        hourStool={row.hourStool}
+                        hourlySaved={hourlySaved}
+                        patchBulkRow={patchBulkRow}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startHourlyTransition(() => setShowHourlyGrid(true))}
+                        className="flex min-h-[3rem] w-full min-w-[6rem] flex-col items-center justify-center gap-0.5 px-1 py-2 text-[10px] font-black text-slate-700 hover:bg-sky-50"
+                        title="24時間表（巡視・尿・便）を開く"
+                      >
+                        {showHourlyGrid && rowIndex >= hourlyVisibleCount ? (
+                          <span className="text-slate-400">読込中…</span>
+                        ) : (
+                          <>
+                            <span>24h表を開く</span>
+                            <span className="font-mono text-[9px] font-bold text-sky-800">
+                              尿{urineCount} 便{stoolCount}
+                            </span>
+                          </>
+                        )}
+                      </button>
+                    )}
                   </td>
                   <td className="border border-slate-200 p-0">
                     <input

@@ -125,7 +125,7 @@ export function ResidentMonitorBoard({
 
   return (
     <div
-      className={`flex min-h-0 flex-col overflow-hidden rounded-2xl border-2 border-slate-400 bg-slate-200/80 shadow-inner ${
+      className={`flex min-h-0 flex-col overflow-y-auto rounded-2xl border-2 border-slate-400 bg-slate-200/80 shadow-inner ${
         dense ? 'w-full' : ''
       }`}
       style={boardHeightStyle}
@@ -173,8 +173,8 @@ export function ResidentMonitorBoard({
       </div>
 
       <div
-        className={`min-h-0 flex-1 ${dense ? 'overflow-y-auto p-0.5' : 'overflow-auto p-1 sm:p-1.5'}`}
-        style={dense ? undefined : { maxHeight: 'min(78vh, calc(100dvh - 11rem))' }}
+        className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-1 sm:p-1.5`}
+        style={dense ? { minHeight: '12rem' } : { maxHeight: 'min(78vh, calc(100dvh - 11rem))' }}
       >
         {paddedVisible.length === 0 ? (
           <p className="rounded-xl bg-white px-4 py-8 text-center text-sm font-bold text-slate-600">
@@ -190,9 +190,8 @@ export function ResidentMonitorBoard({
                     gridTemplateColumns: `repeat(${gridSpec.cols}, minmax(0, 1fr))`,
                     // ズーム時はセルが潰れて中身が見えなくなるため、読める最小高を確保し、
                     // 収まらないときは親(overflow-y-auto)でスクロールできるようにする。
-                    gridTemplateRows: `repeat(${gridSpec.rows}, minmax(2.4rem, 1fr))`,
+                    gridTemplateRows: `repeat(${gridSpec.rows}, minmax(3.5rem, auto))`,
                     gap: 2,
-                    minHeight: '100%',
                     width: '100%',
                   }
                 : {
@@ -215,7 +214,7 @@ export function ResidentMonitorBoard({
                       : `${row.name} 様 ${row.room} — ${row.alertShort || '平常'}`
                   }
                   onClick={() => onSelectResident(row.res, residents)}
-                  className={`flex min-h-0 min-w-0 flex-col items-stretch justify-center gap-0.5 overflow-hidden rounded border text-left shadow-sm transition hover:ring-2 hover:ring-cyan-400 ${
+                  className={`flex min-h-[3.25rem] min-w-0 flex-col items-stretch justify-center gap-0.5 rounded border text-left shadow-sm transition hover:ring-2 hover:ring-cyan-400 ${
                     dense ? 'px-1 py-1 sm:px-1.5 sm:py-1.5' : 'min-h-[3.75rem] px-1 py-1'
                   } ${
                     critical
@@ -244,7 +243,7 @@ export function ResidentMonitorBoard({
                   </span>
                   {showAlert ? (
                     <span
-                      className={`truncate text-center font-black leading-tight ${
+                      className={`line-clamp-2 text-center font-black leading-tight ${
                         dense ? 'text-xs sm:text-sm' : 'text-xs sm:text-sm'
                       } ${critical ? 'text-white' : warn ? 'text-amber-900' : 'text-slate-600'}`}
                     >

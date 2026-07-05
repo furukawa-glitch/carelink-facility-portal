@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FileSpreadsheet, Printer, X } from 'lucide-react';
 import * as Report from '../services/ReportService.js';
 
@@ -28,8 +28,15 @@ export function PeriodRecordExportModal({ open, onClose, residents, facilityShee
   const [endYmd, setEndYmd] = useState(() => localYmd(new Date()));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
+  // モーダルを開いた瞬間だけ「全員選択」で初期化する。
+  // roster（親の filteredResidents）は再レンダーで参照が変わるため、
+  // それを毎回監視するとチェックを外しても全員選択に戻ってしまう。
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (open) setSelectedIds(new Set(roster.map((r) => String(r?.id ?? '')).filter(Boolean)));
+    if (open && !wasOpenRef.current) {
+      setSelectedIds(new Set(roster.map((r) => String(r?.id ?? '')).filter(Boolean)));
+    }
+    wasOpenRef.current = open;
   }, [open, roster]);
 
   if (!open) return null;

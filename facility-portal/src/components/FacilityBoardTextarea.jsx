@@ -2,6 +2,8 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * 施設掲示板用テキストエリア。親（RecordPage 等）の再描画を避け、入力を軽くする。
+ * 日本語 IME 変換中は React の controlled 更新を避け、変換確定後も親の再描画に巻き込まれないよう
+ * 入力中は ref ベース（非制御）で保持する。
  */
 export const FacilityBoardTextarea = memo(function FacilityBoardTextarea({
   syncKey = '',
@@ -15,26 +17,26 @@ export const FacilityBoardTextarea = memo(function FacilityBoardTextarea({
   saveLabel = '保存',
   onEditingChange,
 }) {
-  const [value, setValue] = useState(initialValue);
-  const [saveFlash, setSaveFlash] = useState(false);
+  const textareaRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
   const dirtyRef = useRef(false);
+  const composingRef = useRef(false);
   const syncKeyRef = useRef(syncKey);
+  const [saveFlash, setSaveFlash] = useState(false);
+
+  const readValue = useCallback(() => String(textareaRef.current?.value ?? ''), []);
 
   useEffect(() => {
     if (syncKey !== syncKeyRef.current) {
       syncKeyRef.current = syncKey;
       dirtyRef.current = false;
-      setValue(initialValue);
+      if (textareaRef.current) textareaRef.current.value = initialValue;
       return;
     }
-    if (dirtyRef.current) return;
-    setValue(initialValue);
+    if (dirtyRef.current || composingRef.current) return;
+    if (textareaRef.current && textareaRef.current.value !== initialValue) {
+      textareaRef.current.value = initialValue;
+    }
   }, [syncKey, initialValue, externalRevision]);
-
-  const handleChange = useCallback((e) => {
-    dirtyRef.current = true;
-    setValue(e.target.value);
-  }, []);
 
   const handleFocus = useCallback(() => {
     dirtyRef.current = true;
@@ -45,20 +47,37 @@ export const FacilityBoardTextarea = memo(function FacilityBoardTextarea({
     onEditingChange?.(false);
   }, [onEditingChange]);
 
+  const handleCompositionStart = useCallback(() => {
+    composingRef.current = true;
+    dirtyRef.current = true;
+    onEditingChange?.(true);
+  }, [onEditingChange]);
+
+  const handleCompositionEnd = useCallback(() => {
+    composingRef.current = false;
+    dirtyRef.current = true;
+  }, []);
+
   const handleSave = useCallback(() => {
-    onSave?.(value);
+    const v = readValue();
+    onSave?.(v);
     dirtyRef.current = false;
     setSaveFlash(true);
     window.setTimeout(() => setSaveFlash(false), 1500);
-  }, [onSave, value]);
+  }, [onSave, readValue]);
 
   return (
     <>
       <textarea
-        value={value}
+        ref={textareaRef}
+        defaultValue={initialValue}
         onFocus={handleFocus}
         onBlur={handleBlur}
-        onChange={handleChange}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
+        onChange={() => {
+          dirtyRef.current = true;
+        }}
         rows={rows}
         placeholder={placeholder}
         className={className}
